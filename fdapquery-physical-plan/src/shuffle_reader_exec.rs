@@ -22,7 +22,7 @@
 use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
 use crate::shuffle_location::ShuffleLocation;
-use datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{RecordBatch, Schema};
 use std::sync::Arc;
 
 /// Reads shuffle data from a set of locations.
@@ -128,7 +128,7 @@ mod tests {
     use crate::column_expression::ColumnExpression;
     use crate::scan_exec::ScanExec;
     use crate::shuffle_writer_exec::ShuffleWriterExec;
-    use datasource::{CsvDataSource, DataSource};
+    use fdapquery_datasource::{CsvDataSource, DataSource};
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 

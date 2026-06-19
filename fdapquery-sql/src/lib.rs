@@ -11,7 +11,7 @@
 //!   the [`SqlExpr`](expressions::SqlExpr) AST using a Pratt
 //!   precedence-climbing parser.
 //! - [`SqlPlanner`](sql_planner::SqlPlanner) — lowers `SqlExpr::Select`
-//!   into a [`logical_plan::DataFrame`].
+//!   into a [`fdapquery_logical_plan::DataFrame`].
 //!
 //! ## ⚠ Design directive
 //! **The Pratt parser is the pedagogical core of this module.** Do not

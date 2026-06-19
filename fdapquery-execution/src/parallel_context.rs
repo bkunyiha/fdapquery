@@ -35,14 +35,14 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
-use datasource::{CsvDataSource, DataSource};
-use datatypes::{RecordBatch, Schema};
-use logical_plan::{DataFrame, LogicalPlan, Scan};
-use optimizer::Optimizer;
-use physical_plan::{AggregateMode, ExecutorContext, HashAggregateExec, PhysicalPlan};
-use query_planner::QueryPlanner;
+use fdapquery_datasource::{CsvDataSource, DataSource};
+use fdapquery_datatypes::{RecordBatch, Schema};
+use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
+use fdapquery_optimizer::Optimizer;
+use fdapquery_physical_plan::{AggregateMode, ExecutorContext, HashAggregateExec, PhysicalPlan};
+use fdapquery_query_planner::QueryPlanner;
 // `PrattParser` brings the `parse` method into scope for `SqlParser`.
-use sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 
 /// Default CSV batch size when `rquery.csv.batchSize` is unset.
 const DEFAULT_BATCH_SIZE: usize = 1024;
@@ -293,7 +293,7 @@ mod tests {
     //! single-worker parallel context still produces results.
     use super::*;
     use crate::execution_context::ExecutionContext;
-    use datatypes::record_batch::{row_count, to_csv};
+    use fdapquery_datatypes::record_batch::{row_count, to_csv};
     use std::collections::HashSet;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";

@@ -1,15 +1,15 @@
-//! `FlightExecutorClient` — a concrete `distributed::ExecutorClient` that
+//! `FlightExecutorClient` — a concrete `fdapquery_distributed::ExecutorClient` that
 //! drives the scheduler over real Arrow Flight gRPC.
 //!
 //! ## What it does
 //!
 //! Holds one [`Client`] per executor in the cluster (keyed by
-//! `executor_id`). Each [`distributed::ExecutorClient`] method routes to
+//! `executor_id`). Each [`fdapquery_distributed::ExecutorClient`] method routes to
 //! the matching `Client`:
 //!
 //! | Trait method | Wire path | Server-side handler |
 //! |--------------|-----------|---------------------|
-//! | `execute_task(executor, task)` | `do_action("execute_task", TaskInfo)` → `TaskResult` | `r_query_flight_producer.rs::do_action` matches `ShuffleWriterExec`, calls `write_shuffle(&ctx)`, returns shuffle locations |
+//! | `execute_task(executor, task)` | `do_action("execute_task", TaskInfo)` → `TaskResult` | `fdap_query_flight_producer.rs::do_action` matches `ShuffleWriterExec`, calls `write_shuffle(&ctx)`, returns shuffle locations |
 //! | `execute_final_task(executor, task)` | `do_get(Action { task: Some(TaskInfo) })` → `FlightData` stream | `do_get` deserialises the Task, runs `task.plan.execute(&self.ctx)`, streams batches |
 //! | `fetch_shuffle(executor, location)` | not implemented | not implemented |
 //!
@@ -43,14 +43,14 @@
 use crate::client::Client;
 use crate::endpoint::Endpoint;
 use anyhow::Result;
-use datatypes::RecordBatch;
-use distributed::{ExecutorClient, ExecutorConfig};
-use physical_plan::{ShuffleLocation, Task};
-use protobuf::{pb, serialize_task};
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_distributed::{ExecutorClient, ExecutorConfig};
+use fdapquery_physical_plan::{ShuffleLocation, Task};
+use fdapquery_protobuf::{pb, serialize_task};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-/// Concrete `distributed::ExecutorClient` that drives the Scheduler over
+/// Concrete `fdapquery_distributed::ExecutorClient` that drives the Scheduler over
 /// real Arrow Flight gRPC.
 pub struct FlightExecutorClient {
     /// One Client per executor, keyed by `executor_id`. Each Client owns

@@ -1,5 +1,5 @@
 [package]
-name         = "fuzzer"
+name         = "fdapquery-fuzzer"
 description  = "Random query generator for differential testing."
 edition.workspace      = true
 license.workspace      = true
@@ -8,13 +8,13 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-datatypes    = { path = "../datatypes" }
-logical-plan = { path = "../logical-plan" }
-sql          = { path = "../sql" }
+fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
+fdapquery-logical-plan = { path = "../fdapquery-logical-plan" }
+fdapquery-sql          = { path = "../fdapquery-sql" }
 rand         = { workspace = true }
 arrow-schema = { workspace = true }   # for `DataType` in `create_values` dispatch
 
 [dev-dependencies]
 # Smoke test reads testdata/employee.csv through a `CsvDataSource` to drive
 # `create_plan()`; the data-source crate is only needed at test time.
-datasource   = { path = "../datasource" }
+fdapquery-datasource   = { path = "../fdapquery-datasource" }

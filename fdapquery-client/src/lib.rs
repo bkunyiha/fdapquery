@@ -7,7 +7,7 @@
 //!    can submit a `LogicalPlan` and receive `RecordBatch`es back.
 //! 2. **Distributed-scheduler transport** —
 //!    [`FlightExecutorClient`](flight_executor_client::FlightExecutorClient)
-//!    implements `distributed::ExecutorClient` over a set of per-executor
+//!    implements `fdapquery_distributed::ExecutorClient` over a set of per-executor
 //!    `Client` instances, so `Scheduler<FlightExecutorClient>::execute(...)`
 //!    drives a real distributed query against real Flight executors.
 //!
@@ -16,7 +16,7 @@
 //! - [`endpoint`] — `Endpoint`: bundles a host+port into one address value.
 //! - [`context`] — `Context`: high-level interactive API (`register_csv` / `sql` / `execute`).
 //! - [`flight_executor_client`] — `FlightExecutorClient`:
-//!   `impl distributed::ExecutorClient` over a per-executor `Client` map.
+//!   `impl fdapquery_distributed::ExecutorClient` over a per-executor `Client` map.
 
 // ==============================================================
 // Per-file modules.

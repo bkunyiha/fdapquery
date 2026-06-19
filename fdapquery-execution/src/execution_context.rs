@@ -21,14 +21,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datasource::{CsvDataSource, DataSource};
-use datatypes::RecordBatch;
-use logical_plan::{DataFrame, LogicalPlan, Scan};
-use optimizer::Optimizer;
-use physical_plan::ExecutorContext;
-use query_planner::QueryPlanner;
+use fdapquery_datasource::{CsvDataSource, DataSource};
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
+use fdapquery_optimizer::Optimizer;
+use fdapquery_physical_plan::ExecutorContext;
+use fdapquery_query_planner::QueryPlanner;
 // `PrattParser` brings the `parse` method into scope for `SqlParser`.
-use sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 
 /// Default CSV batch size when `rquery.csv.batchSize` is unset.
 const DEFAULT_BATCH_SIZE: usize = 1024;
@@ -128,19 +128,19 @@ mod tests {
     //! `left join using DataFrame` — exercise the `fuzzer` crate (module 9).
     //!
     //! ## Float formatting note
-    //! Rust's `f32::to_string()` (which `datatypes::record_batch::to_csv` uses)
+    //! Rust's `f32::to_string()` (which `fdapquery_datatypes::record_batch::to_csv` uses)
     //! emits `"1"` for whole-valued floats rather than `"1.0"`. The
     //! Fuzzer-backed float tests below assert against that exact output, so
     //! `min max sum float` checks `"a,1,2,3"`; `float_math` computes its
     //! expected division literally (`let q = 1.0_f32 / 11.0_f32`) so the
     //! assertion matches whatever Rust's formatter produces.
     use super::*;
-    use datasource::InMemoryDataSource;
-    use datatypes::arrow_types::{BOOLEAN_TYPE, FLOAT_TYPE, INT32_TYPE, STRING_TYPE};
-    use datatypes::record_batch::to_csv;
-    use datatypes::{Field, ScalarValue, Schema};
-    use fuzzer::Fuzzer;
-    use logical_plan::{JoinType, cast, col, format, lit_string, max, min, sum};
+    use fdapquery_datasource::InMemoryDataSource;
+    use fdapquery_datatypes::arrow_types::{BOOLEAN_TYPE, FLOAT_TYPE, INT32_TYPE, STRING_TYPE};
+    use fdapquery_datatypes::record_batch::to_csv;
+    use fdapquery_datatypes::{Field, ScalarValue, Schema};
+    use fdapquery_fuzzer::Fuzzer;
+    use fdapquery_logical_plan::{JoinType, cast, col, format, lit_string, max, min, sum};
     use std::collections::HashSet;
 
     /// Helper: wrap a single in-memory `RecordBatch` as a `DataFrame` over a

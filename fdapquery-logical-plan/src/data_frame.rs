@@ -11,7 +11,7 @@ use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
 use crate::projection::Projection;
 use crate::selection::Selection;
-use datatypes::Schema;
+use fdapquery_datatypes::Schema;
 
 /// Fluent builder over a [`LogicalPlan`].
 #[derive(Clone)]
@@ -96,7 +96,7 @@ mod tests {
     use crate::expressions::{col, count, lit_double, lit_long, lit_string, max, min};
     use crate::logical_plan::{LogicalPlan, format};
     use crate::scan::Scan;
-    use datasource::CsvDataSource;
+    use fdapquery_datasource::CsvDataSource;
     use std::sync::Arc;
 
     fn csv() -> DataFrame {

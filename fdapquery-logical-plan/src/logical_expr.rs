@@ -40,8 +40,8 @@
 use crate::expressions::AggregateExpr;
 use crate::logical_plan::LogicalPlan;
 use arrow_schema::DataType;
-use datatypes::Field;
-use datatypes::arrow_types::{
+use fdapquery_datatypes::Field;
+use fdapquery_datatypes::arrow_types::{
     BOOLEAN_TYPE, DATE_DAY_TYPE, DOUBLE_TYPE, FLOAT_TYPE, INT64_TYPE, INTERVAL_DAY_TIME_TYPE,
     STRING_TYPE,
 };

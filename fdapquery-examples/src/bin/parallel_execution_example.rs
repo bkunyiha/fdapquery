@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
-use execution::{ExecutionContext, ParallelContext};
+use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_execution::{ExecutionContext, ParallelContext};
 
 /// In-repo employee fixture used by the existing execution-module tests.
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";

@@ -17,8 +17,8 @@
 //! `client`.
 
 use crate::{DistributedConfig, DistributedPlanner, ExecutorConfig, QueryStage};
-use datatypes::RecordBatch;
-use physical_plan::{PhysicalPlan, ShuffleLocation, Task};
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_physical_plan::{PhysicalPlan, ShuffleLocation, Task};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -197,10 +197,10 @@ mod tests {
 
     use super::*;
     use crate::ExecutorConfig;
-    use datasource::CsvDataSource;
-    use logical_plan::{Aggregate, LogicalPlan, Scan, col, sum};
-    use optimizer::Optimizer;
-    use query_planner::QueryPlanner;
+    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_logical_plan::{Aggregate, LogicalPlan, Scan, col, sum};
+    use fdapquery_optimizer::Optimizer;
+    use fdapquery_query_planner::QueryPlanner;
     use std::sync::{Arc, Mutex};
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";

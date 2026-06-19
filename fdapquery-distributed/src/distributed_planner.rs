@@ -14,7 +14,7 @@
 //! `Arc<dyn ExecutionPlan>` shape.
 
 use crate::{DistributedConfig, QueryStage};
-use physical_plan::{
+use fdapquery_physical_plan::{
     AggregateMode, HashAggregateExec, PhysicalPlan, ShuffleLocation, ShuffleReaderExec,
     ShuffleWriterExec,
 };
@@ -149,10 +149,10 @@ fn substitute_shuffle_reader(
 mod tests {
     use super::*;
     use crate::ExecutorConfig;
-    use datasource::CsvDataSource;
-    use logical_plan::{Aggregate, LogicalPlan, Scan, col, sum};
-    use optimizer::Optimizer;
-    use query_planner::QueryPlanner;
+    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_logical_plan::{Aggregate, LogicalPlan, Scan, col, sum};
+    use fdapquery_optimizer::Optimizer;
+    use fdapquery_query_planner::QueryPlanner;
     use std::sync::Arc;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";

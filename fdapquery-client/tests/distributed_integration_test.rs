@@ -6,7 +6,7 @@
 //! Drives `DistributedContext::sql(...)` against a real `flight-server`
 //! running on a real TCP port via real Arrow Flight gRPC, using a real
 //! `FlightExecutorClient` to dispatch tasks. The mock executor client
-//! from `distributed::scheduler::tests` is *not* in the loop —
+//! from `fdapquery_distributed::scheduler::tests` is *not* in the loop —
 //! `FlightExecutorClient::execute_task` ships the intermediate stage's
 //! `ShuffleWriterExec` task via `do_action`,
 //! `FlightExecutorClient::execute_final_task` ships the final stage's
@@ -36,9 +36,9 @@
 //! runtime; an `mpsc` channel ships the bound address back to the test
 //! thread.
 
-use client::FlightExecutorClient;
-use datatypes::RecordBatch;
-use distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
+use fdapquery_client::FlightExecutorClient;
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
 use std::sync::mpsc;
 
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
@@ -58,8 +58,8 @@ fn unique_shuffle_dir(tag: &str) -> String {
 /// shuffle directory (for cleanup at the end of the test).
 fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) {
     use arrow_flight::flight_service_server::FlightServiceServer;
-    use flight_server::r_query_flight_producer::RQueryFlightProducer;
-    use physical_plan::ExecutorContext;
+    use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
+    use fdapquery_physical_plan::ExecutorContext;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::transport::Server;
@@ -90,7 +90,7 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
                 addr.port() as i32,
                 shuffle_dir_for_thread,
             );
-            let producer = RQueryFlightProducer::new(ctx);
+            let producer = FdapQueryFlightProducer::new(ctx);
 
             tx.send(addr).expect("ship addr back to test thread");
 
@@ -165,5 +165,5 @@ fn distributed_aggregate_query_end_to_end_via_flight() {
     }
 
     // Clean up shuffle files.
-    physical_plan::ShuffleManager::new(shuffle_dir).cleanup_all();
+    fdapquery_physical_plan::ShuffleManager::new(shuffle_dir).cleanup_all();
 }

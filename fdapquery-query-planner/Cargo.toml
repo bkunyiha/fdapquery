@@ -1,5 +1,5 @@
 [package]
-name         = "query-planner"
+name         = "fdapquery-query-planner"
 description  = "Logical → physical plan translation."
 edition.workspace      = true
 license.workspace      = true
@@ -9,12 +9,12 @@ rust-version.workspace = true
 
 [dependencies]
 chrono        = { workspace = true }   # NaiveDate → days_since_epoch for LiteralDate lowering
-datatypes     = { path = "../datatypes" }
-logical-plan  = { path = "../logical-plan" }
-physical-plan = { path = "../physical-plan" }
+fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
+fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
+fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
 
 [dev-dependencies]
 # The QueryPlanner test builds a logical plan, optimizes it, then plans it —
 # so it needs an in-memory data source and the optimizer.
-datasource = { path = "../datasource" }
-optimizer  = { path = "../optimizer" }
+fdapquery-datasource = { path = "../fdapquery-datasource" }
+fdapquery-optimizer  = { path = "../fdapquery-optimizer" }

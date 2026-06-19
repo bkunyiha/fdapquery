@@ -11,7 +11,7 @@ use crate::limit::Limit;
 use crate::projection::Projection;
 use crate::scan::Scan;
 use crate::selection::Selection;
-use datatypes::Schema;
+use fdapquery_datatypes::Schema;
 use std::fmt;
 
 /// A logical plan: a data transformation or action that returns a relation.
@@ -97,8 +97,8 @@ mod tests {
     use crate::projection::Projection;
     use crate::scan::Scan;
     use crate::selection::Selection;
-    use datasource::CsvDataSource;
-    use datatypes::arrow_types::INT32_TYPE;
+    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_datatypes::arrow_types::INT32_TYPE;
     use std::sync::Arc;
 
     fn employee_scan() -> Scan {

@@ -1,13 +1,13 @@
 //! Integration test for `flight-server` — exercises the full gRPC round-trip
 //! against a real tonic server running on a random TCP port. Proves that an
-//! actual Arrow Flight client can talk to `RQueryFlightProducer` over the
+//! actual Arrow Flight client can talk to `FdapQueryFlightProducer` over the
 //! wire, and that `do_action("execute_task")` and `do_get` both behave
 //! correctly end-to-end.
 //!
-//! ## Why this lives in `tests/`, not the `r_query_flight_producer.rs` unit
+//! ## Why this lives in `tests/`, not the `fdap_query_flight_producer.rs` unit
 //! test module
 //!
-//! The unit tests in `r_query_flight_producer.rs` exercise the service
+//! The unit tests in `fdap_query_flight_producer.rs` exercise the service
 //! methods *directly* — they construct the producer in memory and call
 //! `do_action(Request::new(...))` / `do_get(Request::new(...))` without ever
 //! crossing a TCP socket. That's enough to prove the dispatch and stream
@@ -24,15 +24,15 @@
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::{Action, Ticket};
-use datasource::{CsvDataSource, DataSource};
-use datatypes::RecordBatch;
-use flight_server::r_query_flight_producer::RQueryFlightProducer;
+use fdapquery_datasource::{CsvDataSource, DataSource};
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
 use futures::StreamExt;
-use logical_plan::{LogicalPlan, Scan};
-use physical_plan::{
+use fdapquery_logical_plan::{LogicalPlan, Scan};
+use fdapquery_physical_plan::{
     ColumnExpression, ExecutorContext, PhysicalPlan, ScanExec, ShuffleWriterExec, Task,
 };
-use protobuf::{pb, serialize_logical_plan, serialize_task};
+use fdapquery_protobuf::{pb, serialize_logical_plan, serialize_task};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -49,7 +49,7 @@ fn temp_dir(tag: &str) -> String {
     format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
 }
 
-/// Spawn an `RQueryFlightProducer`-backed tonic server bound to a random TCP
+/// Spawn an `FdapQueryFlightProducer`-backed tonic server bound to a random TCP
 /// port on localhost. Returns the bound `addr` (so the client knows where to
 /// connect) and the `JoinHandle` for the server task (so the test can drop
 /// it at the end).
@@ -65,7 +65,7 @@ async fn spawn_flight_server(
     let addr = listener.local_addr().expect("local_addr");
     let listener_stream = TcpListenerStream::new(listener);
 
-    let producer = RQueryFlightProducer::new(ctx);
+    let producer = FdapQueryFlightProducer::new(ctx);
     let server_handle = tokio::spawn(async move {
         Server::builder()
             .add_service(FlightServiceServer::new(producer))

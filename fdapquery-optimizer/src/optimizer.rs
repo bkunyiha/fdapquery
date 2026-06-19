@@ -6,7 +6,7 @@
 //! takes a single expression. Unreachable invariants are reported via
 //! `panic!` (§3.6).
 
-use logical_plan::{AggregateExpr, LogicalExpr, LogicalPlan};
+use fdapquery_logical_plan::{AggregateExpr, LogicalExpr, LogicalPlan};
 use std::collections::HashSet;
 
 use crate::projection_push_down_rule::ProjectionPushDownRule;

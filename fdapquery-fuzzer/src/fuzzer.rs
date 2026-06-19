@@ -19,7 +19,7 @@
 //!   that owns the underlying `StdRng` and exposes both the biased helpers
 //!   (`next_byte`, `next_double`, …) and a raw [`EnhancedRandom::rng`] accessor
 //!   for the call sites that need `gen_range(..)` directly.
-//! - **Per-type column builders.** [`datatypes::ArrowVectorBuilder::append_value`]
+//! - **Per-type column builders.** [`fdapquery_datatypes::ArrowVectorBuilder::append_value`]
 //!   performs per-type variant dispatch internally (see `arrow_vector_builder.rs`),
 //!   so the batch-construction loop is one line per column.
 //! - **`self.rng.random::<T>()` / `random_range(..)`.** As of rand 0.9 the
@@ -29,8 +29,8 @@
 //!   [`rand::RngExt`] extension trait rather than `Rng`, so that is what the
 //!   call sites import.
 
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
-use logical_plan::{DataFrame, LogicalExpr};
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
+use fdapquery_logical_plan::{DataFrame, LogicalExpr};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
@@ -326,8 +326,8 @@ mod tests {
     //! The test loops 50 times and asserts that `create_plan` returns without
     //! panicking — i.e. random plan generation is stable across runs.
     use super::*;
-    use datasource::CsvDataSource;
-    use logical_plan::{LogicalPlan, Scan};
+    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_logical_plan::{LogicalPlan, Scan};
     use std::sync::Arc;
 
     #[test]

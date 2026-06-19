@@ -1,5 +1,5 @@
 [package]
-name         = "sql"
+name         = "fdapquery-sql"
 description  = "Hand-written Pratt parser, tokenizer, and SQL→LogicalPlan compiler."
 edition.workspace      = true
 license.workspace      = true
@@ -11,12 +11,12 @@ rust-version.workspace = true
 arrow-schema = { workspace = true }
 chrono       = { workspace = true }      # NaiveDate::parse for SqlExpr::Date literal lowering
 
-datatypes    = { path = "../datatypes" }
-logical-plan = { path = "../logical-plan" }
+fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
+fdapquery-logical-plan = { path = "../fdapquery-logical-plan" }
 
 # The hand-rolled Pratt parser is the pedagogical core of this module — do
 # not replace it with `sqlparser-rs` or another third-party parser.
 
 [dev-dependencies]
 # Used only by the SQL-planner test, which builds a Scan over a CsvDataSource.
-datasource = { path = "../datasource" }
+fdapquery-datasource = { path = "../fdapquery-datasource" }

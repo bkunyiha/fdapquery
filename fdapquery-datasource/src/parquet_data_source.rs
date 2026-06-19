@@ -7,7 +7,7 @@
 //! - I/O and parse errors panic (file-not-found, corrupt file, etc.).
 
 use crate::data_source::DataSource;
-use datatypes::{RecordBatch, Schema, schema::from_arrow as schema_from_arrow};
+use fdapquery_datatypes::{RecordBatch, Schema, schema::from_arrow as schema_from_arrow};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
@@ -79,8 +79,8 @@ impl DataSource for ParquetDataSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datatypes::record_batch::row_count;
-    use datatypes::{ArrowFieldVector, ColumnVector, ScalarValue};
+    use fdapquery_datatypes::record_batch::row_count;
+    use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, ScalarValue};
 
     fn fixture(name: &str) -> String {
         format!("../testdata/{}", name)

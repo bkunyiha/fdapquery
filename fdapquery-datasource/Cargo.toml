@@ -1,5 +1,5 @@
 [package]
-name         = "datasource"
+name         = "fdapquery-datasource"
 description  = "DataSource trait with CSV, Parquet, and in-memory implementations."
 edition.workspace      = true
 license.workspace      = true
@@ -12,4 +12,4 @@ arrow        = { workspace = true }
 arrow-array  = { workspace = true }
 arrow-schema = { workspace = true }
 parquet      = { workspace = true }
-datatypes    = { path = "../datatypes" }
+fdapquery-datatypes    = { path = "../fdapquery-datatypes" }

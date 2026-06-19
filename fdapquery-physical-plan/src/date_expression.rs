@@ -5,8 +5,8 @@
 //! add/subtract on the day counts, with a null in either operand yielding null.
 
 use crate::expressions::{Expression, number_to_i64};
-use datatypes::arrow_types::DATE_DAY_TYPE;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::arrow_types::DATE_DAY_TYPE;
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 

@@ -3,7 +3,7 @@
 //! hands back that column unchanged — the simplest possible physical expression.
 
 use crate::expressions::Expression;
-use datatypes::{ColumnVector, RecordBatch, record_batch};
+use fdapquery_datatypes::{ColumnVector, RecordBatch, record_batch};
 use std::fmt;
 
 /// Reference a column in a batch by index.

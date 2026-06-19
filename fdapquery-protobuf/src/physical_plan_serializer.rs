@@ -34,15 +34,15 @@
 //!   serialise to `pb::PhysicalBinaryExprNode { l, r, op }`; each family's
 //!   `op_name()` method (alongside the downcast accessors) supplies the
 //!   wire-format op string ("eq", "add", etc.).
-//! - **`ShuffleLocation` is `physical_plan::ShuffleLocation`** (6 fields,
+//! - **`ShuffleLocation` is `fdapquery_physical_plan::ShuffleLocation`** (6 fields,
 //!   matches the proto exactly), not the older 4-field
-//!   `datatypes::ShuffleLocation` that's also in the workspace.
+//!   `fdapquery_datatypes::ShuffleLocation` that's also in the workspace.
 //!   Cleaning up that duplicate type is a separate follow-up.
 
 use crate::pb;
-use datasource::DataSource;
-use datatypes::{Field, Schema};
-use physical_plan::{
+use fdapquery_datasource::DataSource;
+use fdapquery_datatypes::{Field, Schema};
+use fdapquery_physical_plan::{
     AggregateExpression, AggregateMode, Expression, PhysicalPlan, ShuffleLocation, Task,
 };
 
@@ -53,7 +53,7 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
     use pb::physical_plan_node::PlanType;
     let any = plan.as_any();
 
-    if let Some(scan) = any.downcast_ref::<physical_plan::ScanExec>() {
+    if let Some(scan) = any.downcast_ref::<fdapquery_physical_plan::ScanExec>() {
         let (path, file_format) = data_source_path_and_format(scan.ds.as_ref());
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::Scan(pb::ScanExecNode {
@@ -74,7 +74,7 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
             })),
         };
     }
-    if let Some(proj) = any.downcast_ref::<physical_plan::ProjectionExec>() {
+    if let Some(proj) = any.downcast_ref::<fdapquery_physical_plan::ProjectionExec>() {
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::Projection(Box::new(pb::ProjectionExecNode {
                 input: Some(Box::new(serialize_physical_plan(proj.input.as_ref()))),
@@ -87,7 +87,7 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
             }))),
         };
     }
-    if let Some(sel) = any.downcast_ref::<physical_plan::SelectionExec>() {
+    if let Some(sel) = any.downcast_ref::<fdapquery_physical_plan::SelectionExec>() {
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::Selection(Box::new(pb::SelectionExecNode {
                 input: Some(Box::new(serialize_physical_plan(sel.input.as_ref()))),
@@ -95,7 +95,7 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
             }))),
         };
     }
-    if let Some(agg) = any.downcast_ref::<physical_plan::HashAggregateExec>() {
+    if let Some(agg) = any.downcast_ref::<fdapquery_physical_plan::HashAggregateExec>() {
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::HashAggregate(Box::new(
                 pb::HashAggregateExecNode {
@@ -116,7 +116,7 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
             ))),
         };
     }
-    if let Some(sw) = any.downcast_ref::<physical_plan::ShuffleWriterExec>() {
+    if let Some(sw) = any.downcast_ref::<fdapquery_physical_plan::ShuffleWriterExec>() {
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::ShuffleWriter(Box::new(
                 pb::ShuffleWriterExecNode {
@@ -133,7 +133,7 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
             ))),
         };
     }
-    if let Some(sr) = any.downcast_ref::<physical_plan::ShuffleReaderExec>() {
+    if let Some(sr) = any.downcast_ref::<fdapquery_physical_plan::ShuffleReaderExec>() {
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::ShuffleReader(pb::ShuffleReaderExecNode {
                 schema: Some((&sr.shuffle_schema).into()),
@@ -148,15 +148,15 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
 pub fn serialize_physical_expr(expr: &dyn Expression) -> pb::PhysicalExprNode {
     use pb::physical_expr_node::ExprType;
     let any = expr.as_any();
-    let expr_type = if let Some(c) = any.downcast_ref::<physical_plan::ColumnExpression>() {
+    let expr_type = if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::ColumnExpression>() {
         ExprType::Column(c.i as i32)
-    } else if let Some(s) = any.downcast_ref::<physical_plan::LiteralStringExpression>() {
+    } else if let Some(s) = any.downcast_ref::<fdapquery_physical_plan::LiteralStringExpression>() {
         ExprType::LiteralString(s.value.clone())
-    } else if let Some(n) = any.downcast_ref::<physical_plan::LiteralLongExpression>() {
+    } else if let Some(n) = any.downcast_ref::<fdapquery_physical_plan::LiteralLongExpression>() {
         ExprType::LiteralLong(n.value)
-    } else if let Some(n) = any.downcast_ref::<physical_plan::LiteralDoubleExpression>() {
+    } else if let Some(n) = any.downcast_ref::<fdapquery_physical_plan::LiteralDoubleExpression>() {
         ExprType::LiteralDouble(n.value)
-    } else if let Some(d) = any.downcast_ref::<physical_plan::LiteralDateExpression>() {
+    } else if let Some(d) = any.downcast_ref::<fdapquery_physical_plan::LiteralDateExpression>() {
         ExprType::LiteralDate(d.days_since_epoch)
     } else if let Some(be) = expr.as_boolean_expression() {
         // Family-narrowing: `as_boolean_expression` returns `&dyn BooleanExpression`
@@ -174,7 +174,7 @@ pub fn serialize_physical_expr(expr: &dyn Expression) -> pb::PhysicalExprNode {
             r: Some(Box::new(serialize_physical_expr(me.right().as_ref()))),
             op: me.op_name().to_string(),
         }))
-    } else if let Some(c) = any.downcast_ref::<physical_plan::CastExpression>() {
+    } else if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::CastExpression>() {
         ExprType::CastExpr(Box::new(pb::PhysicalCastExprNode {
             expr: Some(Box::new(serialize_physical_expr(c.expr.as_ref()))),
             arrow_type: data_type_to_proto(&c.data_type) as i32,
@@ -192,15 +192,15 @@ pub fn serialize_physical_aggr_expr(
     expr: &dyn AggregateExpression,
 ) -> pb::PhysicalAggregateExprNode {
     let any = expr.as_any();
-    let fn_kind = if any.is::<physical_plan::SumExpression>() {
+    let fn_kind = if any.is::<fdapquery_physical_plan::SumExpression>() {
         pb::AggregateFunction::Sum
-    } else if any.is::<physical_plan::MinExpression>() {
+    } else if any.is::<fdapquery_physical_plan::MinExpression>() {
         pb::AggregateFunction::Min
-    } else if any.is::<physical_plan::MaxExpression>() {
+    } else if any.is::<fdapquery_physical_plan::MaxExpression>() {
         pb::AggregateFunction::Max
-    } else if any.is::<physical_plan::AvgExpression>() {
+    } else if any.is::<fdapquery_physical_plan::AvgExpression>() {
         pb::AggregateFunction::Avg
-    } else if any.is::<physical_plan::CountExpression>() {
+    } else if any.is::<fdapquery_physical_plan::CountExpression>() {
         pb::AggregateFunction::Count
     } else {
         panic!(
@@ -256,8 +256,8 @@ impl From<&Field> for pb::Field {
 }
 
 /// `&ShuffleLocation` → `pb::ShuffleLocation`.
-/// Uses the 6-field `physical_plan::ShuffleLocation` (there is also a
-/// 4-field `datatypes::ShuffleLocation` left over from earlier porting;
+/// Uses the 6-field `fdapquery_physical_plan::ShuffleLocation` (there is also a
+/// 4-field `fdapquery_datatypes::ShuffleLocation` left over from earlier porting;
 /// the physical_plan one is the production type and matches the proto
 /// exactly).
 impl From<&ShuffleLocation> for pb::ShuffleLocation {
@@ -282,9 +282,9 @@ impl From<&ShuffleLocation> for pb::ShuffleLocation {
 /// DataFusion uses for `TableProvider`.
 fn data_source_path_and_format(ds: &dyn DataSource) -> (String, String) {
     let any = ds.as_any();
-    if let Some(csv) = any.downcast_ref::<datasource::CsvDataSource>() {
+    if let Some(csv) = any.downcast_ref::<fdapquery_datasource::CsvDataSource>() {
         (csv.filename.clone(), "csv".to_string())
-    } else if let Some(parquet) = any.downcast_ref::<datasource::ParquetDataSource>() {
+    } else if let Some(parquet) = any.downcast_ref::<fdapquery_datasource::ParquetDataSource>() {
         (parquet.filename.clone(), "parquet".to_string())
     } else {
         panic!("Unsupported data-source type for protobuf serialisation")

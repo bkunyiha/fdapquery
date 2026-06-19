@@ -36,7 +36,7 @@ use std::sync::Arc;
 /// `flight-server` process.
 ///
 /// Constructed once by the `flight-server` binary and held inside
-/// `RQueryFlightProducer`. `do_action("execute_task")` and `do_get` pass a
+/// `FdapQueryFlightProducer`. `do_action("execute_task")` and `do_get` pass a
 /// reference to the relevant shuffle operator's `execute(&ctx)` /
 /// `write_shuffle(&ctx)` method.
 ///

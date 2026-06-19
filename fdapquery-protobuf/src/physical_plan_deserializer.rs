@@ -18,10 +18,10 @@
 //!   scans the materialised `Schema` is passed to `CsvDataSource::new(...)`
 //!   so the source uses the wire schema rather than re-inferring from the
 //!   file.
-//! - **`ShuffleLocation` is `physical_plan::ShuffleLocation`** (the 6-field
-//!   one matching the proto), not the 4-field `datatypes::ShuffleLocation`.
+//! - **`ShuffleLocation` is `fdapquery_physical_plan::ShuffleLocation`** (the 6-field
+//!   one matching the proto), not the 4-field `fdapquery_datatypes::ShuffleLocation`.
 //! - **Orphan rule note.** The deserializer's leaf conversions (e.g.,
-//!   `pb::ShuffleLocation` → `physical_plan::ShuffleLocation`) cannot be
+//!   `pb::ShuffleLocation` → `fdapquery_physical_plan::ShuffleLocation`) cannot be
 //!   written as `impl From<&pb::T> for T` because the target types live in
 //!   foreign crates and the orphan rule rejects the impl. They stay as free
 //!   `deserialize_X` functions. The asymmetry with the serializer side
@@ -29,9 +29,9 @@
 //!   direct consequence of the orphan rule, not a stylistic choice.
 
 use crate::pb;
-use datasource::{CsvDataSource, DataSource, ParquetDataSource};
-use datatypes::arrow_types;
-use physical_plan::{
+use fdapquery_datasource::{CsvDataSource, DataSource, ParquetDataSource};
+use fdapquery_datatypes::arrow_types;
+use fdapquery_physical_plan::{
     AddExpression, AggregateExpression, AggregateMode, AndExpression, AvgExpression,
     CastExpression, ColumnExpression, CountExpression, DivideExpression, EqExpression, Expression,
     GtEqExpression, GtExpression, HashAggregateExec, LiteralDateExpression,
@@ -212,10 +212,10 @@ pub fn deserialize_physical_aggr_expr(
     }
 }
 
-/// `pb::ShuffleLocation` → `physical_plan::ShuffleLocation`.
+/// `pb::ShuffleLocation` → `fdapquery_physical_plan::ShuffleLocation`.
 ///
 /// Stays a free function (rather than `impl From<&pb::ShuffleLocation> for
-/// physical_plan::ShuffleLocation`) because the target type is in a foreign
+/// fdapquery_physical_plan::ShuffleLocation`) because the target type is in a foreign
 /// crate and the orphan rule rejects the impl. See the module doc.
 pub fn deserialize_shuffle_location(loc: &pb::ShuffleLocation) -> ShuffleLocation {
     ShuffleLocation::new(

@@ -1,5 +1,5 @@
 [package]
-name         = "benchmarks"
+name         = "fdapquery-benchmarks"
 description  = "TPC-H runner and NYC taxi benchmark."
 edition.workspace      = true
 license.workspace      = true
@@ -8,9 +8,9 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-execution    = { path = "../execution" }
-datasource   = { path = "../datasource" }    # ParquetDataSource (tpch_runner), InMemoryDataSource (benchmarks)
-datatypes    = { path = "../datatypes" }     # RecordBatch, SchemaConverter, to_csv
+fdapquery-execution    = { path = "../fdapquery-execution" }
+fdapquery-datasource   = { path = "../fdapquery-datasource" }    # ParquetDataSource (tpch_runner), InMemoryDataSource (benchmarks)
+fdapquery-datatypes    = { path = "../fdapquery-datatypes" }     # RecordBatch, SchemaConverter, to_csv
 # Data parallelism: `benchmarks` fans out one query per input CSV via
 # `into_par_iter().flat_map(...)`.
 rayon        = { workspace = true }
@@ -26,5 +26,5 @@ name = "tpch_runner"
 path = "src/bin/tpch_runner.rs"
 
 [[bin]]
-name = "benchmarks"
+name = "fdapquery-benchmarks"
 path = "src/bin/benchmarks.rs"

@@ -24,7 +24,7 @@
 use crate::binary_expression::BinaryExpression;
 use crate::expressions::{Expression, as_f32, as_f64, as_i8, as_i16, as_i32, as_i64};
 use arrow_schema::DataType;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ pub trait MathExpression: BinaryExpression {
     -> ScalarValue;
 
     /// Wire-format operator name (`"add"`, `"subtract"`, `"multiply"`,
-    /// `"divide"`). Used by `protobuf::serialize_physical_expr` to serialise
+    /// `"divide"`). Used by `fdapquery_protobuf::serialize_physical_expr` to serialise
     /// this expression as a `pb::PhysicalBinaryExprNode` with the matching
     /// `op` string. Same shape as `BooleanExpression::op_name`.
     fn op_name(&self) -> &'static str;

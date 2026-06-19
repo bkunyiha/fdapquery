@@ -10,7 +10,7 @@
 
 use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, Schema, record_batch};
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, Schema, record_batch};
 use std::sync::Arc;
 
 /// Execute a limit. `limit` is a row count.
@@ -119,7 +119,7 @@ mod tests {
     use crate::projection_exec::ProjectionExec;
     use crate::scan_exec::ScanExec;
     use crate::selection_exec::SelectionExec;
-    use datasource::{CsvDataSource, DataSource};
+    use fdapquery_datasource::{CsvDataSource, DataSource};
     use std::sync::Arc;
 
     fn employee_ds() -> Arc<dyn DataSource> {

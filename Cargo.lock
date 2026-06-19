@@ -429,20 +429,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "benchmarks"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "datasource",
- "datatypes",
- "env_logger",
- "execution",
- "log",
- "rayon",
- "sysinfo",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -519,29 +505,6 @@ dependencies = [
  "iana-time-zone",
  "num-traits",
  "windows-link 0.2.1",
-]
-
-[[package]]
-name = "client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow",
- "arrow-flight",
- "datasource",
- "datatypes",
- "distributed",
- "flight-server",
- "futures",
- "logical-plan",
- "physical-plan",
- "prost",
- "protobuf",
- "sql",
- "tokio",
- "tokio-stream",
- "tonic",
- "tracing",
 ]
 
 [[package]]
@@ -638,41 +601,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "datasource"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-schema",
- "datatypes",
- "parquet",
-]
-
-[[package]]
-name = "datatypes"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-schema",
-]
-
-[[package]]
-name = "distributed"
-version = "0.1.0"
-dependencies = [
- "datasource",
- "datatypes",
- "logical-plan",
- "optimizer",
- "physical-plan",
- "query-planner",
- "sql",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -718,22 +646,100 @@ dependencies = [
 ]
 
 [[package]]
-name = "examples"
+name = "fastrand"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "fdapquery-benchmarks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-execution",
+ "log",
+ "rayon",
+ "sysinfo",
+]
+
+[[package]]
+name = "fdapquery-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "arrow-flight",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-distributed",
+ "fdapquery-flight-server",
+ "fdapquery-logical-plan",
+ "fdapquery-physical-plan",
+ "fdapquery-protobuf",
+ "fdapquery-sql",
+ "futures",
+ "prost",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+]
+
+[[package]]
+name = "fdapquery-datasource"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "fdapquery-datatypes",
+ "parquet",
+]
+
+[[package]]
+name = "fdapquery-datatypes"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+]
+
+[[package]]
+name = "fdapquery-distributed"
+version = "0.1.0"
+dependencies = [
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-logical-plan",
+ "fdapquery-optimizer",
+ "fdapquery-physical-plan",
+ "fdapquery-query-planner",
+ "fdapquery-sql",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fdapquery-examples"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
- "client",
- "datasource",
- "datatypes",
- "distributed",
  "env_logger",
- "execution",
- "flight-server",
+ "fdapquery-client",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-distributed",
+ "fdapquery-execution",
+ "fdapquery-flight-server",
+ "fdapquery-logical-plan",
+ "fdapquery-optimizer",
+ "fdapquery-physical-plan",
  "log",
- "logical-plan",
- "optimizer",
- "physical-plan",
  "rayon",
  "tokio",
  "tokio-stream",
@@ -741,26 +747,124 @@ dependencies = [
 ]
 
 [[package]]
-name = "execution"
+name = "fdapquery-execution"
 version = "0.1.0"
 dependencies = [
  "arrow",
- "datasource",
- "datatypes",
- "fuzzer",
- "logical-plan",
- "optimizer",
- "physical-plan",
- "query-planner",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-fuzzer",
+ "fdapquery-logical-plan",
+ "fdapquery-optimizer",
+ "fdapquery-physical-plan",
+ "fdapquery-query-planner",
+ "fdapquery-sql",
  "rayon",
- "sql",
 ]
 
 [[package]]
-name = "fastrand"
-version = "2.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+name = "fdapquery-flight-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "arrow-flight",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-execution",
+ "fdapquery-logical-plan",
+ "fdapquery-physical-plan",
+ "fdapquery-protobuf",
+ "fdapquery-query-planner",
+ "fdapquery-sql",
+ "futures",
+ "prost",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fdapquery-fuzzer"
+version = "0.1.0"
+dependencies = [
+ "arrow-schema",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-logical-plan",
+ "fdapquery-sql",
+ "rand",
+]
+
+[[package]]
+name = "fdapquery-logical-plan"
+version = "0.1.0"
+dependencies = [
+ "arrow-schema",
+ "chrono",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+]
+
+[[package]]
+name = "fdapquery-optimizer"
+version = "0.1.0"
+dependencies = [
+ "fdapquery-datasource",
+ "fdapquery-logical-plan",
+]
+
+[[package]]
+name = "fdapquery-physical-plan"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-logical-plan",
+]
+
+[[package]]
+name = "fdapquery-protobuf"
+version = "0.1.0"
+dependencies = [
+ "arrow-schema",
+ "chrono",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-logical-plan",
+ "fdapquery-physical-plan",
+ "prost",
+ "tonic",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "fdapquery-query-planner"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-logical-plan",
+ "fdapquery-optimizer",
+ "fdapquery-physical-plan",
+]
+
+[[package]]
+name = "fdapquery-sql"
+version = "0.1.0"
+dependencies = [
+ "arrow-schema",
+ "chrono",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
+ "fdapquery-logical-plan",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -792,30 +896,6 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "miniz_oxide",
  "zlib-rs",
-]
-
-[[package]]
-name = "flight-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow",
- "arrow-flight",
- "datasource",
- "datatypes",
- "execution",
- "futures",
- "logical-plan",
- "physical-plan",
- "prost",
- "protobuf",
- "query-planner",
- "sql",
- "tokio",
- "tokio-stream",
- "tonic",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -916,18 +996,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "fuzzer"
-version = "0.1.0"
-dependencies = [
- "arrow-schema",
- "datasource",
- "datatypes",
- "logical-plan",
- "rand",
- "sql",
 ]
 
 [[package]]
@@ -1321,16 +1389,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
-name = "logical-plan"
-version = "0.1.0"
-dependencies = [
- "arrow-schema",
- "chrono",
- "datasource",
- "datatypes",
-]
-
-[[package]]
 name = "lz4_flex"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1481,14 +1539,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
-name = "optimizer"
-version = "0.1.0"
-dependencies = [
- "datasource",
- "logical-plan",
-]
-
-[[package]]
 name = "parquet"
 version = "59.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1541,18 +1591,6 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap",
-]
-
-[[package]]
-name = "physical-plan"
-version = "0.1.0"
-dependencies = [
- "arrow-array",
- "arrow-ipc",
- "arrow-schema",
- "datasource",
- "datatypes",
- "logical-plan",
 ]
 
 [[package]]
@@ -1675,21 +1713,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "protobuf"
-version = "0.1.0"
-dependencies = [
- "arrow-schema",
- "chrono",
- "datasource",
- "datatypes",
- "logical-plan",
- "physical-plan",
- "prost",
- "tonic",
- "tonic-prost-build",
-]
-
-[[package]]
 name = "pulldown-cmark"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1707,18 +1730,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50793def1b900256624a709439404384204a5dc3a6ec580281bfaac35e882e90"
 dependencies = [
  "pulldown-cmark",
-]
-
-[[package]]
-name = "query-planner"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "datasource",
- "datatypes",
- "logical-plan",
- "optimizer",
- "physical-plan",
 ]
 
 [[package]]
@@ -1949,17 +1960,6 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys",
-]
-
-[[package]]
-name = "sql"
-version = "0.1.0"
-dependencies = [
- "arrow-schema",
- "chrono",
- "datasource",
- "datatypes",
- "logical-plan",
 ]
 
 [[package]]

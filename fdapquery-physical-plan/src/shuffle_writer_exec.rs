@@ -35,7 +35,7 @@ use crate::expressions::Expression;
 use crate::physical_plan::PhysicalPlan;
 use crate::row_key::RowKey;
 use crate::shuffle_location::ShuffleLocation;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -273,7 +273,7 @@ mod tests {
     use super::*;
     use crate::column_expression::ColumnExpression;
     use crate::scan_exec::ScanExec;
-    use datasource::{CsvDataSource, DataSource};
+    use fdapquery_datasource::{CsvDataSource, DataSource};
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 

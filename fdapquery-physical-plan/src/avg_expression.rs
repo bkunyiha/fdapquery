@@ -7,7 +7,7 @@
 
 use crate::aggregate_expression::AggregateExpression;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression, number_to_f64};
-use datatypes::ScalarValue;
+use fdapquery_datatypes::ScalarValue;
 use std::fmt;
 use std::sync::Arc;
 

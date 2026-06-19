@@ -18,7 +18,7 @@
 
 use crate::expressions::Expression;
 use arrow_schema::DataType;
-use datatypes::{ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::{ColumnVector, RecordBatch, ScalarValue};
 use std::sync::Arc;
 
 /// A binary expression: left and right operands, with shared

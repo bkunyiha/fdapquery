@@ -1,5 +1,5 @@
 [package]
-name         = "optimizer"
+name         = "fdapquery-optimizer"
 description  = "Logical optimisation rules: ProjectionPushDown, etc."
 edition.workspace      = true
 license.workspace      = true
@@ -8,8 +8,8 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-logical-plan = { path = "../logical-plan" }
+fdapquery-logical-plan = { path = "../fdapquery-logical-plan" }
 
 [dev-dependencies]
 # Used only by the optimizer test, which scans a CsvDataSource.
-datasource = { path = "../datasource" }
+fdapquery-datasource = { path = "../fdapquery-datasource" }

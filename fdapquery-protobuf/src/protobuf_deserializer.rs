@@ -24,13 +24,13 @@
 //!   rather than guess at semantics.
 
 use crate::pb;
-use datasource::{CsvDataSource, ParquetDataSource};
-use datatypes::{Field, Schema, arrow_types};
-use logical_plan::{
+use fdapquery_datasource::{CsvDataSource, ParquetDataSource};
+use fdapquery_datatypes::{Field, Schema, arrow_types};
+use fdapquery_logical_plan::{
     Aggregate, AggregateExpr, Limit, LogicalExpr, LogicalPlan, Projection, Scan, Selection,
 };
 // JoinNode is not deserialised here. If/when that's added, re-import `JoinType`.
-use physical_plan::{Action, QueryAction};
+use fdapquery_physical_plan::{Action, QueryAction};
 use std::sync::Arc;
 
 use arrow_schema::DataType;
@@ -190,13 +190,13 @@ pub fn deserialize_logical_expr(node: &pb::LogicalExprNode) -> LogicalExpr {
     }
 }
 
-/// `pb::Schema` → `datatypes::Schema`.
+/// `pb::Schema` → `fdapquery_datatypes::Schema`.
 pub fn deserialize_schema(schema: &pb::Schema) -> Schema {
     let fields = schema.columns.iter().map(deserialize_field).collect();
     Schema::new(fields)
 }
 
-/// `pb::Field` → `datatypes::Field`.
+/// `pb::Field` → `fdapquery_datatypes::Field`.
 pub fn deserialize_field(field: &pb::Field) -> Field {
     Field::new(&field.name, from_proto_arrow_type(field.arrow_type))
 }
@@ -235,7 +235,7 @@ fn from_proto_arrow_type(arrow_type: i32) -> DataType {
 }
 
 /// Days-since-Unix-epoch → `chrono::NaiveDate`. Inverse of the helper in
-/// `protobuf_serializer.rs`; same shape as `query_planner::days_since_unix_epoch`.
+/// `protobuf_serializer.rs`; same shape as `fdapquery_query_planner::days_since_unix_epoch`.
 fn naive_date_from_days(days: i32) -> chrono::NaiveDate {
     let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is a valid date");
     epoch + chrono::Duration::days(days as i64)

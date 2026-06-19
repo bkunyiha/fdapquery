@@ -1,5 +1,5 @@
 [package]
-name         = "physical-plan"
+name         = "fdapquery-physical-plan"
 description  = "PhysicalPlan, *Exec operators, physical Expression types, shuffle/task."
 edition.workspace      = true
 license.workspace      = true
@@ -17,9 +17,9 @@ rust-version.workspace = true
 arrow-schema  = { workspace = true }
 # `arrow-ipc` powers `ShuffleManager`'s local Arrow IPC file writer/reader.
 arrow-ipc     = { workspace = true }
-datatypes     = { path = "../datatypes" }
-datasource    = { path = "../datasource" }
-logical-plan  = { path = "../logical-plan" }
+fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
+fdapquery-datasource    = { path = "../fdapquery-datasource" }
+fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
 
 [dev-dependencies]
 # Tests build RecordBatches directly from typed arrow arrays (Int32Array, …)

@@ -1,7 +1,7 @@
 //!
 //! Hash equi-join. Builds a hash table from the **right** (build) side keyed by
 //! the right join columns, then probes it with each **left** (probe) row. Supports
-//! `Inner`, `Left`, and `Right` joins (the three variants of `logical_plan::JoinType`).
+//! `Inner`, `Left`, and `Right` joins (the three variants of `fdapquery_logical_plan::JoinType`).
 //!
 //! ## Implementation notes
 //! - **Join keys / rows are `Vec<ScalarValue>`.** The hash table is keyed by
@@ -19,11 +19,11 @@
 use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
 use crate::row_key::RowKey;
-use datatypes::{
+use fdapquery_datatypes::{
     ArrowFieldVector, ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema,
     record_batch,
 };
-use logical_plan::JoinType;
+use fdapquery_logical_plan::JoinType;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -268,8 +268,8 @@ mod tests {
     use super::*;
     use arrow_array::{ArrayRef, Int64Array, StringArray};
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
-    use datatypes::Field;
-    use datatypes::arrow_types::{INT64_TYPE, STRING_TYPE};
+    use fdapquery_datatypes::Field;
+    use fdapquery_datatypes::arrow_types::{INT64_TYPE, STRING_TYPE};
     use std::sync::Arc;
 
     /// A `PhysicalPlan` that simply replays preset batches.

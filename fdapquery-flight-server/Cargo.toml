@@ -1,5 +1,5 @@
 [package]
-name         = "flight-server"
+name         = "fdapquery-flight-server"
 description  = "Arrow Flight server exposing the query engine over gRPC."
 edition.workspace      = true
 license.workspace      = true
@@ -26,14 +26,14 @@ tokio-stream     = "0.1"
 prost            = { workspace = true }
 
 # Internal — eight siblings.
-datatypes      = { path = "../datatypes" }
-datasource     = { path = "../datasource" }
-logical-plan   = { path = "../logical-plan" }
-physical-plan  = { path = "../physical-plan" }
-query-planner  = { path = "../query-planner" }
-sql            = { path = "../sql" }
-protobuf       = { path = "../protobuf" }
-execution      = { path = "../execution" }
+fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
+fdapquery-datasource     = { path = "../fdapquery-datasource" }
+fdapquery-logical-plan   = { path = "../fdapquery-logical-plan" }
+fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
+fdapquery-query-planner  = { path = "../fdapquery-query-planner" }
+fdapquery-sql            = { path = "../fdapquery-sql" }
+fdapquery-protobuf       = { path = "../fdapquery-protobuf" }
+fdapquery-execution      = { path = "../fdapquery-execution" }
 
 # `tracing` for log macros (matches distributed/'s logging choice — both crates
 # emit `info!`/`debug!`/`warn!` so a reader graduating to DataFusion source sees
@@ -43,5 +43,5 @@ tracing-subscriber = { workspace = true }
 anyhow             = { workspace = true }
 
 [[bin]]
-name = "flight-server"
+name = "fdapquery-flight-server"
 path = "src/bin/flight_server.rs"

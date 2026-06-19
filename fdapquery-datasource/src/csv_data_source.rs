@@ -14,7 +14,7 @@
 
 use crate::data_source::DataSource;
 use arrow::csv::{ReaderBuilder, reader::Format};
-use datatypes::{RecordBatch, Schema, schema::from_arrow as schema_from_arrow};
+use fdapquery_datatypes::{RecordBatch, Schema, schema::from_arrow as schema_from_arrow};
 use std::fs::File;
 use std::sync::Arc;
 
@@ -142,7 +142,7 @@ impl DataSource for CsvDataSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datatypes::record_batch::row_count;
+    use fdapquery_datatypes::record_batch::row_count;
 
     // Test data fixtures live at testdata/employee.csv etc., relative to the
     // workspace root. Cargo runs tests from the crate directory, so we point
@@ -213,8 +213,8 @@ mod tests {
     fn read_tsv_no_header() {
         // employee_no_header.tsv is real tab-separated, no header row.
         // Provide an explicit schema since there's no header to infer names from.
-        use datatypes::arrow_types::STRING_TYPE;
-        use datatypes::{Field, Schema};
+        use fdapquery_datatypes::arrow_types::STRING_TYPE;
+        use fdapquery_datatypes::{Field, Schema};
         let schema = Schema::new(vec![
             Field::new("field_1", STRING_TYPE),
             Field::new("field_2", STRING_TYPE),

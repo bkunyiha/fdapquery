@@ -24,10 +24,10 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
-use datasource::{DataSource, ParquetDataSource};
-use datatypes::RecordBatch;
-use datatypes::record_batch::to_csv;
-use execution::ExecutionContext;
+use fdapquery_datasource::{DataSource, ParquetDataSource};
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_datatypes::record_batch::to_csv;
+use fdapquery_execution::ExecutionContext;
 
 /// The eight TPC-H tables.
 const TPCH_TABLES: &[&str] = &[

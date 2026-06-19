@@ -4,7 +4,7 @@
 
 use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
-use datatypes::Schema;
+use fdapquery_datatypes::Schema;
 use std::fmt;
 
 #[derive(Clone)]

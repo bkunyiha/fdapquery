@@ -8,7 +8,7 @@
 //!   only the named columns, in the requested order.
 
 use crate::data_source::DataSource;
-use datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{RecordBatch, Schema};
 use std::sync::Arc;
 
 pub struct InMemoryDataSource {
@@ -82,9 +82,9 @@ mod tests {
     use super::*;
     use arrow_array::{ArrayRef, Int32Array, StringArray};
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
-    use datatypes::arrow_types::{INT32_TYPE, STRING_TYPE};
-    use datatypes::record_batch::{column_count, row_count};
-    use datatypes::{ArrowFieldVector, ColumnVector, Field, ScalarValue};
+    use fdapquery_datatypes::arrow_types::{INT32_TYPE, STRING_TYPE};
+    use fdapquery_datatypes::record_batch::{column_count, row_count};
+    use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, Field, ScalarValue};
 
     fn sample_batch() -> RecordBatch {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![

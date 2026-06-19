@@ -1,6 +1,6 @@
 //!
 //! Interactive Flight client: same API shape as
-//! [`execution::ExecutionContext`] and [`distributed::DistributedContext`]
+//! [`fdapquery_execution::ExecutionContext`] and [`fdapquery_distributed::DistributedContext`]
 //! (`register_csv` / `register` / `sql` / `execute`), but the execution
 //! goes over the wire via an `arrow_flight::FlightServiceClient` instead of
 //! running locally or through the distributed scheduler.
@@ -20,17 +20,17 @@
 use crate::client::Client;
 use crate::endpoint::Endpoint;
 use anyhow::Result;
-use datasource::CsvDataSource;
-use datatypes::RecordBatch;
-use logical_plan::{DataFrame, LogicalPlan, Scan};
-use protobuf::{pb, serialize_logical_plan};
-use sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_datasource::CsvDataSource;
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
+use fdapquery_protobuf::{pb, serialize_logical_plan};
+use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// CSV batch size for tables registered through `register_csv`. Matches the
-/// workspace's other contexts (`distributed::DistributedContext`,
-/// `execution::ExecutionContext`).
+/// workspace's other contexts (`fdapquery_distributed::DistributedContext`,
+/// `fdapquery_execution::ExecutionContext`).
 const CSV_BATCH_SIZE: usize = 1024;
 
 /// Interactive client-side context for executing queries via a single
@@ -95,7 +95,7 @@ impl Context {
     ///
     /// The wire shape:
     /// 1. Serialise the [`LogicalPlan`] to a [`pb::LogicalPlanNode`] via
-    ///    [`protobuf::serialize_logical_plan`].
+    ///    [`fdapquery_protobuf::serialize_logical_plan`].
     /// 2. Wrap it in a [`pb::Action`] (the protobuf message the
     ///    `flight-server`'s `do_get` handler expects in its `Ticket` body).
     /// 3. Encode via `prost::Message::encode_to_vec`.

@@ -1,6 +1,6 @@
 //! Binary entry point for the Flight server.
 //!
-//! All real logic lives in the library module `flight_server::serve`; this
+//! All real logic lives in the library module `fdapquery_flight_server::serve`; this
 //! file is the runnable shim that wires it up.
 //!
 //! Defaults to listening on `0.0.0.0:50051`.
@@ -8,10 +8,10 @@
 //! ## `#[tokio::main]`
 //! The server runs on a tokio multi-thread runtime (tonic's gRPC layer
 //! requires it). `#[tokio::main]` is purely the runtime launcher; the actual
-//! work happens inside `flight_server::serve`.
+//! work happens inside `fdapquery_flight_server::serve`.
 
-use flight_server::flight_server::serve;
-use physical_plan::ExecutorContext;
+use fdapquery_flight_server::flight_server::serve;
+use fdapquery_physical_plan::ExecutorContext;
 use std::net::SocketAddr;
 use tracing::error;
 use tracing_subscriber::EnvFilter;

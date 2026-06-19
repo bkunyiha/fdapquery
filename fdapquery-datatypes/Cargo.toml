@@ -1,5 +1,5 @@
 [package]
-name         = "datatypes"
+name         = "fdapquery-datatypes"
 description  = "Core data types: Schema, Field, RecordBatch, ColumnVector."
 edition.workspace      = true
 license.workspace      = true

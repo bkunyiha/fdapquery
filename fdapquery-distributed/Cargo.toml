@@ -1,5 +1,5 @@
 [package]
-name         = "distributed"
+name         = "fdapquery-distributed"
 description  = "Distributed query execution: scheduler, query stages, distributed planner."
 edition.workspace      = true
 license.workspace      = true
@@ -29,10 +29,10 @@ uuid           = { workspace = true }
 # `execution` is intentionally NOT a dependency — `DistributedContext`
 # re-implements the registry / SQL parse pipeline rather than reusing
 # `ExecutionContext`.
-datasource     = { path = "../datasource" }
-datatypes      = { path = "../datatypes" }
-logical-plan   = { path = "../logical-plan" }
-physical-plan  = { path = "../physical-plan" }
-optimizer      = { path = "../optimizer" }
-query-planner  = { path = "../query-planner" }
-sql            = { path = "../sql" }
+fdapquery-datasource     = { path = "../fdapquery-datasource" }
+fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
+fdapquery-logical-plan   = { path = "../fdapquery-logical-plan" }
+fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
+fdapquery-optimizer      = { path = "../fdapquery-optimizer" }
+fdapquery-query-planner  = { path = "../fdapquery-query-planner" }
+fdapquery-sql            = { path = "../fdapquery-sql" }

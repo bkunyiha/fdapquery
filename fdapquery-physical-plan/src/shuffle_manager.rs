@@ -16,7 +16,7 @@
 
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use datatypes::RecordBatch;
+use fdapquery_datatypes::RecordBatch;
 use std::fs::{File, create_dir_all};
 use std::io::BufReader;
 use std::path::PathBuf;

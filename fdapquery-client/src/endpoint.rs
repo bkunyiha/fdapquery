@@ -5,7 +5,7 @@
 //! take a single descriptor and gives `FlightExecutorClient`'s
 //! `executor_id → Endpoint` map a sensible value type.
 
-use distributed::ExecutorConfig;
+use fdapquery_distributed::ExecutorConfig;
 
 /// One Flight server's connection details. Used both as the target for
 /// `Client::new` and as the value type in `FlightExecutorClient`'s
@@ -39,7 +39,7 @@ impl Endpoint {
     }
 }
 
-/// Convenience: build an `Endpoint` from a `distributed::ExecutorConfig`
+/// Convenience: build an `Endpoint` from a `fdapquery_distributed::ExecutorConfig`
 /// (which already carries `host` + `port` for the scheduler's per-executor
 /// dispatch). `FlightExecutorClient` uses this conversion to populate its
 /// `executor_id → Endpoint` map from the `DistributedConfig.executors` list.

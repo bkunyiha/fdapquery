@@ -6,28 +6,28 @@
 resolver = "2"
 # 15 crates. Build order matches the listing order below.
 members = [
-    "datatypes",
-    "datasource",
-    "logical-plan",
-    "sql",
-    "optimizer",
-    "physical-plan",
-    "query-planner",
-    "execution",
-    "fuzzer",
-    "examples",
-    "benchmarks",
-    "protobuf",
-    "flight-server",
-    "client",
-    "distributed",
+    "fdapquery-datatypes",
+    "fdapquery-datasource",
+    "fdapquery-logical-plan",
+    "fdapquery-sql",
+    "fdapquery-optimizer",
+    "fdapquery-physical-plan",
+    "fdapquery-query-planner",
+    "fdapquery-execution",
+    "fdapquery-fuzzer",
+    "fdapquery-examples",
+    "fdapquery-benchmarks",
+    "fdapquery-protobuf",
+    "fdapquery-flight-server",
+    "fdapquery-client",
+    "fdapquery-distributed",
 ]
 
 [workspace.package]
 edition       = "2024"
 license       = "Apache-2.0"
 version       = "0.1.0"
-repository    = "https://github.com/bkunyiha/how-query-engines-work-rust"
+repository    = "https://github.com/bkunyiha/fdapquery"
 authors       = ["Bill Kunyiha <bkunyiha@gmail.com>"]
 rust-version  = "1.85"
 

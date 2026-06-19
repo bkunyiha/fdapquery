@@ -19,9 +19,9 @@
 //!   operator, never planned standalone). `LiteralDate` IS lowered here —
 //!   `NaiveDate::num_days_from_ce()` converted to days-since-Unix-epoch.
 
-use datatypes::Schema;
-use logical_plan::{AggregateExpr, LogicalExpr, LogicalPlan};
-use physical_plan::{
+use fdapquery_datatypes::Schema;
+use fdapquery_logical_plan::{AggregateExpr, LogicalExpr, LogicalPlan};
+use fdapquery_physical_plan::{
     AddExpression, AggregateExpression, AndExpression, AvgExpression, CastExpression,
     ColumnExpression, CountExpression, DateAddIntervalExpression, DateSubtractIntervalExpression,
     DivideExpression, EqExpression, Expression, GtEqExpression, GtExpression, HashAggregateExec,
@@ -317,11 +317,11 @@ mod tests {
     //! root is a `HashAggregateExec` over a single `ScanExec` leaf, with the
     //! expected resolved column indices in its `Display`.
     use super::*;
-    use datasource::InMemoryDataSource;
-    use datatypes::arrow_types::{DOUBLE_TYPE, UINT32_TYPE};
-    use datatypes::{Field, Schema};
-    use logical_plan::{DataFrame, LogicalPlan, Scan, col, max};
-    use optimizer::Optimizer;
+    use fdapquery_datasource::InMemoryDataSource;
+    use fdapquery_datatypes::arrow_types::{DOUBLE_TYPE, UINT32_TYPE};
+    use fdapquery_datatypes::{Field, Schema};
+    use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan, col, max};
+    use fdapquery_optimizer::Optimizer;
     use std::sync::Arc;
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
         // max_fare at index 0 and passenger_count at index 1, so the group key is
         // #1 and the MAX argument is #0. (`format` is the free fn — `pretty()` is
         // gated `where Self: Sized` and isn't callable on `Arc<dyn PhysicalPlan>`.)
-        let pretty = physical_plan::format(physical.as_ref());
+        let pretty = fdapquery_physical_plan::format(physical.as_ref());
         assert!(
             pretty.starts_with(
                 "HashAggregateExec: groupExpr=[#1], aggrExpr=[MAX(#0)], mode=Complete"

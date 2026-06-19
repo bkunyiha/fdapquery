@@ -1,4 +1,4 @@
-//! High-level facade matching [`execution::ExecutionContext`]'s API
+//! High-level facade matching [`fdapquery_execution::ExecutionContext`]'s API
 //! (`register_csv` / `register` / `sql` / `execute`) but routing execution
 //! through [`Scheduler`] instead of running the plan in-process.
 //!
@@ -8,14 +8,14 @@
 //! not code.
 
 use crate::{DistributedConfig, DistributedPlanner, ExecutorClient, Scheduler};
-use datasource::CsvDataSource;
-use datatypes::RecordBatch;
-use logical_plan::{DataFrame, LogicalPlan, Scan};
-use optimizer::Optimizer;
-use physical_plan::PhysicalPlan;
-use query_planner::QueryPlanner;
+use fdapquery_datasource::CsvDataSource;
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
+use fdapquery_optimizer::Optimizer;
+use fdapquery_physical_plan::PhysicalPlan;
+use fdapquery_query_planner::QueryPlanner;
 // `PrattParser` trait must be in scope for `SqlParser::parse()`.
-use sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -1,11 +1,11 @@
 //!
 //! A physical plan is an executable piece of code that produces data. It is the
-//! runtime counterpart of a [`logical_plan::LogicalPlan`]: the logical plan says
+//! runtime counterpart of a [`fdapquery_logical_plan::LogicalPlan`]: the logical plan says
 //! *what* to compute, the physical plan says *how* and actually runs it.
 //!
 //! ## Trait, not enum
 //! Elsewhere in this workspace, an interface with a closed implementor set is
-//! modelled as a Rust `enum` (see `logical_plan::LogicalPlan`, which has six
+//! modelled as a Rust `enum` (see `fdapquery_logical_plan::LogicalPlan`, which has six
 //! variants). `PhysicalPlan` is the documented exception. The physical layer
 //! is the largest module in the workspace and the operator set is *open in
 //! spirit*: adding a new operator should mean adding a new file, not editing
@@ -64,7 +64,7 @@
 //! never cross a thread boundary.
 
 use crate::executor_context::ExecutorContext;
-use datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{RecordBatch, Schema};
 use std::fmt;
 use std::sync::Arc;
 

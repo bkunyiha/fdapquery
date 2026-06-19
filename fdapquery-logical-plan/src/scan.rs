@@ -3,8 +3,8 @@
 //! construction and cached.
 
 use crate::logical_plan::LogicalPlan;
-use datasource::DataSource;
-use datatypes::Schema;
+use fdapquery_datasource::DataSource;
+use fdapquery_datatypes::Schema;
 use std::fmt;
 use std::sync::Arc;
 

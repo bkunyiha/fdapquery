@@ -5,7 +5,7 @@
 //! agree (and `NaN` keys group together). See ARCHITECTURE §4.6 for the
 //! rationale for sharing one implementation across both operators.
 
-use datatypes::ScalarValue;
+use fdapquery_datatypes::ScalarValue;
 use std::hash::{Hash, Hasher};
 
 /// A row's key values, usable as a `HashMap`/`HashSet` key.

@@ -6,10 +6,10 @@
 //!
 //! ## Shape
 //! `trait Action` plus two structs. `QueryAction` can derive only `Clone`, because
-//! `logical_plan::LogicalPlan` derives only `Clone` (no `Debug`/`PartialEq`).
+//! `fdapquery_logical_plan::LogicalPlan` derives only `Clone` (no `Debug`/`PartialEq`).
 
-use datatypes::ShuffleId;
-use logical_plan::LogicalPlan;
+use fdapquery_datatypes::ShuffleId;
+use fdapquery_logical_plan::LogicalPlan;
 
 /// Marker trait for a distributed-execution action.
 pub trait Action {}

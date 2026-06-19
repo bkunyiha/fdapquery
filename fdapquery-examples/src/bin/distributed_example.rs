@@ -37,9 +37,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
-use distributed::{DistributedConfig, DistributedContext, ExecutorClient, ExecutorConfig};
-use physical_plan::{ExecutorContext, ShuffleLocation, ShuffleManager, ShuffleWriterExec, Task};
+use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorClient, ExecutorConfig};
+use fdapquery_physical_plan::{ExecutorContext, ShuffleLocation, ShuffleManager, ShuffleWriterExec, Task};
 
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 const SQL: &str = "SELECT state, SUM(salary) FROM employee GROUP BY state";

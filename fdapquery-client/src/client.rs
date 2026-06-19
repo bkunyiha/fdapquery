@@ -8,7 +8,7 @@
 //!
 //! tonic is async-only — `FlightServiceClient::do_action(...)`,
 //! `do_get(...)`, etc. all return futures. But the synchronous
-//! `distributed::ExecutorClient` trait (used by `Scheduler::execute_stage`
+//! `fdapquery_distributed::ExecutorClient` trait (used by `Scheduler::execute_stage`
 //! to dispatch tasks) needs synchronous `execute_task(...)` /
 //! `execute_final_task(...)` methods. So `Client` owns a tokio runtime and
 //! every method internally `block_on`s its async work. This is the inverse
@@ -30,7 +30,7 @@ use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::{Action, Ticket};
-use datatypes::RecordBatch;
+use fdapquery_datatypes::RecordBatch;
 use futures::StreamExt;
 use tokio::runtime::Runtime;
 use tonic::Request;

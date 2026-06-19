@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use datasource::InMemoryDataSource;
-use datatypes::record_batch::to_csv;
-use datatypes::{RecordBatch, SchemaConverter};
-use execution::ExecutionContext;
+use fdapquery_datasource::InMemoryDataSource;
+use fdapquery_datatypes::record_batch::to_csv;
+use fdapquery_datatypes::{RecordBatch, SchemaConverter};
+use fdapquery_execution::ExecutionContext;
 use rayon::prelude::*;
 
 /// Hardcoded directory holding `yellow_tripdata_2019-{01..12}.csv`.
@@ -64,11 +64,11 @@ fn main() {
     // as an InMemoryDataSource and run the FINAL_SQL through a fresh context.
     //
     // `RecordBatch::schema()` returns an `Arc<arrow_schema::Schema>`;
-    // `InMemoryDataSource::new` wants a `datatypes::Schema`, so we round-trip
+    // `InMemoryDataSource::new` wants a `fdapquery_datatypes::Schema`, so we round-trip
     // through `SchemaConverter::from_arrow`.
     // -----------------------------------------------------------------------
     let final_schema = SchemaConverter::from_arrow(&first.schema());
-    let in_memory: Arc<dyn datasource::DataSource> =
+    let in_memory: Arc<dyn fdapquery_datasource::DataSource> =
         Arc::new(InMemoryDataSource::new(final_schema, results));
 
     let mut ctx = ExecutionContext::new(HashMap::new());

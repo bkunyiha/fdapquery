@@ -32,9 +32,9 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
-use datasource::{DataSource, InMemoryDataSource};
-use datatypes::{RecordBatch, SchemaConverter};
-use execution::ExecutionContext;
+use fdapquery_datasource::{DataSource, InMemoryDataSource};
+use fdapquery_datatypes::{RecordBatch, SchemaConverter};
+use fdapquery_execution::ExecutionContext;
 use rayon::prelude::*;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 

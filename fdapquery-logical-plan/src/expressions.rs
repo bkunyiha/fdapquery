@@ -24,8 +24,8 @@
 use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
 use arrow_schema::DataType;
-use datatypes::Field;
-use datatypes::arrow_types::{INT32_TYPE, UINT32_TYPE};
+use fdapquery_datatypes::Field;
+use fdapquery_datatypes::arrow_types::{INT32_TYPE, UINT32_TYPE};
 use std::fmt;
 
 /// Aggregate functions: `Sum` / `Min` / `Max` / `Avg` / `Count` /

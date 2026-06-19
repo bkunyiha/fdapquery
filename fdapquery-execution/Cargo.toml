@@ -1,5 +1,5 @@
 [package]
-name         = "execution"
+name         = "fdapquery-execution"
 description  = "ExecutionContext and ParallelContext — the runtime entry point."
 edition.workspace      = true
 license.workspace      = true
@@ -10,16 +10,16 @@ rust-version.workspace = true
 [dependencies]
 arrow                 = { workspace = true }
 rayon                 = { workspace = true }
-datatypes      = { path = "../datatypes" }
-logical-plan   = { path = "../logical-plan" }
-sql            = { path = "../sql" }
-physical-plan  = { path = "../physical-plan" }
-query-planner  = { path = "../query-planner" }
-optimizer      = { path = "../optimizer" }
-datasource     = { path = "../datasource" }
+fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
+fdapquery-logical-plan   = { path = "../fdapquery-logical-plan" }
+fdapquery-sql            = { path = "../fdapquery-sql" }
+fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
+fdapquery-query-planner  = { path = "../fdapquery-query-planner" }
+fdapquery-optimizer      = { path = "../fdapquery-optimizer" }
+fdapquery-datasource     = { path = "../fdapquery-datasource" }
 
 [dev-dependencies]
 # The Fuzzer-backed ExecutionTest cases (`min max sum float`, `float math`,
 # `boolean expressions`, `inner join`, `left join`) construct deterministic
 # in-memory batches via `Fuzzer::create_record_batch(schema, columns)`.
-fuzzer         = { path = "../fuzzer" }
+fdapquery-fuzzer         = { path = "../fdapquery-fuzzer" }

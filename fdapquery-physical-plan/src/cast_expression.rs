@@ -6,7 +6,7 @@
 
 use crate::expressions::Expression;
 use arrow_schema::DataType;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, record_batch};
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, record_batch};
 use std::fmt;
 use std::sync::Arc;
 
@@ -159,8 +159,8 @@ mod tests {
     use crate::column_expression::ColumnExpression;
     use arrow_array::{ArrayRef, Int8Array, StringArray};
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
-    use datatypes::RecordBatch;
-    use datatypes::arrow_types::{FLOAT_TYPE, INT8_TYPE, STRING_TYPE};
+    use fdapquery_datatypes::RecordBatch;
+    use fdapquery_datatypes::arrow_types::{FLOAT_TYPE, INT8_TYPE, STRING_TYPE};
     use std::sync::Arc;
 
     fn batch1(name: &str, t: DataType, col: ArrayRef) -> RecordBatch {

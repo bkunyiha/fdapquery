@@ -3,7 +3,7 @@
 
 use crate::aggregate_expression::{AggregateExpression, scalar_gt};
 use crate::expressions::{Accumulator, AccumulatorValue, Expression};
-use datatypes::ScalarValue;
+use fdapquery_datatypes::ScalarValue;
 use std::fmt;
 use std::sync::Arc;
 

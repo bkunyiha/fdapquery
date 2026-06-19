@@ -26,7 +26,7 @@ use crate::aggregate_mode::AggregateMode;
 use crate::executor_context::ExecutorContext;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression};
 use crate::physical_plan::PhysicalPlan;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -282,9 +282,9 @@ mod tests {
     use crate::min_expression::MinExpression;
     use crate::scan_exec::ScanExec;
     use crate::sum_expression::SumExpression;
-    use datasource::{CsvDataSource, DataSource};
-    use datatypes::Field;
-    use datatypes::arrow_types::{INT32_TYPE, INT64_TYPE, STRING_TYPE};
+    use fdapquery_datasource::{CsvDataSource, DataSource};
+    use fdapquery_datatypes::Field;
+    use fdapquery_datatypes::arrow_types::{INT32_TYPE, INT64_TYPE, STRING_TYPE};
 
     // ---- Accumulators driven directly. ----
 

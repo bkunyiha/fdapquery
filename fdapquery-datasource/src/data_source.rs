@@ -12,7 +12,7 @@
 //!   `Option<Schema>`, and arrow batches — so the bound is satisfied
 //!   automatically.
 
-use datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{RecordBatch, Schema};
 
 /// Trait for any source that can describe its schema and produce batches.
 pub trait DataSource: Send + Sync {
@@ -24,7 +24,7 @@ pub trait DataSource: Send + Sync {
     fn scan(&self, projection: &[String]) -> Box<dyn Iterator<Item = RecordBatch>>;
 
     /// Type-erased self-reference for runtime downcasting (see
-    /// `physical_plan::PhysicalPlan::as_any`). `protobuf` — the only caller
+    /// `fdapquery_physical_plan::PhysicalPlan::as_any`). `protobuf` — the only caller
     /// that needs to branch on the concrete data source — uses
     /// `ds.as_any().downcast_ref::<CsvDataSource>()` etc. This is the standard
     /// Rust idiom that DataFusion also uses for `TableProvider`.

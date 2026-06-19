@@ -35,8 +35,8 @@
 
 use crate::expressions::Expression;
 use arrow_schema::DataType;
-use datatypes::arrow_types::BOOLEAN_TYPE;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::arrow_types::BOOLEAN_TYPE;
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
 use std::sync::Arc;
 
 /// A boolean (comparison or logical) binary expression.
@@ -57,7 +57,7 @@ pub trait BooleanExpression: Expression {
     ) -> Option<bool>;
 
     /// Wire-format operator name (`"eq"`, `"and"`, …). Used by
-    /// `protobuf::serialize_physical_expr` to serialise this expression as a
+    /// `fdapquery_protobuf::serialize_physical_expr` to serialise this expression as a
     /// `pb::PhysicalBinaryExprNode` with the matching `op` string.
     fn op_name(&self) -> &'static str;
 
@@ -235,7 +235,7 @@ fn or3(l: Option<bool>, r: Option<bool>) -> Option<bool> {
 /// method.
 macro_rules! boolean_op {
     // `$proto_op` is the wire-format operator name used by
-    // `protobuf::serialize_physical_expr` (e.g. "eq", "neq", "and"). It is
+    // `fdapquery_protobuf::serialize_physical_expr` (e.g. "eq", "neq", "and"). It is
     // distinct from `$sym` (the Display symbol like "=", "!=", "AND").
     ($name:ident, $sym:literal, $proto_op:literal,
      |$l:ident, $r:ident, $t:ident| $body:expr) => {
@@ -354,7 +354,7 @@ mod tests {
         ArrayRef, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, StringArray,
     };
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
-    use datatypes::RecordBatch;
+    use fdapquery_datatypes::RecordBatch;
     use std::sync::Arc;
 
     /// Build a two-column batch ("a", "b") of the same type.

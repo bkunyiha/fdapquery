@@ -5,7 +5,7 @@
 use crate::executor_context::ExecutorContext;
 use crate::expressions::Expression;
 use crate::physical_plan::PhysicalPlan;
-use datatypes::{ColumnVector, RecordBatch, Schema, record_batch};
+use fdapquery_datatypes::{ColumnVector, RecordBatch, Schema, record_batch};
 use std::fmt;
 use std::sync::Arc;
 

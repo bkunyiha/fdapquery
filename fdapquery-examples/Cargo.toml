@@ -1,5 +1,5 @@
 [package]
-name         = "examples"
+name         = "fdapquery-examples"
 description  = "Worked example binaries — NYC taxi, parallel query, distributed."
 edition.workspace      = true
 license.workspace      = true
@@ -8,19 +8,19 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-execution       = { path = "../execution" }
-datasource      = { path = "../datasource" }    # InMemoryDataSource for parallel_query
-datatypes       = { path = "../datatypes" }     # RecordBatch, ScalarValue, arrow_types
-logical-plan    = { path = "../logical-plan" }  # col, cast, max, format, …
-optimizer       = { path = "../optimizer" }     # Optimizer used by nyc_taxi
+fdapquery-execution       = { path = "../fdapquery-execution" }
+fdapquery-datasource      = { path = "../fdapquery-datasource" }    # InMemoryDataSource for parallel_query
+fdapquery-datatypes       = { path = "../fdapquery-datatypes" }     # RecordBatch, ScalarValue, arrow_types
+fdapquery-logical-plan    = { path = "../fdapquery-logical-plan" }  # col, cast, max, format, …
+fdapquery-optimizer       = { path = "../fdapquery-optimizer" }     # Optimizer used by nyc_taxi
 # `distributed_example` and `distributed_flight_example` use the distributed
 # stack. The former impls `ExecutorClient` directly; the latter uses
 # `FlightExecutorClient` from the `client` crate against an in-process
 # `flight-server`.
-distributed     = { path = "../distributed" }
-physical-plan   = { path = "../physical-plan" }
-client          = { path = "../client" }
-flight-server   = { path = "../flight-server" }
+fdapquery-distributed     = { path = "../fdapquery-distributed" }
+fdapquery-physical-plan   = { path = "../fdapquery-physical-plan" }
+fdapquery-client          = { path = "../fdapquery-client" }
+fdapquery-flight-server   = { path = "../fdapquery-flight-server" }
 # Used by `distributed_flight_example` to spawn the in-process tonic server
 # and bind a random TCP port — same pattern as
 # `client/tests/distributed_integration_test.rs`.

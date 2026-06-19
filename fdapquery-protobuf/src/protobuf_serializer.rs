@@ -18,8 +18,8 @@
 //!   deserializer's `AggregateExprNode` arm.
 
 use crate::pb;
-use datasource::{CsvDataSource, ParquetDataSource};
-use logical_plan::{AggregateExpr, JoinType, LogicalExpr, LogicalPlan};
+use fdapquery_datasource::{CsvDataSource, ParquetDataSource};
+use fdapquery_logical_plan::{AggregateExpr, JoinType, LogicalExpr, LogicalPlan};
 
 /// Convert a `LogicalPlan` to its `pb::LogicalPlanNode` form.
 pub fn serialize_logical_plan(plan: &LogicalPlan) -> pb::LogicalPlanNode {
@@ -176,7 +176,7 @@ pub fn serialize_logical_aggregate_expr(ae: &AggregateExpr) -> pb::LogicalExprNo
     }
 }
 
-/// `logical_plan::JoinType` does not implement `Copy` (and the helper only
+/// `fdapquery_logical_plan::JoinType` does not implement `Copy` (and the helper only
 /// reads it, so there's no reason to take ownership).
 fn join_type_to_proto(jt: &JoinType) -> pb::JoinType {
     match jt {
@@ -187,7 +187,7 @@ fn join_type_to_proto(jt: &JoinType) -> pb::JoinType {
 }
 
 /// `chrono::NaiveDate` → days since the Unix epoch (1970-01-01). Same helper
-/// shape as `query_planner::days_since_unix_epoch`; duplicated here to avoid
+/// shape as `fdapquery_query_planner::days_since_unix_epoch`; duplicated here to avoid
 /// pulling the entire `query-planner` crate into `protobuf`'s deps just for one
 /// trivial date conversion.
 fn days_since_unix_epoch(date: chrono::NaiveDate) -> i32 {
@@ -202,8 +202,8 @@ mod tests {
     //! round-tripped plan re-formats to the same text.
     use super::serialize_logical_plan;
     use crate::deserialize_logical_plan;
-    use datasource::CsvDataSource;
-    use logical_plan::{DataFrame, LogicalPlan, Scan, col, format, lit_string};
+    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan, col, format, lit_string};
     use std::sync::Arc;
 
     /// In-repo employee fixture from the workspace-shared `testdata/`

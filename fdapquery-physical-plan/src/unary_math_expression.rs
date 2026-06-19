@@ -10,8 +10,8 @@
 //! `UnaryMathExpression` and a one-line `Expression` delegate.
 
 use crate::expressions::{Expression, number_to_f64};
-use datatypes::arrow_types::DOUBLE_TYPE;
-use datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::arrow_types::DOUBLE_TYPE;
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 

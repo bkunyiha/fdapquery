@@ -1,5 +1,5 @@
 [package]
-name         = "protobuf"
+name         = "fdapquery-protobuf"
 description  = "PhysicalPlan / LogicalExpr / Action protobuf serialization."
 edition.workspace      = true
 license.workspace      = true
@@ -13,10 +13,10 @@ prost         = { workspace = true }
 tonic         = { workspace = true }
 chrono        = { workspace = true }       # NaiveDate for LogicalExpr::LiteralDate serdes
 arrow-schema  = { workspace = true }       # DataType return-type for from_proto_arrow_type
-datatypes     = { path = "../datatypes" }
-datasource    = { path = "../datasource" } # CsvDataSource / ParquetDataSource for scan deserialisation
-logical-plan  = { path = "../logical-plan" }
-physical-plan = { path = "../physical-plan" }
+fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
+fdapquery-datasource    = { path = "../fdapquery-datasource" } # CsvDataSource / ParquetDataSource for scan deserialisation
+fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
+fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
 
 [build-dependencies]
 # tonic 0.14 split the prost-based codegen (`configure()` / `compile_protos`)

@@ -3,7 +3,7 @@
 //! stage can fetch it (locally or via Arrow Flight). Pure data — distributed
 //! execution (modules 12–14) consumes it.
 //!
-//! Note: there is also a `datatypes::ShuffleLocation` (a smaller 3-field variant);
+//! Note: there is also a `fdapquery_datatypes::ShuffleLocation` (a smaller 3-field variant);
 //! this is the richer 6-field physical-plan version.
 
 /// Location of shuffle data for a specific partition.

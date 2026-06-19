@@ -4,7 +4,7 @@
 //! duplicate of any join key whose left and right names are identical.
 
 use crate::logical_plan::LogicalPlan;
-use datatypes::{Field, Schema};
+use fdapquery_datatypes::{Field, Schema};
 use std::collections::HashSet;
 use std::fmt;
 

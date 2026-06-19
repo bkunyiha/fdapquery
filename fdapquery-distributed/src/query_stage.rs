@@ -1,7 +1,7 @@
 //! A query is divided into stages at shuffle boundaries; each stage runs
 //! independently on different executors, with data shuffled between stages.
 
-use physical_plan::PhysicalPlan;
+use fdapquery_physical_plan::PhysicalPlan;
 use std::sync::Arc;
 
 /// One stage in a distributed query execution plan.

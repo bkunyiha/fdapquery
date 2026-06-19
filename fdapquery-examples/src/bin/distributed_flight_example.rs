@@ -10,12 +10,12 @@
 //!
 //! 1. `Scheduler::execute_stage` ships each stage-0 task via
 //!    `FlightExecutorClient::execute_task` → `Client::do_action("execute_task")`
-//!    → tonic gRPC → `RQueryFlightProducer::do_action` →
+//!    → tonic gRPC → `FdapQueryFlightProducer::do_action` →
 //!    `ShuffleWriterExec::write_shuffle(&ctx)` → Arrow IPC files on disk.
 //! 2. `Scheduler::execute_final_stage` ships the stage-1 task via
 //!    `FlightExecutorClient::execute_final_task` →
 //!    `Client::do_get(pb::Action.task = Some(...))` → tonic gRPC →
-//!    `RQueryFlightProducer::do_get` (distributed branch) →
+//!    `FdapQueryFlightProducer::do_get` (distributed branch) →
 //!    `task.plan.execute(&self.ctx)` → `HashAggregateExec(Final)` →
 //!    `ShuffleReaderExec::execute(&ctx)` → batches streamed back through
 //!    `FlightDataEncoder`.
@@ -54,11 +54,11 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
-use client::FlightExecutorClient;
-use datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
-use distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
-use flight_server::r_query_flight_producer::RQueryFlightProducer;
-use physical_plan::{ExecutorContext, ShuffleManager};
+use fdapquery_client::FlightExecutorClient;
+use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
+use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
+use fdapquery_physical_plan::{ExecutorContext, ShuffleManager};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -162,7 +162,7 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
                 addr.port() as i32,
                 shuffle_dir_for_thread,
             );
-            let producer = RQueryFlightProducer::new(ctx);
+            let producer = FdapQueryFlightProducer::new(ctx);
 
             tx.send(addr).expect("ship addr back to main thread");
 

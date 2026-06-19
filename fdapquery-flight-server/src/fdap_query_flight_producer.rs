@@ -1,4 +1,4 @@
-//! `RQueryFlightProducer` implements
+//! `FdapQueryFlightProducer` implements
 //! [`arrow_flight::flight_service_server::FlightService`] and is constructed
 //! by the binary in `src/bin/flight_server.rs`.
 //!
@@ -15,7 +15,7 @@
 //! the `ShuffleManager` — is bundled into a single [`ExecutorContext`]
 //! (`physical-plan/src/executor_context.rs`) held as one field on the
 //! producer. The bin constructs one `ExecutorContext` at startup and hands
-//! it to [`RQueryFlightProducer::new`].
+//! it to [`FdapQueryFlightProducer::new`].
 
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -24,11 +24,11 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
-use datatypes::RecordBatch;
-use execution::execution_context::ExecutionContext;
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_execution::execution_context::ExecutionContext;
 use futures::{Stream, TryStreamExt};
-use physical_plan::{ExecutorContext, ShuffleWriterExec};
-use protobuf::{deserialize_logical_plan, deserialize_task, pb};
+use fdapquery_physical_plan::{ExecutorContext, ShuffleWriterExec};
+use fdapquery_protobuf::{deserialize_logical_plan, deserialize_task, pb};
 use std::collections::HashMap;
 use std::pin::Pin;
 use tokio_stream::wrappers::ReceiverStream;
@@ -41,11 +41,11 @@ use tracing::{debug, info};
 /// `arrow_flight::flight_service_server::FlightServiceServer::new(producer)`.
 /// The single field — [`ExecutorContext`] — carries the per-executor identity
 /// and shuffle storage used by both `do_action("execute_task")` and `do_get`.
-pub struct RQueryFlightProducer {
+pub struct FdapQueryFlightProducer {
     ctx: ExecutorContext,
 }
 
-impl RQueryFlightProducer {
+impl FdapQueryFlightProducer {
     /// Construct from a fully-built executor context. The bin in
     /// `src/bin/flight_server.rs` (or an integration test) builds
     /// the context from CLI / env / defaults at startup.
@@ -60,7 +60,7 @@ impl RQueryFlightProducer {
 type FlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
 #[tonic::async_trait]
-impl FlightService for RQueryFlightProducer {
+impl FlightService for FdapQueryFlightProducer {
     type HandshakeStream = FlightStream<HandshakeResponse>;
     type ListFlightsStream = FlightStream<FlightInfo>;
     type DoGetStream = FlightStream<FlightData>;
@@ -115,7 +115,7 @@ impl FlightService for RQueryFlightProducer {
     /// and falls back to `query`:
     ///
     /// - **`action.task` set** — distributed final-stage path. Deserialise
-    ///   to a `physical_plan::Task`, run `task.plan.execute(&self.ctx)`.
+    ///   to a `fdapquery_physical_plan::Task`, run `task.plan.execute(&self.ctx)`.
     ///   Works for any plan tree containing a `ShuffleReaderExec` because
     ///   the `PhysicalPlan::execute` trait method takes `&ExecutorContext`
     ///   and every operator threads it through. This is what
@@ -156,7 +156,7 @@ impl FlightService for RQueryFlightProducer {
 
         if let Some(task_info) = action.task {
             // ── Distributed final-stage path ──
-            // Deserialise to a `physical_plan::Task` (carries
+            // Deserialise to a `fdapquery_physical_plan::Task` (carries
             // `Arc<dyn PhysicalPlan>`), spawn_blocking, run
             // `task.plan.execute(&self.ctx)`. Works for any plan tree
             // containing a `ShuffleReaderExec` because the
@@ -183,7 +183,7 @@ impl FlightService for RQueryFlightProducer {
             });
         } else if let Some(plan_node) = action.query {
             // Direct Flight logical-plan path, not the distributed scheduler path.
-            // `client::Context::execute` sends `Action.query = Some(LogicalPlanNode)`
+            // `fdapquery_client::Context::execute` sends `Action.query = Some(LogicalPlanNode)`
             // when one Flight server should execute the whole logical plan itself.
             // Distributed final stages use `Action.task = Some(TaskInfo)` above.
             let logical_plan = deserialize_logical_plan(&plan_node);
@@ -244,7 +244,7 @@ impl FlightService for RQueryFlightProducer {
     ///
     /// ### Wire flow
     /// 1. `action.body` (bytes) is decoded as [`pb::TaskInfo`] via `prost::Message::decode`.
-    /// 2. [`protobuf::deserialize_task`] converts it to a `physical_plan::Task`
+    /// 2. [`fdapquery_protobuf::deserialize_task`] converts it to a `fdapquery_physical_plan::Task`
     ///    (which carries `Arc<dyn PhysicalPlan>`).
     /// 3. Dispatch on the plan's concrete type via `as_any().downcast_ref::<ShuffleWriterExec>()`:
     ///    - `ShuffleWriterExec` → call [`ShuffleWriterExec::write_shuffle`],
@@ -339,16 +339,16 @@ impl FlightService for RQueryFlightProducer {
 mod tests {
     //! Direct method-level tests for `do_action`. We don't spin up a real
     //! tonic server here — that's `tests/integration_test.rs`.
-    //! Instead we construct a `RQueryFlightProducer`, build an `Action` with a
+    //! Instead we construct a `FdapQueryFlightProducer`, build an `Action` with a
     //! serialised `pb::TaskInfo` body, call `do_action(Request::new(action))`,
     //! collect the response stream, and assert on the decoded `pb::TaskResult`.
 
     use super::*;
     use arrow_flight::Action;
-    use datasource::{CsvDataSource, DataSource};
+    use fdapquery_datasource::{CsvDataSource, DataSource};
     use futures::StreamExt;
-    use physical_plan::{ColumnExpression, PhysicalPlan, ScanExec, ShuffleWriterExec, Task};
-    use protobuf::serialize_task;
+    use fdapquery_physical_plan::{ColumnExpression, PhysicalPlan, ScanExec, ShuffleWriterExec, Task};
+    use fdapquery_protobuf::serialize_task;
     use std::sync::Arc;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
@@ -390,7 +390,7 @@ mod tests {
     async fn execute_task_runs_shuffle_writer_and_returns_locations() {
         let base = temp_dir("do-action-writer");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
-        let producer = RQueryFlightProducer::new(ctx);
+        let producer = FdapQueryFlightProducer::new(ctx);
 
         let task = build_task();
         let action = build_execute_task_action(&task);
@@ -428,14 +428,14 @@ mod tests {
 
         // Clean up the tempdir.
         let base_clone = base.clone();
-        physical_plan::ShuffleManager::new(base_clone).cleanup_all();
+        fdapquery_physical_plan::ShuffleManager::new(base_clone).cleanup_all();
     }
 
     #[tokio::test]
     async fn unknown_action_type_returns_invalid_argument() {
         let base = temp_dir("do-action-unknown");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
-        let producer = RQueryFlightProducer::new(ctx);
+        let producer = FdapQueryFlightProducer::new(ctx);
 
         let action = Action {
             r#type: "totally_not_a_real_action".to_string(),
@@ -461,12 +461,12 @@ mod tests {
     #[tokio::test]
     async fn do_get_streams_flight_data_for_a_logical_plan() {
         use futures::StreamExt;
-        use logical_plan::{LogicalPlan, Scan};
-        use protobuf::serialize_logical_plan;
+        use fdapquery_logical_plan::{LogicalPlan, Scan};
+        use fdapquery_protobuf::serialize_logical_plan;
 
         let base = temp_dir("do-get-happy");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
-        let producer = RQueryFlightProducer::new(ctx);
+        let producer = FdapQueryFlightProducer::new(ctx);
 
         // Build a LogicalPlan: scan employee.csv with all columns.
         let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
@@ -507,7 +507,7 @@ mod tests {
     async fn do_get_malformed_ticket_returns_invalid_argument() {
         let base = temp_dir("do-get-malformed");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
-        let producer = RQueryFlightProducer::new(ctx);
+        let producer = FdapQueryFlightProducer::new(ctx);
 
         let ticket = arrow_flight::Ticket {
             ticket: vec![0xff, 0xff, 0xff, 0xff].into(),
@@ -530,7 +530,7 @@ mod tests {
     async fn do_get_missing_query_returns_invalid_argument() {
         let base = temp_dir("do-get-no-query");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
-        let producer = RQueryFlightProducer::new(ctx);
+        let producer = FdapQueryFlightProducer::new(ctx);
 
         // Valid Action protobuf bytes but with no query/task field.
         let action = pb::Action {
@@ -560,7 +560,7 @@ mod tests {
     async fn malformed_task_body_returns_invalid_argument() {
         let base = temp_dir("do-action-malformed");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
-        let producer = RQueryFlightProducer::new(ctx);
+        let producer = FdapQueryFlightProducer::new(ctx);
 
         // execute_task action whose body is not a valid TaskInfo protobuf.
         let action = Action {

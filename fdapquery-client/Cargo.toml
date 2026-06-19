@@ -1,5 +1,5 @@
 [package]
-name         = "client"
+name         = "fdapquery-client"
 description  = "Flight client wrapper and FlightExecutorClient for the distributed scheduler."
 edition.workspace      = true
 license.workspace      = true
@@ -37,13 +37,13 @@ tracing          = { workspace = true }
 #   `LogicalPlan`.
 # - physical-plan: provides `Task` and `ShuffleLocation` — the types
 #   `FlightExecutorClient` ships across the wire.
-datatypes     = { path = "../datatypes" }
-datasource    = { path = "../datasource" }
-logical-plan  = { path = "../logical-plan" }
-protobuf      = { path = "../protobuf" }
-physical-plan = { path = "../physical-plan" }
-distributed   = { path = "../distributed" }
-sql           = { path = "../sql" }
+fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
+fdapquery-datasource    = { path = "../fdapquery-datasource" }
+fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
+fdapquery-protobuf      = { path = "../fdapquery-protobuf" }
+fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
+fdapquery-distributed   = { path = "../fdapquery-distributed" }
+fdapquery-sql           = { path = "../fdapquery-sql" }
 
 anyhow       = { workspace = true }
 
@@ -52,4 +52,4 @@ anyhow       = { workspace = true }
 # random port and drives a distributed query through it. The dep is
 # dev-only — at runtime the client crate has no knowledge of
 # `flight-server`; the protocol contract is the protobuf bytes.
-flight-server = { path = "../flight-server" }
+fdapquery-flight-server = { path = "../fdapquery-flight-server" }

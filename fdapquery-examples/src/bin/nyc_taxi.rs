@@ -24,12 +24,12 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use datatypes::RecordBatch;
-use datatypes::arrow_types::FLOAT_TYPE;
-use datatypes::record_batch::to_csv;
-use execution::ExecutionContext;
-use logical_plan::{cast, col, format, max};
-use optimizer::Optimizer;
+use fdapquery_datatypes::RecordBatch;
+use fdapquery_datatypes::arrow_types::FLOAT_TYPE;
+use fdapquery_datatypes::record_batch::to_csv;
+use fdapquery_execution::ExecutionContext;
+use fdapquery_logical_plan::{cast, col, format, max};
+use fdapquery_optimizer::Optimizer;
 
 /// Hardcoded NYC yellow-taxi 2019-01 path; see the module-doc for how to
 /// obtain the file.

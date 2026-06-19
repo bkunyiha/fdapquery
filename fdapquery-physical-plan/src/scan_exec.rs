@@ -6,8 +6,8 @@
 
 use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
-use datasource::DataSource;
-use datatypes::{RecordBatch, Schema};
+use fdapquery_datasource::DataSource;
+use fdapquery_datatypes::{RecordBatch, Schema};
 use std::fmt;
 use std::sync::Arc;
 

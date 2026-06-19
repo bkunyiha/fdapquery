@@ -4,7 +4,7 @@
 //! `LogicalPlan` is a closed `enum`, so the `match` is exhaustive over all
 //! six operators and needs no catch-all (per §3.1).
 
-use logical_plan::{Aggregate, Join, Limit, LogicalPlan, Projection, Scan, Selection};
+use fdapquery_logical_plan::{Aggregate, Join, Limit, LogicalPlan, Projection, Scan, Selection};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -93,8 +93,8 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> LogicalP
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datasource::CsvDataSource;
-    use logical_plan::{DataFrame, col, count, format, lit_string, max, min};
+    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_logical_plan::{DataFrame, col, count, format, lit_string, max, min};
     use std::sync::Arc;
 
     /// `employee` table scanned with no projection yet.
