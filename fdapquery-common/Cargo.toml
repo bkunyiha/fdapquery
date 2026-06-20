@@ -1,0 +1,17 @@
+[package]
+name         = "fdapquery-common"
+description  = "Cross-cutting types for fdapquery: FdapQueryError, Result<T>."
+edition.workspace      = true
+license.workspace      = true
+version.workspace      = true
+authors.workspace      = true
+rust-version.workspace = true
+repository.workspace   = true
+
+[dependencies]
+arrow-schema  = { workspace = true }
+parquet       = { workspace = true }
+thiserror     = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

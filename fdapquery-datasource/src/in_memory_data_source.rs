@@ -55,7 +55,10 @@ impl DataSource for InMemoryDataSource {
             })
             .collect();
 
-        let projected_schema = self.schema.select(projection);
+        let projected_schema = self
+            .schema
+            .select(projection)
+            .expect("InMemoryDataSource::scan: projection columns must be present in schema");
         let projected_arrow_schema = Arc::new(projected_schema.to_arrow());
 
         // For each input batch, select the projected columns and build a new

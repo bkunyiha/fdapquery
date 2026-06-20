@@ -28,7 +28,10 @@ impl ScanExec {
 
 impl PhysicalPlan for ScanExec {
     fn schema(&self) -> Schema {
-        self.ds.schema().select(&self.projection)
+        self.ds
+            .schema()
+            .select(&self.projection)
+            .expect("ScanExec::schema: projection columns must be present in data-source schema")
     }
 
     fn execute(&self, _ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {

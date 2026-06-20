@@ -41,6 +41,7 @@ impl PhysicalPlan for SelectionExec {
                 .map(|i| filter(&record_batch::field(&batch, i), selection.as_ref()))
                 .collect();
             record_batch::create(&schema, columns)
+                .expect("SelectionExec: schema/column mismatch building output batch")
         }))
     }
 

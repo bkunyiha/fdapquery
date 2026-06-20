@@ -48,6 +48,7 @@ impl PhysicalPlan for ProjectionExec {
             let columns: Vec<Box<dyn ColumnVector>> =
                 exprs.iter().map(|e| e.evaluate(&batch)).collect();
             record_batch::create(&schema, columns)
+                .expect("ProjectionExec: schema/column mismatch building output batch")
         }))
     }
 

@@ -104,6 +104,7 @@ fn truncate(batch: &RecordBatch, n: usize, schema: &Schema) -> RecordBatch {
         })
         .collect();
     record_batch::create(schema, columns)
+        .expect("LimitExec: schema/column mismatch building output batch")
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ use crate::arrow_vector_builder::ArrowVectorBuilder;
 use crate::scalar_value::ScalarValue;
 use crate::schema::Schema;
 use crate::{arrow_field_vector::ArrowFieldVector, column_vector::ColumnVector};
+use crate::Result;
 use arrow_array::ArrayRef;
 use std::sync::Arc;
 
@@ -63,16 +64,20 @@ pub fn column_to_array(col: &dyn ColumnVector) -> ArrayRef {
 /// Because we re-export arrow's `RecordBatch` (which holds `ArrayRef`s rather
 /// than `ColumnVector`s — see the file-level note), each column is
 /// materialized via [`column_to_array`] and the `Schema` is converted with
-/// [`Schema::to_arrow`]. Panics if the columns don't match the schema,
-/// matching the engine's panic-on-invalid-state convention.
-pub fn create(schema: &Schema, columns: Vec<Box<dyn ColumnVector>>) -> RecordBatch {
+/// [`Schema::to_arrow`]. Returns `Err(FdapQueryError::ArrowError(_))` if the
+/// columns don't match the schema (arrow's `RecordBatch::try_new` enforces
+/// that, and the `#[from]` derive on `FdapQueryError::ArrowError` lifts the
+/// arrow error into the workspace error type).
+pub fn create(
+    schema: &Schema,
+    columns: Vec<Box<dyn ColumnVector>>,
+) -> Result<RecordBatch> {
     let arrays: Vec<ArrayRef> = columns
         .iter()
         .map(|c| column_to_array(c.as_ref()))
         .collect();
     let arrow_schema = Arc::new(schema.to_arrow());
-    RecordBatch::try_new(arrow_schema, arrays)
-        .unwrap_or_else(|e| panic!("record_batch::create: {e}"))
+    RecordBatch::try_new(arrow_schema, arrays).map_err(Into::into)
 }
 
 /// Render the batch as CSV, one row per line, comma-separated values.
@@ -170,7 +175,8 @@ mod tests {
             Field::new("seven", INT32_TYPE),
         ]);
 
-        let batch = create(&schema, vec![Box::new(id), Box::new(lit)]);
+        let batch = create(&schema, vec![Box::new(id), Box::new(lit)])
+            .expect("create with matching schema and columns");
 
         assert_eq!(row_count(&batch), 3);
         assert_eq!(column_count(&batch), 2);

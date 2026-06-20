@@ -11,9 +11,10 @@
 //!   struct.
 //! - `project(indices)` selects fields by position; `select(names)` selects
 //!   them by name.
-//! - On invalid input, `select` currently calls `panic!()`; a future change
-//!   will convert it to `Result<Schema, FdapError>`.
+//! - `select` returns `Result<Schema>` — "not found" and "ambiguous match"
+//!   surface as `FdapQueryError::SchemaError` rather than panics.
 
+use crate::{FdapQueryError, Result};
 use arrow_schema::DataType;
 use std::sync::Arc;
 
@@ -67,23 +68,32 @@ impl Schema {
         Schema { fields: projected }
     }
 
-    /// Select a sub-schema by column name. Panics if any name doesn't match
-    /// exactly one field.
-    pub fn select(&self, names: &[String]) -> Schema {
-        let mut out: Vec<Field> = Vec::with_capacity(names.len());
-        for name in names {
-            let matches: Vec<&Field> = self.fields.iter().filter(|f| &f.name == name).collect();
-            if matches.len() == 1 {
-                out.push(matches[0].clone());
-            } else {
-                panic!(
-                    "select: column name '{}' matched {} fields (expected exactly 1)",
-                    name,
-                    matches.len()
-                );
-            }
+    /// Select a sub-schema by column name. Returns `SchemaError` if any name
+    /// doesn't match exactly one field, distinguishing "not found" (zero
+    /// matches) from "ambiguous match" (more than one) in the error message.
+    pub fn select(&self, names: &[String]) -> Result<Schema> {
+        names
+            .iter()
+            .map(|name| self.find_unique_field(name))
+            .collect::<Result<Vec<_>>>()
+            .map(|fields| Schema { fields })
+    }
+
+    /// Look up exactly one field by name. The error variants encode "zero
+    /// matches" and "more than one match" separately so callers (and tests)
+    /// can distinguish without parsing strings.
+    fn find_unique_field(&self, name: &str) -> Result<Field> {
+        let mut matches = self.fields.iter().filter(|f| f.name == name);
+        match (matches.next(), matches.next()) {
+            (None, _) => Err(FdapQueryError::SchemaError(format!(
+                "select: column name '{name}' not found in schema"
+            ))),
+            (Some(field), None) => Ok(field.clone()),
+            (Some(_), Some(_)) => Err(FdapQueryError::SchemaError(format!(
+                "select: column name '{name}' matched {} fields (expected exactly 1)",
+                2 + matches.count()
+            ))),
         }
-        Schema { fields: out }
     }
 }
 
@@ -133,17 +143,22 @@ mod tests {
     #[test]
     fn schema_select_by_name() {
         let s = sample_schema();
-        let p = s.select(&["name".to_string(), "id".to_string()]);
+        let p = s
+            .select(&["name".to_string(), "id".to_string()])
+            .expect("select of two known columns");
         assert_eq!(p.fields.len(), 2);
         assert_eq!(p.fields[0].name, "name");
         assert_eq!(p.fields[1].name, "id");
     }
 
     #[test]
-    #[should_panic(expected = "select")]
-    fn schema_select_unknown_panics() {
+    fn schema_select_unknown_returns_error() {
         let s = sample_schema();
-        s.select(&["does_not_exist".to_string()]);
+        let err = s
+            .select(&["does_not_exist".to_string()])
+            .expect_err("select of unknown column should fail");
+        assert!(matches!(err, FdapQueryError::SchemaError(_)));
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]

@@ -189,7 +189,8 @@ impl PhysicalPlan for HashAggregateExec {
             .into_iter()
             .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
             .collect();
-        let batch = record_batch::create(&self.schema, columns);
+        let batch = record_batch::create(&self.schema, columns)
+            .expect("HashAggregateExec: schema/column mismatch building output batch");
         Box::new(std::iter::once(batch))
     }
 }

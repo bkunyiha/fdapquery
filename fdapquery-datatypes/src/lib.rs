@@ -27,6 +27,8 @@ pub mod shuffle_location;
 // ==============================================================
 // Re-exports for convenient downstream `use datatypes::*;` ergonomics.
 // ==============================================================
+pub use fdapquery_common::{FdapQueryError, Result};
+
 pub use arrow_field_vector::ArrowFieldVector;
 pub use arrow_vector_builder::ArrowVectorBuilder;
 pub use column_vector::ColumnVector;

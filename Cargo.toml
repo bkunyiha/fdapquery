@@ -4,8 +4,9 @@
 # "How Query Engines Work" (2nd edition). See README.md for the full context.
 [workspace]
 resolver = "2"
-# 15 crates. Build order matches the listing order below.
+# 16 crates. Build order matches the listing order below.
 members = [
+    "fdapquery-common",
     "fdapquery-datatypes",
     "fdapquery-datasource",
     "fdapquery-logical-plan",

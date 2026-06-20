@@ -190,6 +190,7 @@ fn select_rows(batch: &RecordBatch, schema: &Schema, take: &[bool]) -> RecordBat
         })
         .collect();
     record_batch::create(schema, columns)
+        .expect("ShuffleWriterExec: schema/column mismatch building output batch")
 }
 
 impl PhysicalPlan for ShuffleWriterExec {

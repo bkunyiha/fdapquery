@@ -39,7 +39,9 @@ impl Scan {
         if projection.is_empty() {
             schema
         } else {
-            schema.select(projection)
+            schema
+                .select(projection)
+                .expect("Scan::derive_schema: projection columns must be present in schema")
         }
     }
 

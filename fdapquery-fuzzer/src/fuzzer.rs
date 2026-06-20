@@ -129,6 +129,7 @@ impl Fuzzer {
             })
             .collect();
         record_batch::create(schema, field_vectors)
+            .expect("fuzzer: schema/column mismatch building random batch")
     }
 
     /// Recursively build a random logical plan tree of `project` / `filter`

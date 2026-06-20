@@ -94,6 +94,7 @@ impl HashJoinExec {
             .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
             .collect();
         record_batch::create(&self.schema, columns)
+            .expect("HashJoinExec: schema/column mismatch building output batch")
     }
 
     /// Wrap each column of `batch` once, so rows can be read by index without
