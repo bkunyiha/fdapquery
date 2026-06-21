@@ -8,7 +8,7 @@
 //!   only the named columns, in the requested order.
 
 use crate::data_source::DataSource;
-use fdapquery_datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
 use std::sync::Arc;
 
 pub struct InMemoryDataSource {
@@ -31,39 +31,41 @@ impl DataSource for InMemoryDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn scan(
+        &self,
+        projection: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         if projection.is_empty() {
-            // No projection: hand back clones of the underlying batches.
-            // arrow_array::RecordBatch is Arc-backed so this is cheap.
-            return Box::new(self.data.clone().into_iter());
+            // No projection: hand back wrapped clones of the underlying batches.
+            // arrow_array::RecordBatch is Arc-backed so each clone is cheap.
+            // Every batch is `Ok(...)` because in-memory has no per-batch
+            // failure mode at this layer.
+            return Ok(Box::new(self.data.clone().into_iter().map(Ok)));
         }
 
         // Resolve projection column names to their indices in the source schema.
-        let projection_indices: Vec<usize> = projection
+        let projection_indices = projection
             .iter()
             .map(|name| {
                 self.schema
                     .fields
                     .iter()
                     .position(|f| &f.name == name)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "InMemoryDataSource::scan: projection column '{}' not in schema",
-                            name
-                        )
+                    .ok_or_else(|| {
+                        FdapQueryError::SchemaError(format!(
+                            "InMemoryDataSource::scan: projection column '{name}' not in schema"
+                        ))
                     })
             })
-            .collect();
+            .collect::<Result<Vec<usize>>>()?;
 
-        let projected_schema = self
-            .schema
-            .select(projection)
-            .expect("InMemoryDataSource::scan: projection columns must be present in schema");
+        let projected_schema = self.schema.select(projection)?;
         let projected_arrow_schema = Arc::new(projected_schema.to_arrow());
 
         // For each input batch, select the projected columns and build a new
-        // RecordBatch with the projected schema.
-        let projected: Vec<RecordBatch> = self
+        // RecordBatch with the projected schema. `RecordBatch::try_new`
+        // failures lift to `FdapQueryError::ArrowError` via `#[from]`.
+        let projected = self
             .data
             .iter()
             .map(|batch| {
@@ -72,11 +74,11 @@ impl DataSource for InMemoryDataSource {
                     .map(|&i| batch.column(i).clone())
                     .collect();
                 RecordBatch::try_new(projected_arrow_schema.clone(), projected_columns)
-                    .expect("InMemoryDataSource::scan: failed to build projected RecordBatch")
+                    .map_err(Into::into)
             })
-            .collect();
+            .collect::<Result<Vec<RecordBatch>>>()?;
 
-        Box::new(projected.into_iter())
+        Ok(Box::new(projected.into_iter().map(Ok)))
     }
 }
 
@@ -112,7 +114,11 @@ mod tests {
     #[test]
     fn scan_empty_projection_returns_all_columns() {
         let ds = InMemoryDataSource::new(sample_schema(), vec![sample_batch()]);
-        let batches: Vec<_> = ds.scan(&[]).collect();
+        let batches: Vec<RecordBatch> = ds
+            .scan(&[])
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(row_count(&batches[0]), 3);
         assert_eq!(column_count(&batches[0]), 3);
@@ -121,7 +127,11 @@ mod tests {
     #[test]
     fn scan_with_projection_selects_columns_in_requested_order() {
         let ds = InMemoryDataSource::new(sample_schema(), vec![sample_batch()]);
-        let batches: Vec<_> = ds.scan(&["name".to_string(), "id".to_string()]).collect();
+        let batches: Vec<RecordBatch> = ds
+            .scan(&["name".to_string(), "id".to_string()])
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(batches.len(), 1);
         let b = &batches[0];
         assert_eq!(column_count(b), 2);
@@ -137,9 +147,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "not in schema")]
-    fn scan_with_unknown_column_panics() {
+    fn scan_with_unknown_column_returns_schema_error() {
         let ds = InMemoryDataSource::new(sample_schema(), vec![sample_batch()]);
-        let _ = ds.scan(&["does_not_exist".to_string()]).count();
+        // `.map(|_| ())` discards the `Box<dyn Iterator<...>>` so the Ok-type
+        // becomes `()` — required because `expect_err` needs `T: Debug` and
+        // a boxed trait object isn't.
+        let err = ds
+            .scan(&["does_not_exist".to_string()])
+            .map(|_| ())
+            .expect_err("unknown projection column should fail at scan-start");
+        assert!(matches!(err, FdapQueryError::SchemaError(_)));
+        assert!(err.to_string().contains("not in schema"));
     }
 }

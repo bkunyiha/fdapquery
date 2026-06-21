@@ -38,7 +38,13 @@ impl PhysicalPlan for ScanExec {
         // A leaf scan needs no executor context — the `DataSource` reads from
         // its own configured location (CSV path / Parquet path). `_ctx` is
         // present in the signature only so the trait contract is uniform.
-        self.ds.scan(&self.projection)
+        let iter = self
+            .ds
+            .scan(&self.projection)
+            .expect("ScanExec: scan failed to start over data source");
+        Box::new(iter.map(|res| {
+            res.expect("ScanExec: per-batch read error during iteration")
+        }))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {

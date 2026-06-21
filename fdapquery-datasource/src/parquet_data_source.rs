@@ -7,7 +7,9 @@
 //! - I/O and parse errors panic (file-not-found, corrupt file, etc.).
 
 use crate::data_source::DataSource;
-use fdapquery_datatypes::{RecordBatch, Schema, schema::from_arrow as schema_from_arrow};
+use fdapquery_datatypes::{
+    RecordBatch, Result, Schema, schema::from_arrow as schema_from_arrow,
+};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
@@ -24,18 +26,23 @@ impl ParquetDataSource {
     }
 
     /// Open the file and return a fresh `ParquetRecordBatchReaderBuilder`.
-    fn open_builder(&self) -> ParquetRecordBatchReaderBuilder<File> {
-        let file = File::open(&self.filename).unwrap_or_else(|e| {
-            panic!("ParquetDataSource: cannot open '{}': {}", self.filename, e)
-        });
-        ParquetRecordBatchReaderBuilder::try_new(file)
-            .unwrap_or_else(|e| panic!("ParquetDataSource: failed to read Parquet metadata: {}", e))
+    /// Returns `Err` on file-open or Parquet-metadata-read failure.
+    fn open_builder(&self) -> Result<ParquetRecordBatchReaderBuilder<File>> {
+        let file = File::open(&self.filename)?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+        Ok(builder)
     }
 }
 
 impl DataSource for ParquetDataSource {
     fn schema(&self) -> Schema {
-        let builder = self.open_builder();
+        // `DataSource::schema()` is still infallible this session (Phase A,
+        // Session 4 scope). `open_builder` now returns `Result`, so we
+        // `.expect("…")` here as scaffolding until a later session converts
+        // `schema()` to `Result<Schema>`.
+        let builder = self
+            .open_builder()
+            .expect("ParquetDataSource::schema: open_builder failed");
         // The builder exposes the Arrow-style schema directly; convert it to
         // the rquery `Schema` via the module-1 from_arrow helper.
         schema_from_arrow(builder.schema())
@@ -47,8 +54,11 @@ impl DataSource for ParquetDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Box<dyn Iterator<Item = RecordBatch>> {
-        let builder = self.open_builder();
+    fn scan(
+        &self,
+        projection: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+        let builder = self.open_builder()?;
 
         let builder = if projection.is_empty() {
             builder
@@ -62,17 +72,11 @@ impl DataSource for ParquetDataSource {
             builder.with_projection(mask)
         };
 
-        let reader = builder
-            .build()
-            .unwrap_or_else(|e| panic!("ParquetDataSource::scan: failed to build reader: {}", e));
+        let reader = builder.build()?;
 
-        // The reader is `Iterator<Item = Result<RecordBatch, ArrowError>>`.
-        // Unwrap and panic on parse errors.
-        Box::new(
-            reader.map(|res| {
-                res.unwrap_or_else(|e| panic!("ParquetDataSource: malformed batch: {}", e))
-            }),
-        )
+        // The reader yields `Result<RecordBatch, ArrowError>`. Lift each
+        // per-batch error into `FdapQueryError` via the `#[from]` derive.
+        Ok(Box::new(reader.map(|res| res.map_err(Into::into))))
     }
 }
 
@@ -112,7 +116,11 @@ mod tests {
     #[test]
     fn read_parquet_file_id_column() {
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
-        let batches: Vec<_> = parquet.scan(&["id".to_string()]).collect();
+        let batches: Vec<RecordBatch> = parquet
+            .scan(&["id".to_string()])
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert!(!batches.is_empty(), "expected at least one batch");
         let batch = &batches[0];
         assert_eq!(batch.num_columns(), 1);
@@ -131,7 +139,11 @@ mod tests {
     #[test]
     fn read_parquet_string_column_non_null() {
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
-        let batches: Vec<_> = parquet.scan(&["string_col".to_string()]).collect();
+        let batches: Vec<RecordBatch> = parquet
+            .scan(&["string_col".to_string()])
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert!(!batches.is_empty());
         let batch = &batches[0];
         assert_eq!(batch.num_columns(), 1);

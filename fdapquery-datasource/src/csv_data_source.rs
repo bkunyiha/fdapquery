@@ -14,7 +14,9 @@
 
 use crate::data_source::DataSource;
 use arrow::csv::{ReaderBuilder, reader::Format};
-use fdapquery_datatypes::{RecordBatch, Schema, schema::from_arrow as schema_from_arrow};
+use fdapquery_datatypes::{
+    FdapQueryError, RecordBatch, Result, Schema, schema::from_arrow as schema_from_arrow,
+};
 use std::fs::File;
 use std::sync::Arc;
 
@@ -41,7 +43,7 @@ impl CsvDataSource {
             schema,
             has_headers,
             batch_size,
-            delimiter: b',',
+            delimiter: b',', // byte literal or byte string literal
         }
     }
 
@@ -53,7 +55,7 @@ impl CsvDataSource {
         batch_size: usize,
     ) -> Self {
         let mut s = Self::new(filename, schema, has_headers, batch_size);
-        s.delimiter = b'\t';
+        s.delimiter = b'\t'; // byte literal or byte string literal
         s
     }
 
@@ -87,13 +89,11 @@ impl DataSource for CsvDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Box<dyn Iterator<Item = RecordBatch>> {
-        let file = File::open(&self.filename).unwrap_or_else(|e| {
-            panic!(
-                "CsvDataSource::scan: cannot open '{}': {}",
-                self.filename, e
-            )
-        });
+    fn scan(
+        &self,
+        projection: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+        let file = File::open(&self.filename)?;
 
         // Determine the schema used by the reader (typed schema, not projected).
         let full_schema = self.schema();
@@ -107,35 +107,29 @@ impl DataSource for CsvDataSource {
 
         if !projection.is_empty() {
             // Resolve names to indices in the FULL schema.
-            let indices: Vec<usize> = projection
+            let indices = projection
                 .iter()
                 .map(|name| {
                     full_schema
                         .fields
                         .iter()
                         .position(|f| &f.name == name)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "CsvDataSource::scan: projection column '{}' not in schema",
-                                name
-                            )
+                        .ok_or_else(|| {
+                            FdapQueryError::SchemaError(format!(
+                                "CsvDataSource::scan: projection column '{name}' not in schema"
+                            ))
                         })
                 })
-                .collect();
+                .collect::<Result<Vec<usize>>>()?;
             builder = builder.with_projection(indices);
         }
 
-        let reader = builder
-            .build(file)
-            .unwrap_or_else(|e| panic!("CsvDataSource::scan: failed to build CSV reader: {}", e));
+        let reader = builder.build(file)?;
 
-        // The reader is itself an Iterator<Item = Result<RecordBatch, ArrowError>>.
-        // Unwrap and panic on parse errors rather than propagating Result.
-        Box::new(
-            reader.map(|res| {
-                res.unwrap_or_else(|e| panic!("CsvDataSource: malformed CSV batch: {}", e))
-            }),
-        )
+        // The reader yields `Result<RecordBatch, ArrowError>`. Lift each
+        // per-batch error into `FdapQueryError` via the `#[from]` derive
+        // on `FdapQueryError::ArrowError`.
+        Ok(Box::new(reader.map(|res| res.map_err(Into::into))))
     }
 }
 
@@ -154,7 +148,11 @@ mod tests {
     #[test]
     fn read_csv_with_no_projection() {
         let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1024);
-        let batches: Vec<_> = csv.scan(&[]).collect();
+        let batches: Vec<RecordBatch> = csv
+            .scan(&[])
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(batches.len(), 1);
         let b = &batches[0];
         // employee.csv has 4 rows.
@@ -186,7 +184,11 @@ mod tests {
             "last_name".to_string(),
             "state".to_string(),
         ];
-        let batches: Vec<_> = csv.scan(&projection).collect();
+        let batches: Vec<RecordBatch> = csv
+            .scan(&projection)
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_columns(), 3);
         assert_eq!(row_count(&batches[0]), 4);
@@ -195,7 +197,11 @@ mod tests {
     #[test]
     fn read_csv_with_small_batch_splits_into_multiple_batches() {
         let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1);
-        let batches: Vec<_> = csv.scan(&[]).collect();
+        let batches: Vec<RecordBatch> = csv
+            .scan(&[])
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         // 4 rows, batch size 1 → 4 batches.
         assert_eq!(batches.len(), 4);
         for b in &batches {
@@ -224,7 +230,11 @@ mod tests {
             Field::new("field_6", STRING_TYPE),
         ]);
         let csv = CsvDataSource::tsv(fixture("employee_no_header.tsv"), Some(schema), false, 1024);
-        let batches: Vec<_> = csv.scan(&[]).collect();
+        let batches: Vec<RecordBatch> = csv
+            .scan(&[])
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         assert_eq!(batches.len(), 1);
         // employee_no_header.tsv has 3 rows.
         assert_eq!(row_count(&batches[0]), 3);
