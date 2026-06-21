@@ -9,6 +9,7 @@
 //!   `Null` variant in place of `?` nullability).
 //!   Rust's `Drop` is also a no-op by default. Nothing to port.
 
+use crate::{FdapQueryError, Result};
 use crate::{column_vector::ColumnVector, scalar_value::ScalarValue};
 use arrow_schema::DataType;
 
@@ -34,14 +35,14 @@ impl ColumnVector for LiteralValueVector {
         self.arrow_type.clone()
     }
 
-    fn get_value(&self, i: usize) -> ScalarValue {
+    fn get_value(&self, i: usize) -> Result<ScalarValue> {
         if i >= self.size {
-            panic!(
-                "LiteralValueVector::get_value: index {} out of bounds (size {})",
-                i, self.size
-            );
+            return Err(FdapQueryError::Internal(format!(
+                "LiteralValueVector::get_value: index {i} out of bounds (size {size})",
+                size = self.size
+            )));
         }
-        self.value.clone()
+        Ok(self.value.clone())
     }
 
     fn size(&self) -> usize {
@@ -59,7 +60,7 @@ mod tests {
         let v = LiteralValueVector::new(INT32_TYPE, ScalarValue::Int32(42), 5);
         assert_eq!(v.size(), 5);
         for i in 0..5 {
-            assert_eq!(v.get_value(i), ScalarValue::Int32(42));
+            assert_eq!(v.get_value(i).unwrap(), ScalarValue::Int32(42));
         }
     }
 
@@ -70,9 +71,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "out of bounds")]
-    fn literal_index_out_of_bounds_panics() {
+    fn literal_index_out_of_bounds_returns_internal_error() {
         let v = LiteralValueVector::new(INT32_TYPE, ScalarValue::Int32(1), 2);
-        let _ = v.get_value(2);
+        let err = v.get_value(2).expect_err("out-of-bounds index should fail");
+        assert!(matches!(err, FdapQueryError::Internal(_)));
+        assert!(err.to_string().contains("out of bounds"));
     }
 }

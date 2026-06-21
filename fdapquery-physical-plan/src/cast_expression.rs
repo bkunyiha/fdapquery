@@ -6,7 +6,9 @@
 
 use crate::expressions::Expression;
 use arrow_schema::DataType;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, record_batch};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, record_batch,
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -28,7 +30,9 @@ impl Expression for CastExpression {
         let mut builder = ArrowVectorBuilder::new(&self.data_type, record_batch::row_count(input));
 
         for i in 0..value.size() {
-            let vv = value.get_value(i);
+            let vv = value
+                .get_value(i)
+                .expect("CastExpression: get_value over source column");
             if vv.is_null() {
                 builder.append_null();
                 continue;
@@ -178,7 +182,10 @@ mod tests {
 
         assert_eq!(result.size(), a.len());
         for (i, val) in a.iter().enumerate() {
-            assert_eq!(result.get_value(i), ScalarValue::Utf8(val.to_string()));
+            assert_eq!(
+                result.get_value(i).unwrap(),
+                ScalarValue::Utf8(val.to_string())
+            );
         }
     }
 
@@ -195,7 +202,7 @@ mod tests {
         assert_eq!(result.size(), a.len());
         for (i, val) in a.iter().enumerate() {
             let expected: f32 = val.parse().unwrap();
-            assert_eq!(result.get_value(i), ScalarValue::Float32(expected));
+            assert_eq!(result.get_value(i).unwrap(), ScalarValue::Float32(expected));
         }
     }
 }

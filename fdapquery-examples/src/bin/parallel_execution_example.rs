@@ -73,8 +73,13 @@ fn print_results(batches: &[RecordBatch]) {
         let state_col = ArrowFieldVector::new(batch.column(0).clone());
         let sum_col = ArrowFieldVector::new(batch.column(1).clone());
         for row in 0..batch.num_rows() {
-            let key = scalar_to_string(&state_col.get_value(row));
-            let value = sum_col.get_value(row);
+            let state = state_col
+                .get_value(row)
+                .expect("parallel_execution_example: get_value over state column");
+            let value = sum_col
+                .get_value(row)
+                .expect("parallel_execution_example: get_value over sum column");
+            let key = scalar_to_string(&state);
             println!("  {key}: {value:?}");
         }
     }
@@ -90,8 +95,13 @@ fn extract_results(batches: &[RecordBatch]) -> HashMap<String, ScalarValue> {
         let state_col = ArrowFieldVector::new(batch.column(0).clone());
         let sum_col = ArrowFieldVector::new(batch.column(1).clone());
         for row in 0..batch.num_rows() {
-            let key = scalar_to_string(&state_col.get_value(row));
-            let value = sum_col.get_value(row);
+            let state = state_col
+                .get_value(row)
+                .expect("parallel_execution_example: get_value over state column");
+            let value = sum_col
+                .get_value(row)
+                .expect("parallel_execution_example: get_value over sum column");
+            let key = scalar_to_string(&state);
             out.insert(key, value);
         }
     }

@@ -26,9 +26,9 @@ use arrow_flight::{
 };
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_execution::execution_context::ExecutionContext;
-use futures::{Stream, TryStreamExt};
 use fdapquery_physical_plan::{ExecutorContext, ShuffleWriterExec};
 use fdapquery_protobuf::{deserialize_logical_plan, deserialize_task, pb};
+use futures::{Stream, TryStreamExt};
 use std::collections::HashMap;
 use std::pin::Pin;
 use tokio_stream::wrappers::ReceiverStream;
@@ -61,12 +61,31 @@ type FlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'st
 
 #[tonic::async_trait]
 impl FlightService for FdapQueryFlightProducer {
+    // Per-RPC response stream types. Each `type` line is one of the seven
+    // FlightService methods; the type parameter is the per-frame payload.
+    
+    // `HandshakeResponse`   — auth / protocol-version reply frames from the
+    //                         server during the initial handshake.
     type HandshakeStream = FlightStream<HandshakeResponse>;
+    // `FlightInfo`          — one descriptor per advertised flight (schema,
+    //                         endpoints, total record count); list_flights output.
     type ListFlightsStream = FlightStream<FlightInfo>;
+    // `FlightData`          — actual Arrow IPC bytes (schema then record
+    //                         batches); the data-plane currency on do_get.
     type DoGetStream = FlightStream<FlightData>;
+    // `PutResult`           — server-side ack frames acknowledging client
+    //                         uploads; opaque app-defined bytes.
     type DoPutStream = FlightStream<PutResult>;
+    // `arrow_flight::Result` — one frame per do_action invocation carrying
+    //                         opaque bytes the action handler chose to return.
+    //                         NOT std::result::Result — this is Arrow Flight's
+    //                         own struct named `Result`.
     type DoActionStream = FlightStream<arrow_flight::Result>;
+    // `ActionType`          — `{type, description}` advertising one custom
+    //                         action this server supports; list_actions output.
     type ListActionsStream = FlightStream<ActionType>;
+    // `FlightData`          — same Arrow IPC bytes as DoGet; do_exchange is
+    //                         bidirectional so both sides exchange FlightData.
     type DoExchangeStream = FlightStream<FlightData>;
 
     async fn handshake(
@@ -346,9 +365,11 @@ mod tests {
     use super::*;
     use arrow_flight::Action;
     use fdapquery_datasource::{CsvDataSource, DataSource};
-    use futures::StreamExt;
-    use fdapquery_physical_plan::{ColumnExpression, PhysicalPlan, ScanExec, ShuffleWriterExec, Task};
+    use fdapquery_physical_plan::{
+        ColumnExpression, PhysicalPlan, ScanExec, ShuffleWriterExec, Task,
+    };
     use fdapquery_protobuf::serialize_task;
+    use futures::StreamExt;
     use std::sync::Arc;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
@@ -460,9 +481,9 @@ mod tests {
 
     #[tokio::test]
     async fn do_get_streams_flight_data_for_a_logical_plan() {
-        use futures::StreamExt;
         use fdapquery_logical_plan::{LogicalPlan, Scan};
         use fdapquery_protobuf::serialize_logical_plan;
+        use futures::StreamExt;
 
         let base = temp_dir("do-get-happy");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);

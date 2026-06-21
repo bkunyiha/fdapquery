@@ -84,8 +84,12 @@ fn date_interval(
     let interval_col: Box<dyn ColumnVector> = interval_expr.evaluate(input);
     let mut builder = ArrowVectorBuilder::new(&DATE_DAY_TYPE, date_col.size());
     for i in 0..date_col.size() {
-        let date_value = date_col.get_value(i);
-        let interval_value = interval_col.get_value(i);
+        let date_value = date_col
+            .get_value(i)
+            .expect("DateExpression: get_value over date column");
+        let interval_value = interval_col
+            .get_value(i)
+            .expect("DateExpression: get_value over interval column");
         if date_value.is_null() || interval_value.is_null() {
             builder.append_null();
         } else {

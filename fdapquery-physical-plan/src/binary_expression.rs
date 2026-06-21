@@ -18,7 +18,7 @@
 
 use crate::expressions::Expression;
 use arrow_schema::DataType;
-use fdapquery_datatypes::{ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::{ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue};
 use std::sync::Arc;
 
 /// A binary expression: left and right operands, with shared
@@ -106,8 +106,8 @@ impl ColumnVector for CoercedDoubleVector {
         DataType::Float64
     }
 
-    fn get_value(&self, i: usize) -> ScalarValue {
-        match self.inner.get_value(i) {
+    fn get_value(&self, i: usize) -> Result<ScalarValue> {
+        Ok(match self.inner.get_value(i)? {
             ScalarValue::Null => ScalarValue::Null,
             ScalarValue::Float64(v) => ScalarValue::Float64(v),
             ScalarValue::Float32(v) => ScalarValue::Float64(v as f64),
@@ -119,8 +119,12 @@ impl ColumnVector for CoercedDoubleVector {
             ScalarValue::UInt32(v) => ScalarValue::Float64(v as f64),
             ScalarValue::UInt16(v) => ScalarValue::Float64(v as f64),
             ScalarValue::UInt8(v) => ScalarValue::Float64(v as f64),
-            other => panic!("Cannot coerce {other:?} to Double"),
-        }
+            other => {
+                return Err(FdapQueryError::NotImplemented(format!(
+                    "CoercedDoubleVector::get_value: cannot coerce {other:?} to Double"
+                )));
+            }
+        })
     }
 
     fn size(&self) -> usize {

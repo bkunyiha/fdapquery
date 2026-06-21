@@ -29,7 +29,9 @@ pub trait UnaryMathExpression: Expression {
         let n = self.input().evaluate(input);
         let mut builder = ArrowVectorBuilder::new(&DOUBLE_TYPE, n.size());
         for i in 0..n.size() {
-            let value = n.get_value(i);
+            let value = n
+                .get_value(i)
+                .expect("UnaryMathExpression: get_value over input column");
             if value.is_null() {
                 builder.append_null();
             } else {

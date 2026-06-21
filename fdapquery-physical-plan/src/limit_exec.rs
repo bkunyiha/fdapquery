@@ -97,7 +97,10 @@ fn truncate(batch: &RecordBatch, n: usize, schema: &Schema) -> RecordBatch {
             let source = record_batch::field(batch, i);
             let mut builder = ArrowVectorBuilder::new(&source.get_type(), n);
             for row in 0..n {
-                builder.append_value(&source.get_value(row));
+                let value = source
+                    .get_value(row)
+                    .expect("LimitExec: get_value over truncated input row");
+                builder.append_value(&value);
             }
             builder.set_value_count(n);
             Box::new(builder.build()) as Box<dyn ColumnVector>

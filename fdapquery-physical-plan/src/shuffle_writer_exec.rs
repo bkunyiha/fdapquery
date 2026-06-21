@@ -35,7 +35,9 @@ use crate::expressions::Expression;
 use crate::physical_plan::PhysicalPlan;
 use crate::row_key::RowKey;
 use crate::shuffle_location::ShuffleLocation;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -162,7 +164,13 @@ fn compute_targets(
 ) -> Vec<usize> {
     let mut targets = Vec::with_capacity(row_count);
     for row in 0..row_count {
-        let key: Vec<ScalarValue> = key_columns.iter().map(|c| c.get_value(row)).collect();
+        let key: Vec<ScalarValue> = key_columns
+            .iter()
+            .map(|c| {
+                c.get_value(row)
+                    .expect("ShuffleWriterExec: get_value over key column")
+            })
+            .collect();
         let mut hasher = DefaultHasher::new();
         RowKey(key).hash(&mut hasher);
         targets.push((hasher.finish() % partition_count as u64) as usize);
@@ -182,7 +190,10 @@ fn select_rows(batch: &RecordBatch, schema: &Schema, take: &[bool]) -> RecordBat
             let mut builder = ArrowVectorBuilder::new(&source.get_type(), count);
             for (row, &t) in take.iter().enumerate() {
                 if t {
-                    builder.append_value(&source.get_value(row));
+                    let value = source
+                        .get_value(row)
+                        .expect("ShuffleWriterExec: get_value over input row");
+                    builder.append_value(&value);
                 }
             }
             builder.set_value_count(count);

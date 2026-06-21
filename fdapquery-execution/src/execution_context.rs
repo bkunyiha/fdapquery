@@ -221,7 +221,10 @@ mod tests {
             .project(vec![col("id"), col("first_name"), col("last_name")]);
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(to_csv(&batches[0]), "2,Gregg,Langford\n3,John,Travis\n");
+        assert_eq!(
+            to_csv(&batches[0]).unwrap(),
+            "2,Gregg,Langford\n3,John,Travis\n"
+        );
     }
 
     #[test]
@@ -231,7 +234,7 @@ mod tests {
         let df = ctx.sql("SELECT id, first_name, last_name FROM employee WHERE state = 'CA'");
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(to_csv(&batches[0]), "1,Bill,Hopkins\n");
+        assert_eq!(to_csv(&batches[0]).unwrap(), "1,Bill,Hopkins\n");
     }
 
     #[test]
@@ -248,7 +251,11 @@ mod tests {
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
 
-        let rows: HashSet<String> = to_csv(&batches[0]).lines().map(str::to_string).collect();
+        let rows: HashSet<String> = to_csv(&batches[0])
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
         assert_eq!(rows.len(), 3, "expected three group rows, got {rows:?}");
         assert!(rows.contains("CA,12000"), "missing CA group in {rows:?}");
         assert!(rows.contains("CO,11500"), "missing CO group in {rows:?}");
@@ -263,7 +270,10 @@ mod tests {
             .limit(2);
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(to_csv(&batches[0]), "1,Bill,Hopkins\n2,Gregg,Langford\n");
+        assert_eq!(
+            to_csv(&batches[0]).unwrap(),
+            "1,Bill,Hopkins\n2,Gregg,Langford\n"
+        );
     }
 
     #[test]
@@ -273,7 +283,10 @@ mod tests {
         let df = ctx.sql("SELECT id, first_name, last_name FROM employee LIMIT 2");
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(to_csv(&batches[0]), "1,Bill,Hopkins\n2,Gregg,Langford\n");
+        assert_eq!(
+            to_csv(&batches[0]).unwrap(),
+            "1,Bill,Hopkins\n2,Gregg,Langford\n"
+        );
     }
 
     #[test]
@@ -284,7 +297,7 @@ mod tests {
             ctx.sql("SELECT id, first_name, last_name FROM employee WHERE state = 'CO' LIMIT 1");
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(to_csv(&batches[0]), "2,Gregg,Langford\n");
+        assert_eq!(to_csv(&batches[0]).unwrap(), "2,Gregg,Langford\n");
     }
 
     // ---- ExecutionTest: Fuzzer-backed cases (unblocked by module 9) ----
@@ -325,7 +338,11 @@ mod tests {
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
 
-        let rows: HashSet<String> = to_csv(&batches[0]).lines().map(str::to_string).collect();
+        let rows: HashSet<String> = to_csv(&batches[0])
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
         assert_eq!(rows.len(), 2, "expected two group rows, got {rows:?}");
         assert!(rows.contains("a,1,2,3"), "missing 'a' group in {rows:?}");
         assert!(rows.contains("b,3,4,7"), "missing 'b' group in {rows:?}");
@@ -372,7 +389,7 @@ mod tests {
         // a/b is 1/11 for every row by construction.
         let q = 1.0_f32 / 11.0_f32;
         let expected = format!("12,-10,11,{q}\n24,-20,44,{q}\n48,-40,176,{q}\n36,-30,99,{q}\n");
-        assert_eq!(to_csv(&batches[0]), expected);
+        assert_eq!(to_csv(&batches[0]).unwrap(), expected);
     }
 
     #[test]
@@ -405,7 +422,7 @@ mod tests {
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&df).collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(
-            to_csv(&batches[0]),
+            to_csv(&batches[0]).unwrap(),
             "false,false\nfalse,true\nfalse,true\ntrue,true\n",
         );
     }
@@ -458,7 +475,10 @@ mod tests {
         let ctx = ExecutionContext::new(HashMap::new());
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&joined).collect();
         assert_eq!(batches.len(), 1);
-        assert_eq!(to_csv(&batches[0]), "1,Alice,Engineering\n2,Bob,Sales\n");
+        assert_eq!(
+            to_csv(&batches[0]).unwrap(),
+            "1,Alice,Engineering\n2,Bob,Sales\n"
+        );
     }
 
     #[test]
@@ -505,7 +525,7 @@ mod tests {
         let batches: Vec<RecordBatch> = ctx.execute_data_frame(&joined).collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(
-            to_csv(&batches[0]),
+            to_csv(&batches[0]).unwrap(),
             "1,Alice,Engineering\n2,Bob,Sales\n3,Carol,null\n",
         );
     }

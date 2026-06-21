@@ -27,12 +27,12 @@ use arrow_flight::{Action, Ticket};
 use fdapquery_datasource::{CsvDataSource, DataSource};
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
-use futures::StreamExt;
 use fdapquery_logical_plan::{LogicalPlan, Scan};
 use fdapquery_physical_plan::{
     ColumnExpression, ExecutorContext, PhysicalPlan, ScanExec, ShuffleWriterExec, Task,
 };
 use fdapquery_protobuf::{pb, serialize_logical_plan, serialize_task};
+use futures::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;

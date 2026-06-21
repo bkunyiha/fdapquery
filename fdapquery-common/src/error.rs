@@ -103,27 +103,21 @@ mod tests {
 
     #[test]
     fn from_io_error() {
-        let io_err = std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "file not found",
-        );
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let err: FdapQueryError = io_err.into();
         assert!(matches!(err, FdapQueryError::IoError(_)));
     }
 
     #[test]
     fn from_parquet_error() {
-        let parquet_err = parquet::errors::ParquetError::General(
-            "broken page".into(),
-        );
+        let parquet_err = parquet::errors::ParquetError::General("broken page".into());
         let err: FdapQueryError = parquet_err.into();
         assert!(matches!(err, FdapQueryError::ParquetError(_)));
     }
 
     #[test]
     fn external_wrapping() {
-        let external: Box<dyn std::error::Error + Send + Sync> =
-            "some third-party error".into();
+        let external: Box<dyn std::error::Error + Send + Sync> = "some third-party error".into();
         let err = FdapQueryError::External(external);
         assert!(err.to_string().contains("some third-party error"));
     }

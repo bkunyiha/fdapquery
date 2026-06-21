@@ -13,7 +13,9 @@
 use crate::expressions::{SqlExpr, SqlSelect};
 use arrow_schema::DataType;
 use fdapquery_datatypes::arrow_types::DOUBLE_TYPE;
-use fdapquery_logical_plan::{AggregateExpr, DataFrame, LogicalExpr, avg, cast, count, max, min, sum};
+use fdapquery_logical_plan::{
+    AggregateExpr, DataFrame, LogicalExpr, avg, cast, count, max, min, sum,
+};
 use std::collections::HashMap;
 
 /// Creates a logical plan from a parsed SQL statement.

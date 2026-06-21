@@ -62,7 +62,10 @@ fn main() {
         // Print each batch's schema (arrow-rs `Schema`'s `Debug` form) and
         // its CSV rendering.
         println!("{:?}", batch.schema());
-        println!("{}", to_csv(&batch));
+        println!(
+            "{}",
+            to_csv(&batch).expect("nyc_taxi: to_csv over result batch")
+        );
     }
 
     println!("Query took {} ms", start.elapsed().as_millis());

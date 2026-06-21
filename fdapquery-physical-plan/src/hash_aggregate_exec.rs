@@ -26,7 +26,9 @@ use crate::aggregate_mode::AggregateMode;
 use crate::executor_context::ExecutorContext;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression};
 use crate::physical_plan::PhysicalPlan;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
+};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -139,7 +141,15 @@ impl PhysicalPlan for HashAggregateExec {
                 .collect();
 
             for row in 0..batch.num_rows() {
-                let key = GroupKey(group_keys.iter().map(|c| c.get_value(row)).collect());
+                let key = GroupKey(
+                    group_keys
+                        .iter()
+                        .map(|c| {
+                            c.get_value(row)
+                                .expect("HashAggregateExec: get_value over group-key column")
+                        })
+                        .collect(),
+                );
                 let accumulators = map.entry(key).or_insert_with(|| {
                     self.aggregate_expr
                         .iter()
@@ -147,7 +157,9 @@ impl PhysicalPlan for HashAggregateExec {
                         .collect()
                 });
                 for (i, acc) in accumulators.iter_mut().enumerate() {
-                    let value = aggr_inputs[i].get_value(row);
+                    let value = aggr_inputs[i]
+                        .get_value(row)
+                        .expect("HashAggregateExec: get_value over aggregate-input column");
                     match self.mode {
                         // FINAL merges incoming partial state; other modes accumulate raw values.
                         AggregateMode::Final => acc.merge(&AccumulatorValue::Scalar(value)),
@@ -361,20 +373,20 @@ mod tests {
 
         let mut got: HashMap<Option<String>, (i64, i64, i32)> = HashMap::new();
         for i in 0..batch.num_rows() {
-            let state = match states.get_value(i) {
+            let state = match states.get_value(i).unwrap() {
                 ScalarValue::Utf8(s) => Some(s),
                 ScalarValue::Null => None,
                 other => panic!("unexpected state value: {other:?}"),
             };
-            let mn = match mins.get_value(i) {
+            let mn = match mins.get_value(i).unwrap() {
                 ScalarValue::Int64(n) => n,
                 o => panic!("min: {o:?}"),
             };
-            let mx = match maxs.get_value(i) {
+            let mx = match maxs.get_value(i).unwrap() {
                 ScalarValue::Int64(n) => n,
                 o => panic!("max: {o:?}"),
             };
-            let c = match counts.get_value(i) {
+            let c = match counts.get_value(i).unwrap() {
                 ScalarValue::Int32(n) => n,
                 o => panic!("count: {o:?}"),
             };

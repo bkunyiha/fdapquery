@@ -11,7 +11,9 @@
 use crate::executor_context::ExecutorContext;
 use crate::expressions::Expression;
 use crate::physical_plan::PhysicalPlan;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
+};
 use std::sync::Arc;
 
 /// Execute a selection (row filter).
@@ -85,15 +87,24 @@ fn filter(v: &dyn ColumnVector, selection: &dyn ColumnVector) -> Box<dyn ColumnV
     // Count selected rows first, to size the builder.
     let mut count = 0usize;
     for i in 0..selection.size() {
-        if matches!(selection.get_value(i), ScalarValue::Boolean(true)) {
+        let sel = selection
+            .get_value(i)
+            .expect("SelectionExec: get_value over selection column");
+        if matches!(sel, ScalarValue::Boolean(true)) {
             count += 1;
         }
     }
 
     let mut builder = ArrowVectorBuilder::new(&v.get_type(), count);
     for i in 0..selection.size() {
-        if matches!(selection.get_value(i), ScalarValue::Boolean(true)) {
-            builder.append_value(&v.get_value(i));
+        let sel = selection
+            .get_value(i)
+            .expect("SelectionExec: get_value over selection column");
+        if matches!(sel, ScalarValue::Boolean(true)) {
+            let value = v
+                .get_value(i)
+                .expect("SelectionExec: get_value over filtered column");
+            builder.append_value(&value);
         }
     }
     builder.set_value_count(count);

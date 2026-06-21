@@ -23,5 +23,5 @@
 //! host, port, and an `Arc<ShuffleManager>`) and hands it to the producer
 //! for the lifetime of the process.
 
-pub mod flight_server;
 pub mod fdap_query_flight_producer;
+pub mod flight_server;

@@ -9,11 +9,11 @@
 //! - **No `close()` method** — arrow-rs's `RecordBatch` is `Arc`-backed and
 //!   self-releasing.
 
+use crate::Result;
 use crate::arrow_vector_builder::ArrowVectorBuilder;
 use crate::scalar_value::ScalarValue;
 use crate::schema::Schema;
 use crate::{arrow_field_vector::ArrowFieldVector, column_vector::ColumnVector};
-use crate::Result;
 use arrow_array::ArrayRef;
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ pub fn column_count(batch: &RecordBatch) -> usize {
 /// `ArrayRef` — cheap because `ArrayRef` is `Arc<dyn Array>` and is cloned
 /// by reference.
 pub fn field(batch: &RecordBatch, i: usize) -> ArrowFieldVector {
-    ArrowFieldVector::new(batch.column(i).clone())
+    ArrowFieldVector::new(batch.column(i).clone()) // batch.column(i) returns an &ArrayRef, and ArrayRef(Arc<dyn Array>), so clone is cheap and just clones the Arc 
 }
 
 /// Materialize a [`ColumnVector`] into an arrow `ArrayRef` by copying each value
@@ -51,12 +51,12 @@ pub fn field(batch: &RecordBatch, i: usize) -> ArrowFieldVector {
 /// `RecordBatch` stores `ArrayRef`s, so building one from evaluated columns means
 /// materializing every column uniformly. (A future rewrite could fast-path the
 /// already-materialized case via a downcast; this faithful port keeps it simple.)
-pub fn column_to_array(col: &dyn ColumnVector) -> ArrayRef {
+pub fn column_to_array(col: &dyn ColumnVector) -> Result<ArrayRef> {
     let mut builder = ArrowVectorBuilder::new(&col.get_type(), col.size());
     for i in 0..col.size() {
-        builder.append_value(&col.get_value(i));
+        builder.append_value(&col.get_value(i)?);
     }
-    builder.build().field
+    Ok(builder.build().field)
 }
 
 /// Build a [`RecordBatch`] from a [`Schema`] and a set of evaluated columns.
@@ -68,21 +68,18 @@ pub fn column_to_array(col: &dyn ColumnVector) -> ArrayRef {
 /// columns don't match the schema (arrow's `RecordBatch::try_new` enforces
 /// that, and the `#[from]` derive on `FdapQueryError::ArrowError` lifts the
 /// arrow error into the workspace error type).
-pub fn create(
-    schema: &Schema,
-    columns: Vec<Box<dyn ColumnVector>>,
-) -> Result<RecordBatch> {
-    let arrays: Vec<ArrayRef> = columns
+pub fn create(schema: &Schema, columns: Vec<Box<dyn ColumnVector>>) -> Result<RecordBatch> {
+    let arrays = columns
         .iter()
         .map(|c| column_to_array(c.as_ref()))
-        .collect();
+        .collect::<Result<Vec<ArrayRef>>>()?;
     let arrow_schema = Arc::new(schema.to_arrow());
     RecordBatch::try_new(arrow_schema, arrays).map_err(Into::into)
 }
 
 /// Render the batch as CSV, one row per line, comma-separated values.
 /// Useful for tests and debugging.
-pub fn to_csv(batch: &RecordBatch) -> String {
+pub fn to_csv(batch: &RecordBatch) -> Result<String> {
     let mut out = String::new();
     let rows = batch.num_rows();
     let cols = batch.num_columns();
@@ -96,8 +93,7 @@ pub fn to_csv(batch: &RecordBatch) -> String {
             // ColumnVector trait's get_value method — same path the rest of
             // the engine uses.
             let v = ArrowFieldVector::new(batch.column(col_index).clone());
-            let value = v.get_value(row_index);
-            match value {
+            match v.get_value(row_index)? {
                 ScalarValue::Null => out.push_str("null"),
                 ScalarValue::Boolean(b) => out.push_str(&b.to_string()),
                 ScalarValue::Int8(n) => out.push_str(&n.to_string()),
@@ -117,7 +113,7 @@ pub fn to_csv(batch: &RecordBatch) -> String {
         }
         out.push('\n');
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -149,15 +145,18 @@ mod tests {
     fn field_by_index_round_trips() {
         let b = sample_batch();
         let id = field(&b, 0);
-        assert_eq!(id.get_value(0), ScalarValue::Int32(1));
+        assert_eq!(id.get_value(0).unwrap(), ScalarValue::Int32(1));
         let name = field(&b, 1);
-        assert_eq!(name.get_value(2), ScalarValue::Utf8("c".to_string()));
+        assert_eq!(
+            name.get_value(2).unwrap(),
+            ScalarValue::Utf8("c".to_string())
+        );
     }
 
     #[test]
     fn csv_round_trip() {
         let b = sample_batch();
-        let csv = to_csv(&b);
+        let csv = to_csv(&b).expect("to_csv over a well-formed batch");
         assert_eq!(csv, "1,a\n2,b\n3,c\n");
     }
 
@@ -180,10 +179,16 @@ mod tests {
 
         assert_eq!(row_count(&batch), 3);
         assert_eq!(column_count(&batch), 2);
-        assert_eq!(field(&batch, 0).get_value(2), ScalarValue::Int32(3));
+        assert_eq!(
+            field(&batch, 0).get_value(2).unwrap(),
+            ScalarValue::Int32(3)
+        );
         // every row of the literal column materialized to 7
         for i in 0..3 {
-            assert_eq!(field(&batch, 1).get_value(i), ScalarValue::Int32(7));
+            assert_eq!(
+                field(&batch, 1).get_value(i).unwrap(),
+                ScalarValue::Int32(7)
+            );
         }
     }
 }

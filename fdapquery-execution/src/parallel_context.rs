@@ -304,7 +304,13 @@ mod tests {
     fn row_set(batches: &[RecordBatch]) -> HashSet<String> {
         batches
             .iter()
-            .flat_map(|b| to_csv(b).lines().map(str::to_string).collect::<Vec<_>>())
+            .flat_map(|b| {
+                to_csv(b)
+                    .unwrap()
+                    .lines()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 

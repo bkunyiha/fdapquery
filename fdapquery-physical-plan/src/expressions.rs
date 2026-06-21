@@ -14,7 +14,9 @@
 //! untyped boxed-`Any`.
 
 use fdapquery_datatypes::arrow_types::{DATE_DAY_TYPE, DOUBLE_TYPE, INT64_TYPE, STRING_TYPE};
-use fdapquery_datatypes::{ColumnVector, LiteralValueVector, RecordBatch, ScalarValue, record_batch};
+use fdapquery_datatypes::{
+    ColumnVector, LiteralValueVector, RecordBatch, ScalarValue, record_batch,
+};
 use std::fmt;
 
 /// Physical representation of an expression.

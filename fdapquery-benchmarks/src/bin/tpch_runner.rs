@@ -71,7 +71,10 @@ fn main() -> ExitCode {
     for batch in results {
         // Same shape as `nyc_taxi`: print schema then CSV row data.
         println!("{:?}", batch.schema());
-        print!("{}", to_csv(&batch));
+        print!(
+            "{}",
+            to_csv(&batch).expect("tpch_runner: to_csv over result batch")
+        );
     }
     let time = start.elapsed().as_millis();
 

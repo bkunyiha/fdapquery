@@ -10,6 +10,7 @@
 //!   The `get_type`/`get_value`/`size` methods dispatch on the underlying
 //!   Arrow type via `array.as_any().downcast_ref::<...>()`.
 
+use crate::{FdapQueryError, Result};
 use crate::{column_vector::ColumnVector, scalar_value::ScalarValue};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int8Array,
@@ -38,73 +39,72 @@ impl ColumnVector for ArrowFieldVector {
         self.field.data_type().clone()
     }
 
-    fn get_value(&self, i: usize) -> ScalarValue {
+    fn get_value(&self, i: usize) -> Result<ScalarValue> {
         if self.field.is_null(i) {
-            return ScalarValue::Null;
+            return Ok(ScalarValue::Null);
         }
         // Dispatch on the data type, then downcast to the concrete array
         // implementation to read the typed value.
         match self.field.data_type() {
             DataType::Boolean => {
                 let a = self.field.as_any().downcast_ref::<BooleanArray>().unwrap();
-                ScalarValue::Boolean(a.value(i))
+                Ok(ScalarValue::Boolean(a.value(i)))
             }
             DataType::Int8 => {
                 let a = self.field.as_any().downcast_ref::<Int8Array>().unwrap();
-                ScalarValue::Int8(a.value(i))
+                Ok(ScalarValue::Int8(a.value(i)))
             }
             DataType::Int16 => {
                 let a = self.field.as_any().downcast_ref::<Int16Array>().unwrap();
-                ScalarValue::Int16(a.value(i))
+                Ok(ScalarValue::Int16(a.value(i)))
             }
             DataType::Int32 => {
                 let a = self.field.as_any().downcast_ref::<Int32Array>().unwrap();
-                ScalarValue::Int32(a.value(i))
+                Ok(ScalarValue::Int32(a.value(i)))
             }
             DataType::Int64 => {
                 let a = self.field.as_any().downcast_ref::<Int64Array>().unwrap();
-                ScalarValue::Int64(a.value(i))
+                Ok(ScalarValue::Int64(a.value(i)))
             }
             DataType::UInt8 => {
                 let a = self.field.as_any().downcast_ref::<UInt8Array>().unwrap();
-                ScalarValue::UInt8(a.value(i))
+                Ok(ScalarValue::UInt8(a.value(i)))
             }
             DataType::UInt16 => {
                 let a = self.field.as_any().downcast_ref::<UInt16Array>().unwrap();
-                ScalarValue::UInt16(a.value(i))
+                Ok(ScalarValue::UInt16(a.value(i)))
             }
             DataType::UInt32 => {
                 let a = self.field.as_any().downcast_ref::<UInt32Array>().unwrap();
-                ScalarValue::UInt32(a.value(i))
+                Ok(ScalarValue::UInt32(a.value(i)))
             }
             DataType::UInt64 => {
                 let a = self.field.as_any().downcast_ref::<UInt64Array>().unwrap();
-                ScalarValue::UInt64(a.value(i))
+                Ok(ScalarValue::UInt64(a.value(i)))
             }
             DataType::Float32 => {
                 let a = self.field.as_any().downcast_ref::<Float32Array>().unwrap();
-                ScalarValue::Float32(a.value(i))
+                Ok(ScalarValue::Float32(a.value(i)))
             }
             DataType::Float64 => {
                 let a = self.field.as_any().downcast_ref::<Float64Array>().unwrap();
-                ScalarValue::Float64(a.value(i))
+                Ok(ScalarValue::Float64(a.value(i)))
             }
             DataType::Utf8 => {
                 let a = self.field.as_any().downcast_ref::<StringArray>().unwrap();
-                ScalarValue::Utf8(a.value(i).to_string())
+                Ok(ScalarValue::Utf8(a.value(i).to_string()))
             }
             DataType::Binary => {
                 let a = self.field.as_any().downcast_ref::<BinaryArray>().unwrap();
-                ScalarValue::Binary(a.value(i).to_vec())
+                Ok(ScalarValue::Binary(a.value(i).to_vec()))
             }
             DataType::Date32 => {
                 let a = self.field.as_any().downcast_ref::<Date32Array>().unwrap();
-                ScalarValue::Date32(a.value(i))
+                Ok(ScalarValue::Date32(a.value(i)))
             }
-            other => panic!(
-                "ArrowFieldVector::get_value: unsupported data type: {:?}",
-                other
-            ),
+            other => Err(FdapQueryError::NotImplemented(format!(
+                "ArrowFieldVector::get_value: arrow data type {other:?} not supported"
+            ))),
         }
     }
 
@@ -124,31 +124,31 @@ mod tests {
         let v = ArrowFieldVector::new(arr);
         assert_eq!(v.size(), 3);
         assert_eq!(v.get_type(), DataType::Int32);
-        assert_eq!(v.get_value(0), ScalarValue::Int32(1));
-        assert_eq!(v.get_value(2), ScalarValue::Int32(3));
+        assert_eq!(v.get_value(0).unwrap(), ScalarValue::Int32(1));
+        assert_eq!(v.get_value(2).unwrap(), ScalarValue::Int32(3));
     }
 
     #[test]
     fn nullability_returns_scalar_null() {
         let arr: ArrayRef = Arc::new(Int32Array::from(vec![Some(7), None, Some(9)]));
         let v = ArrowFieldVector::new(arr);
-        assert_eq!(v.get_value(0), ScalarValue::Int32(7));
-        assert_eq!(v.get_value(1), ScalarValue::Null);
-        assert_eq!(v.get_value(2), ScalarValue::Int32(9));
+        assert_eq!(v.get_value(0).unwrap(), ScalarValue::Int32(7));
+        assert_eq!(v.get_value(1).unwrap(), ScalarValue::Null);
+        assert_eq!(v.get_value(2).unwrap(), ScalarValue::Int32(9));
     }
 
     #[test]
     fn utf8_round_trip() {
         let arr: ArrayRef = Arc::new(StringArray::from(vec!["a", "bb", "ccc"]));
         let v = ArrowFieldVector::new(arr);
-        assert_eq!(v.get_value(1), ScalarValue::Utf8("bb".to_string()));
+        assert_eq!(v.get_value(1).unwrap(), ScalarValue::Utf8("bb".to_string()));
     }
 
     #[test]
     fn boolean_round_trip() {
         let arr: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
         let v = ArrowFieldVector::new(arr);
-        assert_eq!(v.get_value(0), ScalarValue::Boolean(true));
-        assert_eq!(v.get_value(1), ScalarValue::Boolean(false));
+        assert_eq!(v.get_value(0).unwrap(), ScalarValue::Boolean(true));
+        assert_eq!(v.get_value(1).unwrap(), ScalarValue::Boolean(false));
     }
 }

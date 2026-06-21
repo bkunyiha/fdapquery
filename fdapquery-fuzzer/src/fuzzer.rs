@@ -29,7 +29,9 @@
 //!   [`rand::RngExt`] extension trait rather than `Rng`, so that is what the
 //!   call sites import.
 
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
+};
 use fdapquery_logical_plan::{DataFrame, LogicalExpr};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};

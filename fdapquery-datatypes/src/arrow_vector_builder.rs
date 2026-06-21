@@ -206,7 +206,7 @@ mod tests {
         let v = b.build();
         assert_eq!(v.size(), 10);
         for i in 0..v.size() {
-            assert_eq!(v.get_value(i), ScalarValue::Int32(i as i32));
+            assert_eq!(v.get_value(i).unwrap(), ScalarValue::Int32(i as i32));
         }
     }
 
@@ -218,9 +218,15 @@ mod tests {
         b.append_value(&ScalarValue::Utf8("world".to_string()));
         let v = b.build();
         assert_eq!(v.size(), 3);
-        assert_eq!(v.get_value(0), ScalarValue::Utf8("hello".to_string()));
-        assert_eq!(v.get_value(1), ScalarValue::Null);
-        assert_eq!(v.get_value(2), ScalarValue::Utf8("world".to_string()));
+        assert_eq!(
+            v.get_value(0).unwrap(),
+            ScalarValue::Utf8("hello".to_string())
+        );
+        assert_eq!(v.get_value(1).unwrap(), ScalarValue::Null);
+        assert_eq!(
+            v.get_value(2).unwrap(),
+            ScalarValue::Utf8("world".to_string())
+        );
     }
 
     #[test]

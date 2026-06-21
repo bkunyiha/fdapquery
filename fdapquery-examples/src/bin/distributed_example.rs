@@ -38,8 +38,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
-use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorClient, ExecutorConfig};
-use fdapquery_physical_plan::{ExecutorContext, ShuffleLocation, ShuffleManager, ShuffleWriterExec, Task};
+use fdapquery_distributed::{
+    DistributedConfig, DistributedContext, ExecutorClient, ExecutorConfig,
+};
+use fdapquery_physical_plan::{
+    ExecutorContext, ShuffleLocation, ShuffleManager, ShuffleWriterExec, Task,
+};
 
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 const SQL: &str = "SELECT state, SUM(salary) FROM employee GROUP BY state";
@@ -194,8 +198,13 @@ fn print_results(batches: &[RecordBatch]) {
         let state_col = ArrowFieldVector::new(batch.column(0).clone());
         let sum_col = ArrowFieldVector::new(batch.column(1).clone());
         for row in 0..batch.num_rows() {
-            let key = scalar_to_string(&state_col.get_value(row));
-            let value = sum_col.get_value(row);
+            let state = state_col
+                .get_value(row)
+                .expect("distributed_example: get_value over state column");
+            let value = sum_col
+                .get_value(row)
+                .expect("distributed_example: get_value over sum column");
+            let key = scalar_to_string(&state);
             println!("  {key}: {value:?}");
         }
     }

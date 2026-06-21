@@ -9,6 +9,7 @@
 //!
 //! [`ScalarValue`]: crate::scalar_value::ScalarValue
 
+use crate::Result;
 use crate::scalar_value::ScalarValue;
 use arrow_schema::DataType;
 
@@ -17,8 +18,10 @@ pub trait ColumnVector {
     /// The Arrow data type stored in this column.
     fn get_type(&self) -> DataType;
 
-    /// Fetch one cell by row index. Returns [`ScalarValue::Null`] for null cells.
-    fn get_value(&self, i: usize) -> ScalarValue;
+    /// Fetch one cell by row index. Returns [`ScalarValue::Null`] for null
+    /// cells. Returns `Err` if the index is out of range or the underlying
+    /// Arrow type isn't yet supported.
+    fn get_value(&self, i: usize) -> Result<ScalarValue>;
 
     /// Number of rows in this column.
     fn size(&self) -> usize;

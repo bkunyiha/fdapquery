@@ -78,7 +78,10 @@ fn main() {
     for batch in ctx.execute_data_frame(&df) {
         // `println!("{batch:?}")` would dump arrow-rs's verbose Debug;
         // `to_csv` gives a more readable row-per-line view.
-        print!("{}", to_csv(&batch));
+        print!(
+            "{}",
+            to_csv(&batch).expect("parallel_query: to_csv over result batch")
+        );
     }
 }
 

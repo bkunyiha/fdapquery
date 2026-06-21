@@ -148,7 +148,8 @@ pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode 
 pub fn serialize_physical_expr(expr: &dyn Expression) -> pb::PhysicalExprNode {
     use pb::physical_expr_node::ExprType;
     let any = expr.as_any();
-    let expr_type = if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::ColumnExpression>() {
+    let expr_type = if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::ColumnExpression>()
+    {
         ExprType::Column(c.i as i32)
     } else if let Some(s) = any.downcast_ref::<fdapquery_physical_plan::LiteralStringExpression>() {
         ExprType::LiteralString(s.value.clone())
