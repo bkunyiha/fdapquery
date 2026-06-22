@@ -89,10 +89,7 @@ impl DataSource for CsvDataSource {
         self
     }
 
-    fn scan(
-        &self,
-        projection: &[String],
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+    fn scan(&self, projection: &[String]) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         let file = File::open(&self.filename)?;
 
         // Determine the schema used by the reader (typed schema, not projected).
@@ -148,11 +145,7 @@ mod tests {
     #[test]
     fn read_csv_with_no_projection() {
         let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1024);
-        let batches: Vec<RecordBatch> = csv
-            .scan(&[])
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().collect::<Result<Vec<_>>>().unwrap();
         assert_eq!(batches.len(), 1);
         let b = &batches[0];
         // employee.csv has 4 rows.
@@ -197,11 +190,7 @@ mod tests {
     #[test]
     fn read_csv_with_small_batch_splits_into_multiple_batches() {
         let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1);
-        let batches: Vec<RecordBatch> = csv
-            .scan(&[])
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().collect::<Result<Vec<_>>>().unwrap();
         // 4 rows, batch size 1 → 4 batches.
         assert_eq!(batches.len(), 4);
         for b in &batches {
@@ -230,11 +219,7 @@ mod tests {
             Field::new("field_6", STRING_TYPE),
         ]);
         let csv = CsvDataSource::tsv(fixture("employee_no_header.tsv"), Some(schema), false, 1024);
-        let batches: Vec<RecordBatch> = csv
-            .scan(&[])
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().collect::<Result<Vec<_>>>().unwrap();
         assert_eq!(batches.len(), 1);
         // employee_no_header.tsv has 3 rows.
         assert_eq!(row_count(&batches[0]), 3);

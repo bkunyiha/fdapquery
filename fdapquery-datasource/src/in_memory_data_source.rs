@@ -31,10 +31,7 @@ impl DataSource for InMemoryDataSource {
         self
     }
 
-    fn scan(
-        &self,
-        projection: &[String],
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+    fn scan(&self, projection: &[String]) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         if projection.is_empty() {
             // No projection: hand back wrapped clones of the underlying batches.
             // arrow_array::RecordBatch is Arc-backed so each clone is cheap.
@@ -114,11 +111,7 @@ mod tests {
     #[test]
     fn scan_empty_projection_returns_all_columns() {
         let ds = InMemoryDataSource::new(sample_schema(), vec![sample_batch()]);
-        let batches: Vec<RecordBatch> = ds
-            .scan(&[])
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        let batches: Vec<RecordBatch> = ds.scan(&[]).unwrap().collect::<Result<Vec<_>>>().unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(row_count(&batches[0]), 3);
         assert_eq!(column_count(&batches[0]), 3);

@@ -169,7 +169,7 @@ mod tests {
     #[test]
     fn plan_aggregate_query_into_two_stages() {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]));
+        let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
         let aggregate = LogicalPlan::Aggregate(Aggregate::new(
             scan,
             vec![col("state")],
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn non_aggregate_query_produces_single_stage() {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]));
+        let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
         let physical_plan = QueryPlanner::new().create_physical_plan(&scan);
 
         let planner = DistributedPlanner::new(three_executor_config());

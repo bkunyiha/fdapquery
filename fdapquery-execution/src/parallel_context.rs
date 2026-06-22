@@ -109,11 +109,9 @@ impl ParallelContext {
     /// Get a `DataFrame` representing the specified CSV file.
     pub fn csv(&self, filename: &str) -> DataFrame {
         let source = CsvDataSource::new(filename, None, true, self.batch_size);
-        DataFrame::new(LogicalPlan::Scan(Scan::new(
-            filename,
-            Arc::new(source),
-            vec![],
-        )))
+        let scan = Scan::new(filename, Arc::new(source), vec![])
+            .expect("ParallelContext::csv: scan construction");
+        DataFrame::new(LogicalPlan::Scan(scan))
     }
 
     /// Register a `DataFrame` with the context.
@@ -123,7 +121,8 @@ impl ParallelContext {
 
     /// Register a data source with the context.
     pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn DataSource>) {
-        let scan = Scan::new(table_name, data_source, vec![]);
+        let scan = Scan::new(table_name, data_source, vec![])
+            .expect("ParallelContext::register_data_source: scan construction");
         self.register(table_name, DataFrame::new(LogicalPlan::Scan(scan)));
     }
 

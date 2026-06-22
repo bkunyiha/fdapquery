@@ -63,7 +63,7 @@ type FlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'st
 impl FlightService for FdapQueryFlightProducer {
     // Per-RPC response stream types. Each `type` line is one of the seven
     // FlightService methods; the type parameter is the per-frame payload.
-    
+
     // `HandshakeResponse`   — auth / protocol-version reply frames from the
     //                         server during the initial handshake.
     type HandshakeStream = FlightStream<HandshakeResponse>;
@@ -491,7 +491,7 @@ mod tests {
 
         // Build a LogicalPlan: scan employee.csv with all columns.
         let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-        let logical_plan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, ds, vec![]));
+        let logical_plan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, ds, vec![]).unwrap());
 
         // Serialise as Action protobuf and wrap in a Ticket.
         let plan_node = serialize_logical_plan(&logical_plan);

@@ -75,11 +75,9 @@ impl ExecutionContext {
     /// Get a `DataFrame` representing the specified CSV file.
     pub fn csv(&self, filename: &str) -> DataFrame {
         let source = CsvDataSource::new(filename, None, true, self.batch_size);
-        DataFrame::new(LogicalPlan::Scan(Scan::new(
-            filename,
-            Arc::new(source),
-            vec![],
-        )))
+        let scan = Scan::new(filename, Arc::new(source), vec![])
+            .expect("ExecutionContext::csv: scan construction");
+        DataFrame::new(LogicalPlan::Scan(scan))
     }
 
     /// Register a `DataFrame` with the context.
@@ -89,7 +87,8 @@ impl ExecutionContext {
 
     /// Register a data source with the context.
     pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn DataSource>) {
-        let scan = Scan::new(table_name, data_source, vec![]);
+        let scan = Scan::new(table_name, data_source, vec![])
+            .expect("ExecutionContext::register_data_source: scan construction");
         self.register(table_name, DataFrame::new(LogicalPlan::Scan(scan)));
     }
 
@@ -147,7 +146,9 @@ mod tests {
     /// scan of an `InMemoryDataSource`. Used by every Fuzzer-backed case.
     fn in_memory_df(name: &str, schema: Schema, batch: RecordBatch) -> DataFrame {
         let source = InMemoryDataSource::new(schema, vec![batch]);
-        DataFrame::new(LogicalPlan::Scan(Scan::new(name, Arc::new(source), vec![])))
+        DataFrame::new(LogicalPlan::Scan(
+            Scan::new(name, Arc::new(source), vec![]).unwrap(),
+        ))
     }
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";

@@ -153,7 +153,9 @@ impl SqlPlanner {
             plan = plan.filter(self.create_logical_expr(selection));
 
             // drop the columns that were added for the selection
-            let schema = plan.schema();
+            let schema = plan
+                .schema()
+                .expect("SqlPlanner: schema lookup after filter");
             let expr: Vec<LogicalExpr> = (0..n)
                 .map(|i| LogicalExpr::Column(schema.fields[i].name.clone()))
                 .collect();
@@ -232,6 +234,7 @@ impl SqlPlanner {
             visit(&filter_expr, &mut accumulator);
             let valid: Vec<String> = table
                 .schema()
+                .expect("SqlPlanner: table schema for selection-column filter")
                 .fields
                 .iter()
                 .map(|f| f.name.clone())
@@ -479,7 +482,8 @@ mod tests {
             "",
             Arc::new(CsvDataSource::new(path, None, true, 1024)),
             vec![],
-        );
+        )
+        .unwrap();
         let mut tables: HashMap<String, DataFrame> = HashMap::new();
         tables.insert(
             "employee".to_string(),

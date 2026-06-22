@@ -183,7 +183,11 @@ impl Fuzzer {
     ) -> LogicalExpr {
         if depth == max_depth {
             // Leaf node: pick a random literal or column reference.
-            let fields_len = input.schema().fields.len();
+            let fields_len = input
+                .schema()
+                .expect("Fuzzer: input schema for random expression")
+                .fields
+                .len();
             return match self.rng.rng().random_range(0..4) {
                 0 => LogicalExpr::ColumnIndex(self.rng.rng().random_range(0..fields_len)),
                 1 => LogicalExpr::LiteralDouble(self.rng.next_double()),
@@ -337,11 +341,9 @@ mod tests {
     fn fuzzer_example() {
         let path = "../testdata/employee.csv";
         let csv = CsvDataSource::new(path, None, true, 10);
-        let input = DataFrame::new(LogicalPlan::Scan(Scan::new(
-            "employee.csv",
-            Arc::new(csv),
-            vec![],
-        )));
+        let input = DataFrame::new(LogicalPlan::Scan(
+            Scan::new("employee.csv", Arc::new(csv), vec![]).unwrap(),
+        ));
         let mut fuzzer = Fuzzer::new();
         for _ in 0..50 {
             // `_plan` is discarded; the test only checks that generation does

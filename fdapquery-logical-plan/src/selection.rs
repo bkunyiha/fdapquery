@@ -4,7 +4,7 @@
 
 use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
-use fdapquery_datatypes::Schema;
+use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
 
 #[derive(Clone)]
@@ -21,7 +21,7 @@ impl Selection {
         }
     }
 
-    pub fn schema(&self) -> Schema {
+    pub fn schema(&self) -> Result<Schema> {
         self.input.schema()
     }
 

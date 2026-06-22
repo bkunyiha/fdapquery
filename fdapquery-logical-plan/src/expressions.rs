@@ -24,8 +24,8 @@
 use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
 use arrow_schema::DataType;
-use fdapquery_datatypes::Field;
 use fdapquery_datatypes::arrow_types::{INT32_TYPE, UINT32_TYPE};
+use fdapquery_datatypes::{Field, Result};
 use std::fmt;
 
 /// Aggregate functions: `Sum` / `Min` / `Max` / `Avg` / `Count` /
@@ -48,14 +48,14 @@ impl AggregateExpr {
     /// Compute the output `Field` for this aggregate against `input`'s schema.
     /// SUM/MIN/MAX/AVG carry the data type of their input expression; COUNT
     /// and COUNT DISTINCT are integer counts.
-    pub fn to_field(&self, input: &LogicalPlan) -> Field {
+    pub fn to_field(&self, input: &LogicalPlan) -> Result<Field> {
         match self {
-            AggregateExpr::Sum(e) => Field::new("SUM", e.to_field(input).data_type),
-            AggregateExpr::Min(e) => Field::new("MIN", e.to_field(input).data_type),
-            AggregateExpr::Max(e) => Field::new("MAX", e.to_field(input).data_type),
-            AggregateExpr::Avg(e) => Field::new("AVG", e.to_field(input).data_type),
-            AggregateExpr::Count(_) => Field::new("COUNT", INT32_TYPE),
-            AggregateExpr::CountDistinct(_) => Field::new("COUNT_DISTINCT", UINT32_TYPE),
+            AggregateExpr::Sum(e) => Ok(Field::new("SUM", e.to_field(input)?.data_type)),
+            AggregateExpr::Min(e) => Ok(Field::new("MIN", e.to_field(input)?.data_type)),
+            AggregateExpr::Max(e) => Ok(Field::new("MAX", e.to_field(input)?.data_type)),
+            AggregateExpr::Avg(e) => Ok(Field::new("AVG", e.to_field(input)?.data_type)),
+            AggregateExpr::Count(_) => Ok(Field::new("COUNT", INT32_TYPE)),
+            AggregateExpr::CountDistinct(_) => Ok(Field::new("COUNT_DISTINCT", UINT32_TYPE)),
         }
     }
 }

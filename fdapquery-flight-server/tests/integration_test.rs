@@ -88,7 +88,7 @@ async fn connect_client(addr: std::net::SocketAddr) -> FlightServiceClient<Chann
 
 fn build_employee_scan_plan() -> LogicalPlan {
     let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-    LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, ds, vec![]))
+    LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, ds, vec![]).unwrap())
 }
 
 fn build_shuffle_writer_task() -> Task {

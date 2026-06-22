@@ -11,7 +11,7 @@ use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
 use crate::projection::Projection;
 use crate::selection::Selection;
-use fdapquery_datatypes::Schema;
+use fdapquery_datatypes::{Result, Schema};
 
 /// Fluent builder over a [`LogicalPlan`].
 #[derive(Clone)]
@@ -75,7 +75,7 @@ impl DataFrame {
     }
 
     /// Schema of the data this DataFrame will produce.
-    pub fn schema(&self) -> Schema {
+    pub fn schema(&self) -> Result<Schema> {
         self.plan.schema()
     }
 
@@ -105,7 +105,8 @@ mod tests {
             "employee",
             Arc::new(CsvDataSource::new(path, None, true, 1024)),
             vec![],
-        );
+        )
+        .unwrap();
         DataFrame::new(LogicalPlan::Scan(scan))
     }
 

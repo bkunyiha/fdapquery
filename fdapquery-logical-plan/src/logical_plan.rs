@@ -11,7 +11,7 @@ use crate::limit::Limit;
 use crate::projection::Projection;
 use crate::scan::Scan;
 use crate::selection::Selection;
-use fdapquery_datatypes::Schema;
+use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
 
 /// A logical plan: a data transformation or action that returns a relation.
@@ -27,9 +27,9 @@ pub enum LogicalPlan {
 
 impl LogicalPlan {
     /// Schema of the data produced by this plan.
-    pub fn schema(&self) -> Schema {
+    pub fn schema(&self) -> Result<Schema> {
         match self {
-            LogicalPlan::Scan(p) => p.schema(),
+            LogicalPlan::Scan(p) => Ok(p.schema()), // Scan caches its schema at construction
             LogicalPlan::Projection(p) => p.schema(),
             LogicalPlan::Selection(p) => p.schema(),
             LogicalPlan::Aggregate(p) => p.schema(),
@@ -104,7 +104,7 @@ mod tests {
     fn employee_scan() -> Scan {
         let path = "../testdata/employee.csv";
         let csv = Arc::new(CsvDataSource::new(path, None, true, 10));
-        Scan::new("employee", csv, vec![])
+        Scan::new("employee", csv, vec![]).unwrap()
     }
 
     #[test]

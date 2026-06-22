@@ -212,11 +212,9 @@ mod tests {
 
     fn csv_df() -> DataFrame {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        DataFrame::new(LogicalPlan::Scan(Scan::new(
-            EMPLOYEE_CSV,
-            Arc::new(csv),
-            vec![],
-        )))
+        DataFrame::new(LogicalPlan::Scan(
+            Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap(),
+        ))
     }
 
     fn roundtrip(df: DataFrame) -> LogicalPlan {

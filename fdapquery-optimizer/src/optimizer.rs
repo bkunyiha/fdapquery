@@ -48,7 +48,10 @@ pub fn extract_columns(expr: &LogicalExpr, input: &LogicalPlan, accum: &mut Hash
     match expr {
         // A column-by-index resolves to a name via the input's schema.
         LogicalExpr::ColumnIndex(i) => {
-            accum.insert(input.schema().fields[*i].name.clone());
+            let schema = input
+                .schema()
+                .expect("extract_columns: input schema for ColumnIndex");
+            accum.insert(schema.fields[*i].name.clone());
         }
         LogicalExpr::Column(name) => {
             accum.insert(name.clone());

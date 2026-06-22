@@ -42,25 +42,31 @@ pub fn deserialize_logical_plan(node: &pb::LogicalPlanNode) -> LogicalPlan {
         // CSV the proto schema is left unset, so we pass `None` and let
         // `CsvDataSource` re-infer from the file.
         let ds = CsvDataSource::new(&csv.path, None, csv.has_header, 1024);
-        LogicalPlan::Scan(Scan::new(
-            &csv.path,
-            Arc::new(ds),
-            csv.projection
-                .as_ref()
-                .map(|p| p.columns.clone())
-                .unwrap_or_default(),
-        ))
+        LogicalPlan::Scan(
+            Scan::new(
+                &csv.path,
+                Arc::new(ds),
+                csv.projection
+                    .as_ref()
+                    .map(|p| p.columns.clone())
+                    .unwrap_or_default(),
+            )
+            .expect("deserialize_logical_plan: CSV scan construction"),
+        )
     } else if let Some(parquet) = &node.parquet_scan {
         let ds = ParquetDataSource::new(&parquet.path);
-        LogicalPlan::Scan(Scan::new(
-            &parquet.path,
-            Arc::new(ds),
-            parquet
-                .projection
-                .as_ref()
-                .map(|p| p.columns.clone())
-                .unwrap_or_default(),
-        ))
+        LogicalPlan::Scan(
+            Scan::new(
+                &parquet.path,
+                Arc::new(ds),
+                parquet
+                    .projection
+                    .as_ref()
+                    .map(|p| p.columns.clone())
+                    .unwrap_or_default(),
+            )
+            .expect("deserialize_logical_plan: Parquet scan construction"),
+        )
     } else if let Some(sel) = &node.selection {
         let input = deserialize_plan_input(node);
         let expr = deserialize_logical_expr(sel.expr.as_ref().expect("SelectionNode.expr unset"));

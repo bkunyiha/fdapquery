@@ -42,9 +42,7 @@ impl PhysicalPlan for ScanExec {
             .ds
             .scan(&self.projection)
             .expect("ScanExec: scan failed to start over data source");
-        Box::new(iter.map(|res| {
-            res.expect("ScanExec: per-batch read error during iteration")
-        }))
+        Box::new(iter.map(|res| res.expect("ScanExec: per-batch read error during iteration")))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {

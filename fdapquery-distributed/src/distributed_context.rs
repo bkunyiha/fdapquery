@@ -43,7 +43,9 @@ impl<C: ExecutorClient> DistributedContext<C> {
     /// Register a CSV file as a table.
     pub fn register_csv(&mut self, table_name: &str, path: &str, has_header: bool) {
         let ds = CsvDataSource::new(path, None, has_header, CSV_BATCH_SIZE);
-        let df = DataFrame::new(LogicalPlan::Scan(Scan::new(path, Arc::new(ds), vec![])));
+        let scan = Scan::new(path, Arc::new(ds), vec![])
+            .expect("DistributedContext::register_csv: scan construction");
+        let df = DataFrame::new(LogicalPlan::Scan(scan));
         self.register(table_name, df);
     }
 

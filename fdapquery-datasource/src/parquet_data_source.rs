@@ -7,9 +7,7 @@
 //! - I/O and parse errors panic (file-not-found, corrupt file, etc.).
 
 use crate::data_source::DataSource;
-use fdapquery_datatypes::{
-    RecordBatch, Result, Schema, schema::from_arrow as schema_from_arrow,
-};
+use fdapquery_datatypes::{RecordBatch, Result, Schema, schema::from_arrow as schema_from_arrow};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
@@ -54,10 +52,7 @@ impl DataSource for ParquetDataSource {
         self
     }
 
-    fn scan(
-        &self,
-        projection: &[String],
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+    fn scan(&self, projection: &[String]) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         let builder = self.open_builder()?;
 
         let builder = if projection.is_empty() {

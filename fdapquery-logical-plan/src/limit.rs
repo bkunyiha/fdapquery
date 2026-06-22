@@ -2,7 +2,7 @@
 //! Logical plan representing a limit. Does not change the input schema.
 
 use crate::logical_plan::LogicalPlan;
-use fdapquery_datatypes::Schema;
+use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
 
 #[derive(Clone)]
@@ -19,7 +19,7 @@ impl Limit {
         }
     }
 
-    pub fn schema(&self) -> Schema {
+    pub fn schema(&self) -> Result<Schema> {
         self.input.schema()
     }
 

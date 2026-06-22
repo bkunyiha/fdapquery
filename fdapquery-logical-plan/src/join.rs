@@ -4,7 +4,7 @@
 //! duplicate of any join key whose left and right names are identical.
 
 use crate::logical_plan::LogicalPlan;
-use fdapquery_datatypes::{Field, Schema};
+use fdapquery_datatypes::{Field, Result, Schema};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -50,7 +50,7 @@ impl Join {
         }
     }
 
-    pub fn schema(&self) -> Schema {
+    pub fn schema(&self) -> Result<Schema> {
         // Keys whose left and right names are identical produce a single output
         // column rather than two ie if you join two tables using columns with the same name,
         // the output schema should include that join column only once.
@@ -61,12 +61,14 @@ impl Join {
             .map(|(l, _)| l.clone())
             .collect();
 
+        let left_schema = self.left.schema()?;
+        let right_schema = self.right.schema()?;
+
         let fields: Vec<Field> = match self.join_type {
             JoinType::Inner | JoinType::Left => {
-                let mut fs = self.left.schema().fields;
+                let mut fs = left_schema.fields;
                 fs.extend(
-                    self.right
-                        .schema()
+                    right_schema
                         .fields
                         .into_iter()
                         .filter(|f| !duplicate_keys.contains(&f.name)),
@@ -74,18 +76,16 @@ impl Join {
                 fs
             }
             JoinType::Right => {
-                let mut fs: Vec<Field> = self
-                    .left
-                    .schema()
+                let mut fs: Vec<Field> = left_schema
                     .fields
                     .into_iter()
                     .filter(|f| !duplicate_keys.contains(&f.name))
                     .collect();
-                fs.extend(self.right.schema().fields);
+                fs.extend(right_schema.fields);
                 fs
             }
         };
-        Schema::new(fields)
+        Ok(Schema::new(fields))
     }
 
     pub fn children(&self) -> Vec<&LogicalPlan> {

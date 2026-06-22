@@ -55,10 +55,18 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> LogicalP
             // If nothing has been requested yet (the join is at the root),
             // request every column from both sides.
             if column_names.is_empty() {
-                for f in j.left.schema().fields {
+                let left_schema = j
+                    .left
+                    .schema()
+                    .expect("ProjectionPushDown: join left schema");
+                for f in left_schema.fields {
                     column_names.insert(f.name);
                 }
-                for f in j.right.schema().fields {
+                let right_schema = j
+                    .right
+                    .schema()
+                    .expect("ProjectionPushDown: join right schema");
+                for f in right_schema.fields {
                     column_names.insert(f.name);
                 }
             }
@@ -81,11 +89,10 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> LogicalP
                 .filter(|name| column_names.contains(name))
                 .collect();
             pushdown.sort();
-            LogicalPlan::Scan(Scan::new(
-                s.path.clone(),
-                Arc::clone(&s.data_source),
-                pushdown,
-            ))
+            LogicalPlan::Scan(
+                Scan::new(s.path.clone(), Arc::clone(&s.data_source), pushdown)
+                    .expect("ProjectionPushDownRule: scan re-construction"),
+            )
         }
     }
 }
@@ -104,7 +111,8 @@ mod tests {
             "employee",
             Arc::new(CsvDataSource::new(path, None, true, 1024)),
             vec![],
-        );
+        )
+        .unwrap();
         DataFrame::new(LogicalPlan::Scan(scan))
     }
 

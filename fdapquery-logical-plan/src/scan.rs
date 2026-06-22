@@ -4,7 +4,7 @@
 
 use crate::logical_plan::LogicalPlan;
 use fdapquery_datasource::DataSource;
-use fdapquery_datatypes::Schema;
+use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
 use std::sync::Arc;
 
@@ -23,25 +23,23 @@ impl Scan {
         path: impl Into<String>,
         data_source: Arc<dyn DataSource>,
         projection: Vec<String>,
-    ) -> Self {
-        let schema = Self::derive_schema(data_source.as_ref(), &projection);
-        Self {
+    ) -> Result<Self> {
+        let schema = Self::derive_schema(data_source.as_ref(), &projection)?;
+        Ok(Self {
             path: path.into(),
             data_source,
             projection,
             schema,
-        }
+        })
     }
 
     /// sub-schema when a projection is given.
-    fn derive_schema(data_source: &dyn DataSource, projection: &[String]) -> Schema {
+    fn derive_schema(data_source: &dyn DataSource, projection: &[String]) -> Result<Schema> {
         let schema = data_source.schema();
         if projection.is_empty() {
-            schema
+            Ok(schema)
         } else {
-            schema
-                .select(projection)
-                .expect("Scan::derive_schema: projection columns must be present in schema")
+            schema.select(projection)
         }
     }
 

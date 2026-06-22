@@ -73,8 +73,15 @@ impl QueryPlanner {
                     .iter()
                     .map(|e| self.create_physical_expr(e, &p.input))
                     .collect();
-                let projection_schema =
-                    Schema::new(p.expr.iter().map(|e| e.to_field(&p.input)).collect());
+                let projection_schema = Schema::new(
+                    p.expr
+                        .iter()
+                        .map(|e| {
+                            e.to_field(&p.input)
+                                .expect("QueryPlanner: projection to_field")
+                        })
+                        .collect(),
+                );
                 Arc::new(ProjectionExec::new(
                     input,
                     projection_schema,
@@ -97,7 +104,8 @@ impl QueryPlanner {
                     input,
                     group_expr,
                     aggregate_expr,
-                    plan.schema(),
+                    plan.schema()
+                        .expect("QueryPlanner: aggregate output schema"),
                 ))
             }
             LogicalPlan::Limit(l) => {
@@ -107,8 +115,14 @@ impl QueryPlanner {
             LogicalPlan::Join(j) => {
                 let left_plan = self.create_physical_plan(&j.left);
                 let right_plan = self.create_physical_plan(&j.right);
-                let left_schema = j.left.schema();
-                let right_schema = j.right.schema();
+                let left_schema = j
+                    .left
+                    .schema()
+                    .expect("QueryPlanner: join left input schema");
+                let right_schema = j
+                    .right
+                    .schema()
+                    .expect("QueryPlanner: join right input schema");
 
                 // Resolve join-key column names to indices in each input schema.
                 let left_keys: Vec<usize> = j
@@ -161,7 +175,7 @@ impl QueryPlanner {
                     j.join_type.clone(),
                     left_keys,
                     right_keys,
-                    plan.schema(),
+                    plan.schema().expect("QueryPlanner: join output schema"),
                     right_columns_to_exclude,
                 ))
             }
@@ -231,6 +245,7 @@ impl QueryPlanner {
             LogicalExpr::Column(name) => {
                 let i = input
                     .schema()
+                    .expect("QueryPlanner: input schema for Column lookup")
                     .fields
                     .iter()
                     .position(|f| &f.name == name)
@@ -331,7 +346,9 @@ mod tests {
             Field::new("max_fare", DOUBLE_TYPE),
         ]);
         let data_source = Arc::new(InMemoryDataSource::new(schema, vec![]));
-        let df = DataFrame::new(LogicalPlan::Scan(Scan::new("", data_source, vec![])));
+        let df = DataFrame::new(LogicalPlan::Scan(
+            Scan::new("", data_source, vec![]).unwrap(),
+        ));
 
         // SELECT passenger_count, MAX(max_fare) ... GROUP BY passenger_count
         let plan = df

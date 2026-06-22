@@ -4,7 +4,7 @@
 
 use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
-use fdapquery_datatypes::Schema;
+use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
 
 #[derive(Clone)]
@@ -21,8 +21,13 @@ impl Projection {
         }
     }
 
-    pub fn schema(&self) -> Schema {
-        Schema::new(self.expr.iter().map(|e| e.to_field(&self.input)).collect())
+    pub fn schema(&self) -> Result<Schema> {
+        let fields = self
+            .expr
+            .iter()
+            .map(|e| e.to_field(&self.input))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Schema::new(fields))
     }
 
     pub fn children(&self) -> Vec<&LogicalPlan> {

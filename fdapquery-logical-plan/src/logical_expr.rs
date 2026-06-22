@@ -40,11 +40,11 @@
 use crate::expressions::AggregateExpr;
 use crate::logical_plan::LogicalPlan;
 use arrow_schema::DataType;
-use fdapquery_datatypes::Field;
 use fdapquery_datatypes::arrow_types::{
     BOOLEAN_TYPE, DATE_DAY_TYPE, DOUBLE_TYPE, FLOAT_TYPE, INT64_TYPE, INTERVAL_DAY_TIME_TYPE,
     STRING_TYPE,
 };
+use fdapquery_datatypes::{FdapQueryError, Field, Result};
 use std::fmt;
 
 /// A logical expression used in logical query plans. It provides the planning-
@@ -162,56 +162,71 @@ pub enum LogicalExpr {
 
 impl LogicalExpr {
     /// Metadata about the value this expression produces against `input`.
-    pub fn to_field(&self, input: &LogicalPlan) -> Field {
+    pub fn to_field(&self, input: &LogicalPlan) -> Result<Field> {
         match self {
             LogicalExpr::Column(name) => {
-                let schema = input.schema();
+                let schema = input.schema()?;
                 schema
                     .fields
                     .iter()
                     .find(|f| &f.name == name)
                     .cloned()
-                    .unwrap_or_else(|| {
+                    .ok_or_else(|| {
                         let names: Vec<String> =
                             schema.fields.iter().map(|f| f.name.clone()).collect();
-                        panic!("No column named '{}' in {:?}", name, names)
+                        FdapQueryError::SchemaError(format!(
+                            "LogicalExpr::to_field: no column named '{name}' in {names:?}"
+                        ))
                     })
             }
-            LogicalExpr::ColumnIndex(i) => input.schema().fields[*i].clone(),
-            LogicalExpr::LiteralString(s) => Field::new(s.clone(), STRING_TYPE),
-            LogicalExpr::LiteralLong(n) => Field::new(n.to_string(), INT64_TYPE),
-            LogicalExpr::LiteralFloat(n) => Field::new(n.to_string(), FLOAT_TYPE),
-            LogicalExpr::LiteralDouble(n) => Field::new(n.to_string(), DOUBLE_TYPE),
+            LogicalExpr::ColumnIndex(i) => {
+                let schema = input.schema()?;
+                schema.fields.get(*i).cloned().ok_or_else(|| {
+                    FdapQueryError::Internal(format!(
+                        "LogicalExpr::to_field: column index {i} out of bounds \
+                         (schema has {} fields)",
+                        schema.fields.len()
+                    ))
+                })
+            }
+            LogicalExpr::LiteralString(s) => Ok(Field::new(s.clone(), STRING_TYPE)),
+            LogicalExpr::LiteralLong(n) => Ok(Field::new(n.to_string(), INT64_TYPE)),
+            LogicalExpr::LiteralFloat(n) => Ok(Field::new(n.to_string(), FLOAT_TYPE)),
+            LogicalExpr::LiteralDouble(n) => Ok(Field::new(n.to_string(), DOUBLE_TYPE)),
             // `NaiveDate`'s `Display` emits the ISO-8601 form ("YYYY-MM-DD").
-            LogicalExpr::LiteralDate(d) => Field::new(d.to_string(), DATE_DAY_TYPE),
+            LogicalExpr::LiteralDate(d) => Ok(Field::new(d.to_string(), DATE_DAY_TYPE)),
             LogicalExpr::LiteralIntervalDays(days) => {
-                Field::new(format!("{days} days"), INTERVAL_DAY_TIME_TYPE)
+                Ok(Field::new(format!("{days} days"), INTERVAL_DAY_TIME_TYPE))
             }
-            LogicalExpr::DateSubtractInterval { .. } => Field::new("date_subtract", DATE_DAY_TYPE),
-            LogicalExpr::DateAddInterval { .. } => Field::new("date_add", DATE_DAY_TYPE),
+            LogicalExpr::DateSubtractInterval { .. } => {
+                Ok(Field::new("date_subtract", DATE_DAY_TYPE))
+            }
+            LogicalExpr::DateAddInterval { .. } => Ok(Field::new("date_add", DATE_DAY_TYPE)),
             LogicalExpr::Cast { expr, data_type } => {
-                Field::new(expr.to_field(input).name, data_type.clone())
+                Ok(Field::new(expr.to_field(input)?.name, data_type.clone()))
             }
-            LogicalExpr::Not(_) => Field::new("not", BOOLEAN_TYPE),
-            LogicalExpr::Eq { .. } => Field::new("eq", BOOLEAN_TYPE),
-            LogicalExpr::Neq { .. } => Field::new("neq", BOOLEAN_TYPE),
-            LogicalExpr::Gt { .. } => Field::new("gt", BOOLEAN_TYPE),
-            LogicalExpr::GtEq { .. } => Field::new("gteq", BOOLEAN_TYPE),
-            LogicalExpr::Lt { .. } => Field::new("lt", BOOLEAN_TYPE),
-            LogicalExpr::LtEq { .. } => Field::new("lteq", BOOLEAN_TYPE),
-            LogicalExpr::And { .. } => Field::new("and", BOOLEAN_TYPE),
-            LogicalExpr::Or { .. } => Field::new("or", BOOLEAN_TYPE),
-            LogicalExpr::Add { l, .. } => Field::new("add", l.to_field(input).data_type),
-            LogicalExpr::Subtract { l, .. } => Field::new("subtract", l.to_field(input).data_type),
-            LogicalExpr::Multiply { l, .. } => Field::new("mult", l.to_field(input).data_type),
-            LogicalExpr::Divide { l, .. } => Field::new("div", l.to_field(input).data_type),
-            LogicalExpr::Modulus { l, .. } => Field::new("mod", l.to_field(input).data_type),
+            LogicalExpr::Not(_) => Ok(Field::new("not", BOOLEAN_TYPE)),
+            LogicalExpr::Eq { .. } => Ok(Field::new("eq", BOOLEAN_TYPE)),
+            LogicalExpr::Neq { .. } => Ok(Field::new("neq", BOOLEAN_TYPE)),
+            LogicalExpr::Gt { .. } => Ok(Field::new("gt", BOOLEAN_TYPE)),
+            LogicalExpr::GtEq { .. } => Ok(Field::new("gteq", BOOLEAN_TYPE)),
+            LogicalExpr::Lt { .. } => Ok(Field::new("lt", BOOLEAN_TYPE)),
+            LogicalExpr::LtEq { .. } => Ok(Field::new("lteq", BOOLEAN_TYPE)),
+            LogicalExpr::And { .. } => Ok(Field::new("and", BOOLEAN_TYPE)),
+            LogicalExpr::Or { .. } => Ok(Field::new("or", BOOLEAN_TYPE)),
+            LogicalExpr::Add { l, .. } => Ok(Field::new("add", l.to_field(input)?.data_type)),
+            LogicalExpr::Subtract { l, .. } => {
+                Ok(Field::new("subtract", l.to_field(input)?.data_type))
+            }
+            LogicalExpr::Multiply { l, .. } => Ok(Field::new("mult", l.to_field(input)?.data_type)),
+            LogicalExpr::Divide { l, .. } => Ok(Field::new("div", l.to_field(input)?.data_type)),
+            LogicalExpr::Modulus { l, .. } => Ok(Field::new("mod", l.to_field(input)?.data_type)),
             LogicalExpr::Alias { expr, alias } => {
-                Field::new(alias.clone(), expr.to_field(input).data_type)
+                Ok(Field::new(alias.clone(), expr.to_field(input)?.data_type))
             }
             LogicalExpr::ScalarFunction {
                 name, return_type, ..
-            } => Field::new(name.clone(), return_type.clone()),
+            } => Ok(Field::new(name.clone(), return_type.clone())),
             // An aggregate used as an expression delegates to the inner
             // `AggregateExpr` for its field metadata.
             LogicalExpr::AggregateExpr(agg) => agg.to_field(input),

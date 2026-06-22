@@ -5,7 +5,7 @@
 use crate::expressions::AggregateExpr;
 use crate::logical_expr::LogicalExpr;
 use crate::logical_plan::LogicalPlan;
-use fdapquery_datatypes::{Field, Schema};
+use fdapquery_datatypes::{Field, Result, Schema};
 use std::fmt;
 
 #[derive(Clone)]
@@ -31,14 +31,19 @@ impl Aggregate {
         }
     }
 
-    pub fn schema(&self) -> Schema {
-        let mut fields: Vec<Field> = self
+    pub fn schema(&self) -> Result<Schema> {
+        let group_fields = self
             .group_expr
             .iter()
             .map(|e| e.to_field(&self.input))
-            .collect();
-        fields.extend(self.aggregate_expr.iter().map(|e| e.to_field(&self.input)));
-        Schema::new(fields)
+            .collect::<Result<Vec<Field>>>()?;
+        let agg_fields = self
+            .aggregate_expr
+            .iter()
+            .map(|e| e.to_field(&self.input))
+            .collect::<Result<Vec<Field>>>()?;
+        let fields: Vec<Field> = group_fields.into_iter().chain(agg_fields).collect();
+        Ok(Schema::new(fields))
     }
 
     pub fn children(&self) -> Vec<&LogicalPlan> {
