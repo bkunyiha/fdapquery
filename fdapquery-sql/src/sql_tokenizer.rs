@@ -5,10 +5,12 @@
 //!   input as a `Vec<char>` and works in char offsets. This makes
 //!   `end_offset` a stable character index and avoids byte/char-boundary
 //!   hazards.
-//! - Tokenization errors are reported via `panic!` (§3.6).
+//! - Tokenization errors are surfaced as `FdapQueryError::SqlParse(_)`
+//!   from the public `tokenize` entry point.
 
 use crate::token_stream::TokenStream;
 use crate::tokens::{Keyword, Literal, Symbol, Token, TokenType};
+use fdapquery_datatypes::{FdapQueryError, Result};
 
 /// Lexer over a SQL string.
 pub struct SqlTokenizer {
@@ -35,38 +37,41 @@ impl SqlTokenizer {
     }
 
     /// Tokenize the whole input.
-    pub fn tokenize(&mut self) -> TokenStream {
+    pub fn tokenize(&mut self) -> Result<TokenStream> {
         let mut list = Vec::new();
-        while let Some(token) = self.next_token() {
+        while let Some(token) = self.next_token()? {
             list.push(token);
         }
-        TokenStream::new(list)
+        Ok(TokenStream::new(list))
     }
 
-    fn next_token(&mut self) -> Option<Token> {
+    fn next_token(&mut self) -> Result<Option<Token>> {
         self.offset = self.skip_whitespace(self.offset);
         if self.offset >= self.len() {
-            return None;
+            return Ok(None);
         }
         let ch = self.chars[self.offset];
         if Literal::is_identifier_start(ch) {
-            let token = self.scan_identifier(self.offset);
+            let token = self.scan_identifier(self.offset)?;
             self.offset = token.end_offset;
-            Some(token)
+            Ok(Some(token))
         } else if Literal::is_number_start(ch) {
             let token = self.scan_number(self.offset);
             self.offset = token.end_offset;
-            Some(token)
+            Ok(Some(token))
         } else if Symbol::is_symbol_start(ch) {
             let token = self.scan_symbol(self.offset);
             self.offset = token.end_offset;
-            Some(token)
+            Ok(Some(token))
         } else if Literal::is_chars_start(ch) {
-            let token = self.scan_chars(self.offset, ch);
+            let token = self.scan_chars(self.offset, ch)?;
             self.offset = token.end_offset;
-            Some(token)
+            Ok(Some(token))
         } else {
-            panic!("Unexpected character '{}' at position {}", ch, self.offset);
+            Err(FdapQueryError::SqlParse(format!(
+                "unexpected character '{ch}' at position {offset}",
+                offset = self.offset
+            )))
         }
     }
 
@@ -101,27 +106,27 @@ impl SqlTokenizer {
         Token::new(self.substring(start, end), TokenType::Literal(lit), end)
     }
 
-    fn scan_identifier(&self, start: usize) -> Token {
+    fn scan_identifier(&self, start: usize) -> Result<Token> {
         // Back-quoted identifier: `like this`.
         if self.chars[start] == '`' {
-            let end = self.get_offset_until_terminated_char('`', start + 1);
-            return Token::new(
+            let end = self.get_offset_until_terminated_char('`', start + 1)?;
+            return Ok(Token::new(
                 self.substring(start + 1, end),
                 TokenType::Literal(Literal::Identifier),
                 end + 1,
-            );
+            ));
         }
         let end = self.index_of_first(start, |ch| !Literal::is_identifier_part(ch));
         let text = self.substring(start, end);
         if self.is_ambiguous_identifier(&text) {
             let token_type = self.process_ambiguous_identifier(end, &text);
-            Token::new(text, token_type, end)
+            Ok(Token::new(text, token_type, end))
         } else {
             let token_type = match Keyword::text_of(&text) {
                 Some(keyword) => TokenType::Keyword(keyword),
                 None => TokenType::Literal(Literal::Identifier),
             };
-            Token::new(text, token_type, end)
+            Ok(Token::new(text, token_type, end))
         }
     }
 
@@ -147,10 +152,12 @@ impl SqlTokenizer {
         }
     }
 
-    fn get_offset_until_terminated_char(&self, terminated: char, start: usize) -> usize {
+    fn get_offset_until_terminated_char(&self, terminated: char, start: usize) -> Result<usize> {
         match self.chars[start..].iter().position(|&c| c == terminated) {
-            Some(pos) => start + pos,
-            None => panic!("Must contain {terminated} in remain sql[{start} .. end]"),
+            Some(pos) => Ok(start + pos),
+            None => Err(FdapQueryError::SqlParse(format!(
+                "unterminated `{terminated}` starting at position {start}"
+            ))),
         }
     }
 
@@ -169,7 +176,7 @@ impl SqlTokenizer {
     }
 
     /// quote escape (`''` or `""`).
-    fn scan_chars(&self, start: usize, terminated: char) -> Token {
+    fn scan_chars(&self, start: usize, terminated: char) -> Result<Token> {
         let mut builder = String::new();
         let mut i = start + 1;
         while i < self.len() {
@@ -179,14 +186,20 @@ impl SqlTokenizer {
                     builder.push(terminated);
                     i += 2;
                 } else {
-                    return Token::new(builder, TokenType::Literal(Literal::String), i + 1);
+                    return Ok(Token::new(
+                        builder,
+                        TokenType::Literal(Literal::String),
+                        i + 1,
+                    ));
                 }
             } else {
                 builder.push(ch);
                 i += 1;
             }
         }
-        panic!("Unterminated string starting at position {start}");
+        Err(FdapQueryError::SqlParse(format!(
+            "unterminated string starting at position {start}"
+        )))
     }
 
     /// First index `>= start` whose char satisfies `predicate`, or the input
@@ -217,7 +230,7 @@ mod tests {
         Token::new(text, TokenType::Literal(l), end)
     }
     fn tokenize(sql: &str) -> Vec<Token> {
-        SqlTokenizer::new(sql).tokenize().tokens
+        SqlTokenizer::new(sql).tokenize().unwrap().tokens
     }
 
     #[test]
@@ -463,9 +476,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Unexpected character")]
-    fn tokenize_unrecognized_character_should_fail() {
-        SqlTokenizer::new("SELECT $ FROM t").tokenize();
+    fn tokenize_unrecognized_character_returns_sql_parse_error() {
+        // `expect_err` needs `T: Debug`, but `TokenStream` doesn't derive it;
+        // discard the Ok payload so the error path is the only thing typed.
+        let err = SqlTokenizer::new("SELECT $ FROM t")
+            .tokenize()
+            .map(|_| ())
+            .expect_err("'$' should fail to tokenize");
+        assert!(matches!(err, FdapQueryError::SqlParse(_)));
+        assert!(err.to_string().contains("unexpected character '$'"));
     }
 
     #[test]

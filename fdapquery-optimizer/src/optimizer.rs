@@ -3,9 +3,10 @@
 //! the column names an expression references.
 //!
 //! `extract_columns_list` takes a slice of expressions; `extract_columns`
-//! takes a single expression. Unreachable invariants are reported via
-//! `panic!` (§3.6).
+//! takes a single expression. Both surface schema-lookup and
+//! unsupported-expression failures as `FdapQueryError` variants.
 
+use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_logical_plan::{AggregateExpr, LogicalExpr, LogicalPlan};
 use std::collections::HashSet;
 
@@ -13,7 +14,7 @@ use crate::projection_push_down_rule::ProjectionPushDownRule;
 
 /// A logical-plan rewrite rule.
 pub trait OptimizerRule {
-    fn optimize(&self, plan: &LogicalPlan) -> LogicalPlan;
+    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan>;
 }
 
 /// Runs the optimisation rules in a fixed order.
@@ -26,9 +27,8 @@ impl Optimizer {
     }
 
     /// apply a list of rules in order.
-    pub fn optimize(&self, plan: &LogicalPlan) -> LogicalPlan {
-        let rule = ProjectionPushDownRule;
-        rule.optimize(plan)
+    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        ProjectionPushDownRule.optimize(plan)
     }
 }
 
@@ -37,20 +37,23 @@ pub fn extract_columns_list(
     exprs: &[LogicalExpr],
     input: &LogicalPlan,
     accum: &mut HashSet<String>,
-) {
+) -> Result<()> {
     for expr in exprs {
-        extract_columns(expr, input, accum);
+        extract_columns(expr, input, accum)?;
     }
+    Ok(())
 }
 
 /// Collect the column names referenced by a single expression.
-pub fn extract_columns(expr: &LogicalExpr, input: &LogicalPlan, accum: &mut HashSet<String>) {
+pub fn extract_columns(
+    expr: &LogicalExpr,
+    input: &LogicalPlan,
+    accum: &mut HashSet<String>,
+) -> Result<()> {
     match expr {
         // A column-by-index resolves to a name via the input's schema.
         LogicalExpr::ColumnIndex(i) => {
-            let schema = input
-                .schema()
-                .expect("extract_columns: input schema for ColumnIndex");
+            let schema = input.schema()?;
             accum.insert(schema.fields[*i].name.clone());
         }
         LogicalExpr::Column(name) => {
@@ -70,11 +73,11 @@ pub fn extract_columns(expr: &LogicalExpr, input: &LogicalPlan, accum: &mut Hash
         | LogicalExpr::Multiply { l, r }
         | LogicalExpr::Divide { l, r }
         | LogicalExpr::Modulus { l, r } => {
-            extract_columns(l, input, accum);
-            extract_columns(r, input, accum);
+            extract_columns(l, input, accum)?;
+            extract_columns(r, input, accum)?;
         }
-        LogicalExpr::Alias { expr, .. } => extract_columns(expr, input, accum),
-        LogicalExpr::Cast { expr, .. } => extract_columns(expr, input, accum),
+        LogicalExpr::Alias { expr, .. } => extract_columns(expr, input, accum)?,
+        LogicalExpr::Cast { expr, .. } => extract_columns(expr, input, accum)?,
         // Literals reference no columns.
         LogicalExpr::LiteralString(_)
         | LogicalExpr::LiteralLong(_)
@@ -83,15 +86,20 @@ pub fn extract_columns(expr: &LogicalExpr, input: &LogicalPlan, accum: &mut Hash
         | LogicalExpr::LiteralIntervalDays(_) => {}
         LogicalExpr::DateSubtractInterval { date, interval }
         | LogicalExpr::DateAddInterval { date, interval } => {
-            extract_columns(date, input, accum);
-            extract_columns(interval, input, accum);
+            extract_columns(date, input, accum)?;
+            extract_columns(interval, input, accum)?;
         }
         // Anything else (`LiteralFloat`, `Not`, `ScalarFunction`, or a bare
         // `AggregateExpr`) is unsupported here. Aggregates never reach this
         // function: the rule first unwraps each to its argument expression
         // (see `aggregate_inner` and `projection_push_down_rule.rs`).
-        other => panic!("extractColumns does not support expression: {other:?}"),
+        other => {
+            return Err(FdapQueryError::NotImplemented(format!(
+                "extract_columns does not support expression: {other:?}"
+            )));
+        }
     }
+    Ok(())
 }
 
 /// The argument expression inside an aggregate.

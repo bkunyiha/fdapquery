@@ -63,13 +63,19 @@ impl ExecutionContext {
 
     /// Create a `DataFrame` for the given SQL `SELECT`.
     pub fn sql(&self, sql: &str) -> DataFrame {
-        let tokens = SqlTokenizer::new(sql).tokenize();
-        let parsed = SqlParser::new(tokens).parse(0);
+        let tokens = SqlTokenizer::new(sql)
+            .tokenize()
+            .expect("ExecutionContext::sql: tokenize");
+        let parsed = SqlParser::new(tokens)
+            .parse(0)
+            .expect("ExecutionContext::sql: parse");
         let select = match parsed {
             Some(SqlExpr::Select(select)) => *select,
             other => panic!("Expected a SELECT statement, found {other:?}"),
         };
-        SqlPlanner::new().create_data_frame(&select, &self.tables)
+        SqlPlanner::new()
+            .create_data_frame(&select, &self.tables)
+            .expect("ExecutionContext::sql: plan")
     }
 
     /// Get a `DataFrame` representing the specified CSV file.
@@ -111,7 +117,9 @@ impl ExecutionContext {
     /// `"single-node"` and the shuffle directory is a default path that's
     /// never actually written to (no shuffle ops run in single-process mode).
     pub fn execute(&self, plan: &LogicalPlan) -> Box<dyn Iterator<Item = RecordBatch>> {
-        let optimized = Optimizer::new().optimize(plan);
+        let optimized = Optimizer::new()
+            .optimize(plan)
+            .expect("ExecutionContext::execute: optimize");
         let physical = QueryPlanner::new().create_physical_plan(&optimized);
         let ctx = ExecutorContext::new("single-node", "localhost", 0, "/tmp/rquery-single-node");
         physical.execute(&ctx)

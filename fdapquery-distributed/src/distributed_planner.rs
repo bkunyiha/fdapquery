@@ -176,7 +176,7 @@ mod tests {
             vec![sum(col("salary"))],
         ));
 
-        let optimized = Optimizer::new().optimize(&aggregate);
+        let optimized = Optimizer::new().optimize(&aggregate).unwrap();
         let physical_plan = QueryPlanner::new().create_physical_plan(&optimized);
 
         let planner = DistributedPlanner::new(three_executor_config());

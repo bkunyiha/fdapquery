@@ -8,11 +8,13 @@
 //!   without an external `IndexSet` dependency.
 //! - `parseDataType("double")` maps to arrow-rs `DataType::Float64`, so a cast
 //!   renders as `Float64`; see the logical-plan note on `Cast` `Display`.
-//! - SQL errors are reported via `panic!` (§3.6).
+//! - SQL planning errors surface as `FdapQueryError::Plan(_)` from the public
+//!   `create_data_frame` entry point.
 
 use crate::expressions::{SqlExpr, SqlSelect};
 use arrow_schema::DataType;
 use fdapquery_datatypes::arrow_types::DOUBLE_TYPE;
+use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_logical_plan::{
     AggregateExpr, DataFrame, LogicalExpr, avg, cast, count, max, min, sum,
 };
@@ -32,19 +34,18 @@ impl SqlPlanner {
         &self,
         select: &SqlSelect,
         tables: &HashMap<String, DataFrame>,
-    ) -> DataFrame {
+    ) -> Result<DataFrame> {
         // get a reference to the data source
-        let table = tables
-            .get(&select.table_name)
-            .cloned()
-            .unwrap_or_else(|| panic!("No table named '{}'", select.table_name));
+        let table = tables.get(&select.table_name).cloned().ok_or_else(|| {
+            FdapQueryError::Plan(format!("no table named '{}'", select.table_name))
+        })?;
 
         // translate projection sql expressions into logical expressions
         let projection_expr: Vec<LogicalExpr> = select
             .projection
             .iter()
             .map(|e| self.create_logical_expr(e))
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         // columns referenced in the projection
         let column_names_in_projection = get_referenced_columns(&projection_expr);
@@ -54,11 +55,13 @@ impl SqlPlanner {
             .filter(|e| is_aggregate_expr(e))
             .count();
         if aggregate_expr_count == 0 && !select.group_by.is_empty() {
-            panic!("GROUP BY without aggregate expressions is not supported");
+            return Err(FdapQueryError::NotImplemented(
+                "GROUP BY without aggregate expressions is not supported".into(),
+            ));
         }
 
         // does the filter reference anything not in the final projection?
-        let column_names_in_selection = self.get_columns_referenced_by_selection(select, &table);
+        let column_names_in_selection = self.get_columns_referenced_by_selection(select, &table)?;
 
         if aggregate_expr_count == 0 {
             return self.plan_non_aggregate_query(
@@ -89,9 +92,10 @@ impl SqlPlanner {
                     });
                     aggr_expr.push((**agg).clone());
                 } else {
-                    panic!(
-                        "Alias in aggregate query must wrap an aggregate expression, found: {inner:?}"
-                    );
+                    return Err(FdapQueryError::Plan(format!(
+                        "alias in aggregate query must wrap an aggregate expression, \
+                         found: {inner:?}"
+                    )));
                 }
             } else {
                 projection.push(LogicalExpr::ColumnIndex(group_count));
@@ -105,15 +109,15 @@ impl SqlPlanner {
             &column_names_in_selection,
             table,
             aggr_expr,
-        );
+        )?;
         plan = plan.project(projection);
         if let Some(having) = &select.having {
-            plan = plan.filter(self.create_logical_expr(having));
+            plan = plan.filter(self.create_logical_expr(having)?);
         }
         if let Some(limit) = select.limit {
             plan = plan.limit(limit);
         }
-        plan
+        Ok(plan)
     }
 
     fn plan_non_aggregate_query(
@@ -123,7 +127,7 @@ impl SqlPlanner {
         projection_expr: Vec<LogicalExpr>,
         column_names_in_selection: &[String],
         column_names_in_projection: &[String],
-    ) -> DataFrame {
+    ) -> Result<DataFrame> {
         let mut plan = df;
 
         let selection = match &select.selection {
@@ -132,7 +136,7 @@ impl SqlPlanner {
                 if let Some(limit) = select.limit {
                     plan = plan.limit(limit);
                 }
-                return plan;
+                return Ok(plan);
             }
             Some(s) => s,
         };
@@ -144,18 +148,16 @@ impl SqlPlanner {
         // the selection needs, filter, then drop them again.
         if missing.is_empty() {
             plan = plan.project(projection_expr);
-            plan = plan.filter(self.create_logical_expr(selection));
+            plan = plan.filter(self.create_logical_expr(selection)?);
         } else {
             let n = projection_expr.len();
             let mut proj = projection_expr;
             proj.extend(missing.iter().map(|c| LogicalExpr::Column(c.clone())));
             plan = plan.project(proj);
-            plan = plan.filter(self.create_logical_expr(selection));
+            plan = plan.filter(self.create_logical_expr(selection)?);
 
             // drop the columns that were added for the selection
-            let schema = plan
-                .schema()
-                .expect("SqlPlanner: schema lookup after filter");
+            let schema = plan.schema()?;
             let expr: Vec<LogicalExpr> = (0..n)
                 .map(|i| LogicalExpr::Column(schema.fields[i].name.clone()))
                 .collect();
@@ -165,7 +167,7 @@ impl SqlPlanner {
         if let Some(limit) = select.limit {
             plan = plan.limit(limit);
         }
-        plan
+        Ok(plan)
     }
 
     fn plan_aggregate_query(
@@ -175,7 +177,7 @@ impl SqlPlanner {
         column_names_in_selection: &[String],
         df: DataFrame,
         aggregate_expr: Vec<AggregateExpr>,
-    ) -> DataFrame {
+    ) -> Result<DataFrame> {
         let mut plan = df;
         let projection_without_aggregates: Vec<LogicalExpr> = projection_expr
             .iter()
@@ -206,12 +208,12 @@ impl SqlPlanner {
 
             if missing.is_empty() {
                 plan = plan.project(projection_without_aggregates.clone());
-                plan = plan.filter(self.create_logical_expr(selection));
+                plan = plan.filter(self.create_logical_expr(selection)?);
             } else {
                 let mut proj = projection_without_aggregates.clone();
                 proj.extend(missing.iter().map(|c| LogicalExpr::Column(c.clone())));
                 plan = plan.project(proj);
-                plan = plan.filter(self.create_logical_expr(selection));
+                plan = plan.filter(self.create_logical_expr(selection)?);
             }
         }
 
@@ -219,47 +221,47 @@ impl SqlPlanner {
             .group_by
             .iter()
             .map(|e| self.create_logical_expr(e))
-            .collect();
-        plan.aggregate(group_by_expr, aggregate_expr)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(plan.aggregate(group_by_expr, aggregate_expr))
     }
 
     fn get_columns_referenced_by_selection(
         &self,
         select: &SqlSelect,
         table: &DataFrame,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>> {
         let mut accumulator = Vec::new();
         if let Some(selection) = &select.selection {
-            let filter_expr = self.create_logical_expr(selection);
+            let filter_expr = self.create_logical_expr(selection)?;
             visit(&filter_expr, &mut accumulator);
             let valid: Vec<String> = table
-                .schema()
-                .expect("SqlPlanner: table schema for selection-column filter")
+                .schema()?
                 .fields
                 .iter()
                 .map(|f| f.name.clone())
                 .collect();
             accumulator.retain(|name| valid.contains(name));
         }
-        accumulator
+        Ok(accumulator)
     }
 
-    fn create_logical_expr(&self, expr: &SqlExpr) -> LogicalExpr {
-        match expr {
+    fn create_logical_expr(&self, expr: &SqlExpr) -> Result<LogicalExpr> {
+        let result = match expr {
             SqlExpr::Identifier(id) => LogicalExpr::Column(id.clone()),
             SqlExpr::String(v) => LogicalExpr::LiteralString(v.clone()),
             SqlExpr::Long(v) => LogicalExpr::LiteralLong(*v),
             SqlExpr::Double(v) => LogicalExpr::LiteralDouble(*v),
             // Parse the literal with `chrono::NaiveDate::parse_from_str` using
-            // ISO-8601 format. Panics on invalid input.
+            // ISO-8601 format. Invalid input surfaces as `Plan(_)`.
             SqlExpr::Date(v) => LogicalExpr::LiteralDate(
-                chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d")
-                    .unwrap_or_else(|e| panic!("invalid date literal '{v}': {e}")),
+                chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").map_err(|e| {
+                    FdapQueryError::Plan(format!("invalid date literal '{v}': {e}"))
+                })?,
             ),
-            SqlExpr::Interval(v) => self.parse_interval(v),
+            SqlExpr::Interval(v) => self.parse_interval(v)?,
             SqlExpr::BinaryExpr { l, op, r } => {
-                let l = self.create_logical_expr(l);
-                let r = self.create_logical_expr(r);
+                let l = self.create_logical_expr(l)?;
+                let r = self.create_logical_expr(r)?;
                 match op.as_str() {
                     // comparison operators
                     "=" => l.eq(r),
@@ -299,63 +301,87 @@ impl SqlPlanner {
                     "*" => l.mult(r),
                     "/" => l.div(r),
                     "%" => l.modulus(r),
-                    other => panic!("Invalid operator {other}"),
+                    other => {
+                        return Err(FdapQueryError::Plan(format!("invalid operator: {other}")));
+                    }
                 }
             }
-            SqlExpr::Alias { expr, alias } => self.create_logical_expr(expr).alias(alias.clone()),
+            SqlExpr::Alias { expr, alias } => {
+                self.create_logical_expr(expr)?.alias(alias.clone())
+            }
             SqlExpr::Cast { expr, data_type } => cast(
-                self.create_logical_expr(expr),
-                self.parse_data_type(data_type),
+                self.create_logical_expr(expr)?,
+                self.parse_data_type(data_type)?,
             ),
             SqlExpr::Function { id, args } => {
                 let upper = id.to_uppercase();
                 match upper.as_str() {
                     "MIN" | "MAX" | "SUM" | "AVG" => {
                         if args.is_empty() {
-                            panic!("{upper}() requires an argument");
+                            return Err(FdapQueryError::Plan(format!(
+                                "{upper}() requires an argument"
+                            )));
                         }
-                        let arg = self.create_logical_expr(&args[0]);
+                        let arg = self.create_logical_expr(&args[0])?;
                         let agg = match upper.as_str() {
                             "MIN" => min(arg),
                             "MAX" => max(arg),
                             "SUM" => sum(arg),
                             "AVG" => avg(arg),
-                            _ => panic!("Unexpected aggregate function"),
+                            _ => {
+                                return Err(FdapQueryError::Internal(format!(
+                                    "unexpected aggregate function dispatch arm: {upper}"
+                                )));
+                            }
                         };
                         // bridge the AggregateExpr into LogicalExpr
                         LogicalExpr::from(agg)
                     }
                     "COUNT" => {
                         if args.is_empty() {
-                            panic!("COUNT() requires an argument, use COUNT(*) to count all rows");
+                            return Err(FdapQueryError::Plan(
+                                "COUNT() requires an argument, use COUNT(*) to count all rows"
+                                    .into(),
+                            ));
                         }
                         let arg = &args[0];
                         if let SqlExpr::Identifier(s) = arg {
                             if s == "*" {
-                                return LogicalExpr::from(count(LogicalExpr::LiteralLong(1)));
+                                return Ok(LogicalExpr::from(count(LogicalExpr::LiteralLong(1))));
                             }
                         }
-                        LogicalExpr::from(count(self.create_logical_expr(arg)))
+                        LogicalExpr::from(count(self.create_logical_expr(arg)?))
                     }
-                    _ => panic!("Invalid aggregate function: {id}"),
+                    _ => {
+                        return Err(FdapQueryError::Plan(format!(
+                            "invalid aggregate function: {id}"
+                        )));
+                    }
                 }
             }
-            other => panic!("Cannot create logical expression from sql expression: {other:?}"),
-        }
+            other => {
+                return Err(FdapQueryError::Plan(format!(
+                    "cannot create logical expression from sql expression: {other:?}"
+                )));
+            }
+        };
+        Ok(result)
     }
 
-    fn parse_data_type(&self, id: &str) -> DataType {
+    fn parse_data_type(&self, id: &str) -> Result<DataType> {
         match id {
-            "double" => DOUBLE_TYPE,
-            other => panic!("Invalid data type {other}"),
+            "double" => Ok(DOUBLE_TYPE),
+            other => Err(FdapQueryError::Plan(format!("invalid data type: {other}"))),
         }
     }
 
-    fn parse_interval(&self, value: &str) -> LogicalExpr {
-        let days = parse_interval_days(value.trim()).unwrap_or_else(|| {
-            panic!("Invalid interval format: '{value}'. Expected format: 'N days'")
-        });
-        LogicalExpr::LiteralIntervalDays(days)
+    fn parse_interval(&self, value: &str) -> Result<LogicalExpr> {
+        let days = parse_interval_days(value.trim()).ok_or_else(|| {
+            FdapQueryError::Plan(format!(
+                "invalid interval format: '{value}' (expected 'N days')"
+            ))
+        })?;
+        Ok(LogicalExpr::LiteralIntervalDays(days))
     }
 }
 
@@ -468,10 +494,18 @@ mod tests {
 
     /// Tokenize → parse → plan, returning the formatted logical plan. Uses
     /// table `employee` backed by the shared `testdata/employee.csv`, scanned
-    /// with an empty path.
+    /// with an empty path. Panics on planning errors; use [`try_plan`] for
+    /// tests that need to inspect the error.
     fn plan(sql: &str) -> String {
-        let tokens = SqlTokenizer::new(sql).tokenize();
-        let parsed = SqlParser::new(tokens).parse(0);
+        let df = try_plan(sql).unwrap();
+        format(df.logical_plan())
+    }
+
+    /// Tokenize → parse → plan, returning the `DataFrame` (or the planning
+    /// error). Used by tests that assert the planner rejects invalid SQL.
+    fn try_plan(sql: &str) -> Result<DataFrame> {
+        let tokens = SqlTokenizer::new(sql).tokenize().unwrap();
+        let parsed = SqlParser::new(tokens).parse(0).unwrap();
         let select = match parsed {
             Some(SqlExpr::Select(s)) => *s,
             other => panic!("expected SELECT, found {other:?}"),
@@ -490,8 +524,22 @@ mod tests {
             DataFrame::new(LogicalPlan::Scan(scan)),
         );
 
-        let df = SqlPlanner::new().create_data_frame(&select, &tables);
-        format(df.logical_plan())
+        SqlPlanner::new().create_data_frame(&select, &tables)
+    }
+
+    /// Assert that planning `sql` fails with a `Plan(_)` error whose message
+    /// contains `needle`.
+    fn assert_plan_err(sql: &str, needle: &str) {
+        match try_plan(sql) {
+            Err(FdapQueryError::Plan(msg)) => {
+                assert!(
+                    msg.contains(needle),
+                    "Plan error message did not contain '{needle}': {msg}"
+                );
+            }
+            Err(other) => panic!("expected Plan(_), got {other:?}"),
+            Ok(_) => panic!("expected planning error, got success"),
+        }
     }
 
     #[test]
@@ -610,32 +658,30 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "COUNT() requires an argument, use COUNT(*) to count all rows")]
     fn count_without_argument_should_error() {
-        plan("SELECT COUNT() FROM employee");
+        assert_plan_err(
+            "SELECT COUNT() FROM employee",
+            "COUNT() requires an argument",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "MAX() requires an argument")]
     fn max_without_argument_should_error() {
-        plan("SELECT MAX() FROM employee");
+        assert_plan_err("SELECT MAX() FROM employee", "MAX() requires an argument");
     }
 
     #[test]
-    #[should_panic(expected = "MIN() requires an argument")]
     fn min_without_argument_should_error() {
-        plan("SELECT MIN() FROM employee");
+        assert_plan_err("SELECT MIN() FROM employee", "MIN() requires an argument");
     }
 
     #[test]
-    #[should_panic(expected = "SUM() requires an argument")]
     fn sum_without_argument_should_error() {
-        plan("SELECT SUM() FROM employee");
+        assert_plan_err("SELECT SUM() FROM employee", "SUM() requires an argument");
     }
 
     #[test]
-    #[should_panic(expected = "AVG() requires an argument")]
     fn avg_without_argument_should_error() {
-        plan("SELECT AVG() FROM employee");
+        assert_plan_err("SELECT AVG() FROM employee", "AVG() requires an argument");
     }
 }

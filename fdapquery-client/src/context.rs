@@ -83,13 +83,19 @@ impl Context {
     /// the SQL, lower to `DataFrame` via `SqlPlanner`, take its logical
     /// plan. The execution step then delegates to [`Self::execute`].
     pub fn sql(&self, sql: &str) -> Result<Vec<RecordBatch>> {
-        let tokens = SqlTokenizer::new(sql).tokenize();
-        let parsed = SqlParser::new(tokens).parse(0);
+        let tokens = SqlTokenizer::new(sql)
+            .tokenize()
+            .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
+        let parsed = SqlParser::new(tokens)
+            .parse(0)
+            .map_err(|e| anyhow::anyhow!("parse: {e}"))?;
         let select = match parsed {
             Some(SqlExpr::Select(select)) => *select,
             other => anyhow::bail!("Expected a SELECT statement, found {other:?}"),
         };
-        let df = SqlPlanner::new().create_data_frame(&select, &self.tables);
+        let df = SqlPlanner::new()
+            .create_data_frame(&select, &self.tables)
+            .map_err(|e| anyhow::anyhow!("plan: {e}"))?;
         self.execute(df.logical_plan())
     }
 

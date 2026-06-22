@@ -8,6 +8,7 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
 fdapquery-logical-plan = { path = "../fdapquery-logical-plan" }
 
 [dev-dependencies]

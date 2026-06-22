@@ -310,7 +310,7 @@ mod tests {
             vec![sum(col("salary"))],
         ));
 
-        let optimized = Optimizer::new().optimize(&aggregate);
+        let optimized = Optimizer::new().optimize(&aggregate).unwrap();
         let physical_plan = QueryPlanner::new().create_physical_plan(&optimized);
 
         // Drive execution. The final-task mock returns an empty iterator; we

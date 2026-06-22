@@ -54,7 +54,9 @@ fn main() {
     // `ProjectionPushDown` (and other rules) do to the logical tree.
     // `ExecutionContext::execute()` will re-run `Optimizer::optimize` internally;
     // the optimizer is idempotent, so the second pass is a no-op shape-wise.
-    let optimized_plan = Optimizer::new().optimize(df.logical_plan());
+    let optimized_plan = Optimizer::new()
+        .optimize(df.logical_plan())
+        .expect("nyc_taxi: optimize");
     println!("Optimized Plan:\t{}", format(&optimized_plan));
 
     let results: Box<dyn Iterator<Item = RecordBatch>> = ctx.execute(df.logical_plan());

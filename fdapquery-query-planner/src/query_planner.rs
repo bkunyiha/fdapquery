@@ -357,7 +357,7 @@ mod tests {
             .clone();
 
         // Optimize (ProjectionPushDown trims the scan to [max_fare, passenger_count]).
-        let optimized = Optimizer::new().optimize(&plan);
+        let optimized = Optimizer::new().optimize(&plan).unwrap();
 
         let planner = QueryPlanner::new();
         let physical = planner.create_physical_plan(&optimized);

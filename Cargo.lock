@@ -830,6 +830,7 @@ name = "fdapquery-optimizer"
 version = "0.1.0"
 dependencies = [
  "fdapquery-datasource",
+ "fdapquery-datatypes",
  "fdapquery-logical-plan",
 ]
 

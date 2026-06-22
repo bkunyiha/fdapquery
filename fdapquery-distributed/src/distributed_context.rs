@@ -56,19 +56,27 @@ impl<C: ExecutorClient> DistributedContext<C> {
 
     /// Parse + plan + execute a SQL query distributed.
     pub fn sql(&self, sql: &str) -> Box<dyn Iterator<Item = RecordBatch>> {
-        let tokens = SqlTokenizer::new(sql).tokenize();
-        let parsed = SqlParser::new(tokens).parse(0);
+        let tokens = SqlTokenizer::new(sql)
+            .tokenize()
+            .expect("DistributedContext::sql: tokenize");
+        let parsed = SqlParser::new(tokens)
+            .parse(0)
+            .expect("DistributedContext::sql: parse");
         let select = match parsed {
             Some(SqlExpr::Select(select)) => *select,
             other => panic!("Expected a SELECT statement, found {other:?}"),
         };
-        let df = SqlPlanner::new().create_data_frame(&select, &self.tables);
+        let df = SqlPlanner::new()
+            .create_data_frame(&select, &self.tables)
+            .expect("DistributedContext::sql: plan");
         self.execute(df.logical_plan())
     }
 
     /// Optimize, lower to a physical plan, then dispatch via the scheduler.
     pub fn execute(&self, plan: &LogicalPlan) -> Box<dyn Iterator<Item = RecordBatch>> {
-        let optimized: LogicalPlan = Optimizer::new().optimize(plan);
+        let optimized: LogicalPlan = Optimizer::new()
+            .optimize(plan)
+            .expect("DistributedContext::execute: optimize");
         let physical: Arc<dyn PhysicalPlan> = QueryPlanner::new().create_physical_plan(&optimized);
         self.scheduler.execute(physical)
     }
