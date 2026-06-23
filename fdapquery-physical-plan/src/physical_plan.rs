@@ -64,7 +64,7 @@
 //! never cross a thread boundary.
 
 use crate::executor_context::ExecutorContext;
-use fdapquery_datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{RecordBatch, Result, Schema};
 use std::fmt;
 use std::sync::Arc;
 
@@ -91,7 +91,17 @@ pub trait PhysicalPlan: fmt::Display + Send + Sync {
     /// call site that doesn't supply one. There is no `execute_with_context` /
     /// `execute_and_write_shuffle` sibling — this single method is the
     /// context-aware entry point.
-    fn execute(&self, ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>>;
+    ///
+    /// Returns a two-layer Result: outer for "could the plan start at all?"
+    /// (e.g. a setup failure inside the operator), inner per batch for
+    /// "did this batch read succeed?". Same shape as
+    /// [`fdapquery_datasource::DataSource::scan`]. Phase B turns the inner
+    /// iterator into a `SendableRecordBatchStream`; the Result layering does
+    /// not change.
+    fn execute(
+        &self,
+        ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>>;
 
     /// The children (inputs) of this plan, used to walk the operator tree.
     ///
@@ -114,12 +124,12 @@ pub trait PhysicalPlan: fmt::Display + Send + Sync {
     /// `self: Arc<Self>` receiver consumes the Arc, the impl reuses any
     /// non-child fields (schema, expressions, etc.) and builds a new operator
     /// with the supplied children, returning a fresh `Arc<dyn PhysicalPlan>`.
-    /// Panics on the wrong number of children (this codebase uses
-    /// panic-style error handling; DataFusion returns `Result`).
+    /// Arity mismatch surfaces as `Err(FdapQueryError::Internal(_))` — a tree-
+    /// rewrite that supplies the wrong child count is an engine bug.
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan>;
+    ) -> Result<Arc<dyn PhysicalPlan>>;
 
     /// Type-erased self-reference for runtime downcasting via the standard
     /// Rust idiom `plan.as_any().downcast_ref::<XExec>()`. Same pattern as

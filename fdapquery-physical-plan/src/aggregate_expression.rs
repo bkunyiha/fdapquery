@@ -5,7 +5,7 @@
 //! helpers shared by `MinExpression` / `MaxExpression`.
 
 use crate::expressions::{Accumulator, Expression};
-use fdapquery_datatypes::ScalarValue;
+use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
 use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
@@ -34,10 +34,11 @@ pub trait AggregateExpression: fmt::Display + Send + Sync {
 
 /// Compare two same-typed scalars. Returns `None` for incomparable float pairs
 /// (e.g. involving `NaN`), so `scalar_lt`/`scalar_gt` treat `NaN` comparisons
-/// as always false. Panics on a type MIN/MAX doesn't support.
-fn cmp_scalar(a: &ScalarValue, b: &ScalarValue) -> Option<Ordering> {
+/// as always false. Unsupported type combinations surface as
+/// `Err(NotImplemented(_))`.
+fn cmp_scalar(a: &ScalarValue, b: &ScalarValue) -> Result<Option<Ordering>> {
     use ScalarValue::*;
-    match (a, b) {
+    Ok(match (a, b) {
         (Int8(x), Int8(y)) => Some(x.cmp(y)),
         (Int16(x), Int16(y)) => Some(x.cmp(y)),
         (Int32(x), Int32(y)) => Some(x.cmp(y)),
@@ -50,16 +51,20 @@ fn cmp_scalar(a: &ScalarValue, b: &ScalarValue) -> Option<Ordering> {
         (Float64(x), Float64(y)) => x.partial_cmp(y),
         (Utf8(x), Utf8(y)) => Some(x.cmp(y)),
         (Date32(x), Date32(y)) => Some(x.cmp(y)),
-        _ => panic!("MIN/MAX is not implemented for type: {a:?}"),
-    }
+        _ => {
+            return Err(FdapQueryError::NotImplemented(format!(
+                "MIN/MAX is not implemented for type: {a:?}"
+            )));
+        }
+    })
 }
 
 /// `a < b` over same-typed scalars — used by MIN.
-pub(crate) fn scalar_lt(a: &ScalarValue, b: &ScalarValue) -> bool {
-    matches!(cmp_scalar(a, b), Some(Ordering::Less))
+pub(crate) fn scalar_lt(a: &ScalarValue, b: &ScalarValue) -> Result<bool> {
+    Ok(matches!(cmp_scalar(a, b)?, Some(Ordering::Less)))
 }
 
 /// `a > b` over same-typed scalars — used by MAX.
-pub(crate) fn scalar_gt(a: &ScalarValue, b: &ScalarValue) -> bool {
-    matches!(cmp_scalar(a, b), Some(Ordering::Greater))
+pub(crate) fn scalar_gt(a: &ScalarValue, b: &ScalarValue) -> Result<bool> {
+    Ok(matches!(cmp_scalar(a, b)?, Some(Ordering::Greater)))
 }

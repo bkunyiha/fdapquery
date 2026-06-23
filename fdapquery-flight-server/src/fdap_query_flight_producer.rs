@@ -193,10 +193,30 @@ impl FlightService for FdapQueryFlightProducer {
                 //   -> task.plan.execute(&ctx)
                 //      -> HashAggregateExec::execute(ctx)
                 //         -> ShuffleReaderExec::execute(ctx)
-                for batch in task.plan.execute(&ctx) {
-                    if tx.blocking_send(Ok(batch)).is_err() {
-                        debug!("do_get receiver dropped; halting executor");
-                        break;
+                match task.plan.execute(&ctx) {
+                    Ok(stream) => {
+                        for batch_res in stream {
+                            let batch = match batch_res {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    let _ = tx.blocking_send(Err(FlightError::ExternalError(
+                                        Box::new(std::io::Error::other(format!(
+                                            "task execution error: {e}"
+                                        ))),
+                                    )));
+                                    break;
+                                }
+                            };
+                            if tx.blocking_send(Ok(batch)).is_err() {
+                                debug!("do_get receiver dropped; halting executor");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.blocking_send(Err(FlightError::ExternalError(Box::new(
+                            std::io::Error::other(format!("task plan setup error: {e}")),
+                        ))));
                     }
                 }
             });
@@ -209,6 +229,10 @@ impl FlightService for FdapQueryFlightProducer {
             info!("do_get executing logical plan: {}", logical_plan.pretty());
             tokio::task::spawn_blocking(move || {
                 let exec_ctx = ExecutionContext::new(HashMap::new());
+                // ExecutionContext::execute returns an infallible per-batch
+                // iterator (errors are surfaced via `.expect` inside the
+                // context); the public Result-shaped surface lives on
+                // `PhysicalPlan::execute` and `SqlPlanner::create_data_frame`.
                 for batch in exec_ctx.execute(&logical_plan) {
                     if tx.blocking_send(Ok(batch)).is_err() {
                         debug!("do_get receiver dropped; halting executor");
@@ -306,7 +330,9 @@ impl FlightService for FdapQueryFlightProducer {
                 // 3 — dispatch on plan type
                 let locations =
                     if let Some(writer) = task.plan.as_any().downcast_ref::<ShuffleWriterExec>() {
-                        writer.write_shuffle(&self.ctx)
+                        writer.write_shuffle(&self.ctx).map_err(|e| {
+                            Status::internal(format!("write_shuffle failed: {e}"))
+                        })?
                     } else {
                         // Non-shuffle tasks only make sense here if the plan is a sink
                         // operator (write table/file, materialize cache, build stats, etc.).
@@ -319,7 +345,14 @@ impl FlightService for FdapQueryFlightProducer {
                         // - Cache population A query/subplan is executed to fill a cache; the caller may not need the rows immediately.
                         // - Index/statistics building The engine scans data and computes/writes index pages, zone maps, histograms, etc.
                         // - Validation/check operations A query may scan and verify constraints/data integrity, returning only success/failure or a count elsewhere.
-                        task.plan.execute(&self.ctx).for_each(|_| {});
+                        let stream = task.plan.execute(&self.ctx).map_err(|e| {
+                            Status::internal(format!("task plan setup error: {e}"))
+                        })?;
+                        for batch_res in stream {
+                            batch_res.map_err(|e| {
+                                Status::internal(format!("task plan execution error: {e}"))
+                            })?;
+                        }
                         Vec::new()
                     };
                 debug!("Task produced {} shuffle location(s)", locations.len());
@@ -385,7 +418,7 @@ mod tests {
     fn build_task() -> Task {
         let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
         let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
-        let scan: Arc<dyn PhysicalPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns));
+        let scan: Arc<dyn PhysicalPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
         let writer: Arc<dyn PhysicalPlan> = Arc::new(ShuffleWriterExec::new(
             scan,
             vec![Arc::new(ColumnExpression::new(0))],

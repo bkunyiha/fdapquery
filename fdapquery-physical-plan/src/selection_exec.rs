@@ -12,7 +12,8 @@ use crate::executor_context::ExecutorContext;
 use crate::expressions::Expression;
 use crate::physical_plan::PhysicalPlan;
 use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue, Schema,
+    record_batch,
 };
 use std::sync::Arc;
 
@@ -33,18 +34,22 @@ impl PhysicalPlan for SelectionExec {
         self.input.schema()
     }
 
-    fn execute(&self, ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         // Selection just filters per batch — no context use; pass through.
         let schema = self.input.schema();
         let expr = Arc::clone(&self.expr);
-        Box::new(self.input.execute(ctx).map(move |batch| {
-            let selection = expr.evaluate(&batch);
+        let stream = self.input.execute(ctx)?;
+        Ok(Box::new(stream.map(move |batch_res| {
+            let batch = batch_res?;
+            let selection = expr.evaluate(&batch)?;
             let columns: Vec<Box<dyn ColumnVector>> = (0..batch.num_columns())
                 .map(|i| filter(&record_batch::field(&batch, i), selection.as_ref()))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
             record_batch::create(&schema, columns)
-                .expect("SelectionExec: schema/column mismatch building output batch")
-        }))
+        })))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
@@ -66,12 +71,17 @@ impl PhysicalPlan for SelectionExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert_eq!(children.len(), 1, "SelectionExec expects exactly 1 child");
-        Arc::new(SelectionExec::new(
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if children.len() != 1 {
+            return Err(FdapQueryError::Internal(format!(
+                "SelectionExec::with_new_children expected 1 child, got {}",
+                children.len()
+            )));
+        }
+        Ok(Arc::new(SelectionExec::new(
             children.into_iter().next().unwrap(),
             Arc::clone(&self.expr),
-        ))
+        )))
     }
 }
 
@@ -83,13 +93,11 @@ impl std::fmt::Display for SelectionExec {
 
 /// Keep the cells of `v` whose corresponding row in the boolean `selection`
 /// column is true, returning a new (shorter) column of the same type.
-fn filter(v: &dyn ColumnVector, selection: &dyn ColumnVector) -> Box<dyn ColumnVector> {
+fn filter(v: &dyn ColumnVector, selection: &dyn ColumnVector) -> Result<Box<dyn ColumnVector>> {
     // Count selected rows first, to size the builder.
     let mut count = 0usize;
     for i in 0..selection.size() {
-        let sel = selection
-            .get_value(i)
-            .expect("SelectionExec: get_value over selection column");
+        let sel = selection.get_value(i)?;
         if matches!(sel, ScalarValue::Boolean(true)) {
             count += 1;
         }
@@ -97,16 +105,12 @@ fn filter(v: &dyn ColumnVector, selection: &dyn ColumnVector) -> Box<dyn ColumnV
 
     let mut builder = ArrowVectorBuilder::new(&v.get_type(), count);
     for i in 0..selection.size() {
-        let sel = selection
-            .get_value(i)
-            .expect("SelectionExec: get_value over selection column");
+        let sel = selection.get_value(i)?;
         if matches!(sel, ScalarValue::Boolean(true)) {
-            let value = v
-                .get_value(i)
-                .expect("SelectionExec: get_value over filtered column");
+            let value = v.get_value(i)?;
             builder.append_value(&value);
         }
     }
     builder.set_value_count(count);
-    Box::new(builder.build())
+    Ok(Box::new(builder.build()))
 }

@@ -30,20 +30,30 @@ pub trait BinaryExpression: Expression {
     fn right(&self) -> &Arc<dyn Expression>;
 
     /// Operator-specific evaluation over two already-evaluated columns.
-    fn evaluate_pair(&self, l: &dyn ColumnVector, r: &dyn ColumnVector) -> Box<dyn ColumnVector>;
+    fn evaluate_pair(
+        &self,
+        l: &dyn ColumnVector,
+        r: &dyn ColumnVector,
+    ) -> Result<Box<dyn ColumnVector>>;
 
     /// Template method: evaluate both sides, require equal lengths, coerce
     /// numeric types to a common type if they differ, then dispatch to
     /// [`evaluate_pair`](Self::evaluate_pair).
-    fn evaluate_binary(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        let ll = self.left().evaluate(input);
-        let rr = self.right().evaluate(input);
-        assert_eq!(ll.size(), rr.size());
+    fn evaluate_binary(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        let ll = self.left().evaluate(input)?;
+        let rr = self.right().evaluate(input)?;
+        if ll.size() != rr.size() {
+            return Err(FdapQueryError::Internal(format!(
+                "binary expression operands have mismatched sizes: {} vs {}",
+                ll.size(),
+                rr.size()
+            )));
+        }
 
         if ll.get_type() != rr.get_type() {
             // Attempt type coercion for numeric types (this fork's extension of
             // the upstream BinaryExpression — the snippet-omitted block).
-            let (cl, cr) = coerce_types(ll, rr);
+            let (cl, cr) = coerce_types(ll, rr)?;
             return self.evaluate_pair(cl.as_ref(), cr.as_ref());
         }
         self.evaluate_pair(ll.as_ref(), rr.as_ref())
@@ -55,15 +65,15 @@ pub trait BinaryExpression: Expression {
 fn coerce_types(
     ll: Box<dyn ColumnVector>,
     rr: Box<dyn ColumnVector>,
-) -> (Box<dyn ColumnVector>, Box<dyn ColumnVector>) {
+) -> Result<(Box<dyn ColumnVector>, Box<dyn ColumnVector>)> {
     let left_type = ll.get_type();
     let right_type = rr.get_type();
     if is_numeric(&left_type) && is_numeric(&right_type) {
-        return (coerce_to_double(ll), coerce_to_double(rr));
+        return Ok((coerce_to_double(ll), coerce_to_double(rr)));
     }
-    panic!(
-        "Binary expression operands do not have the same type and cannot be coerced: {left_type:?} != {right_type:?}"
-    );
+    Err(FdapQueryError::Plan(format!(
+        "binary expression operands do not have the same type and cannot be coerced: {left_type:?} != {right_type:?}"
+    )))
 }
 
 fn is_numeric(t: &DataType) -> bool {

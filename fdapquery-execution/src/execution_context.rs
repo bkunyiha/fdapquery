@@ -120,9 +120,14 @@ impl ExecutionContext {
         let optimized = Optimizer::new()
             .optimize(plan)
             .expect("ExecutionContext::execute: optimize");
-        let physical = QueryPlanner::new().create_physical_plan(&optimized);
+        let physical = QueryPlanner::new()
+            .create_physical_plan(&optimized)
+            .expect("ExecutionContext::execute: create_physical_plan");
         let ctx = ExecutorContext::new("single-node", "localhost", 0, "/tmp/rquery-single-node");
-        physical.execute(&ctx)
+        let stream = physical
+            .execute(&ctx)
+            .expect("ExecutionContext::execute: start plan");
+        Box::new(stream.map(|r| r.expect("ExecutionContext::execute: per-batch read error")))
     }
 }
 

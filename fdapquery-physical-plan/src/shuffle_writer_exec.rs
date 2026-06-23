@@ -36,7 +36,8 @@ use crate::physical_plan::PhysicalPlan;
 use crate::row_key::RowKey;
 use crate::shuffle_location::ShuffleLocation;
 use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue, Schema,
+    record_batch,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -86,7 +87,7 @@ impl ShuffleWriterExec {
     /// `flight-server` downcasts to `ShuffleWriterExec` and calls this
     /// method directly.
     ///
-    pub fn write_shuffle(&self, ctx: &ExecutorContext) -> Vec<ShuffleLocation> {
+    pub fn write_shuffle(&self, ctx: &ExecutorContext) -> Result<Vec<ShuffleLocation>> {
         let partition_count = self.partition_count as usize;
         // Captured once — output schema equals input schema (a shuffle preserves
         // the columns; it only re-distributes the rows).
@@ -97,20 +98,22 @@ impl ShuffleWriterExec {
 
         // Pull each input batch, decide each row's target partition, push the
         // filtered sub-batch into that partition's accumulator.
-        for batch in self.input.execute(ctx) {
+        let input_stream = self.input.execute(ctx)?;
+        for batch_res in input_stream {
+            let batch = batch_res?;
             let key_columns: Vec<Box<dyn ColumnVector>> = self
                 .partition_expr
                 .iter()
                 .map(|e| e.evaluate(&batch))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
 
             let row_count = batch.num_rows();
-            let targets = compute_targets(&key_columns, row_count, partition_count);
+            let targets = compute_targets(&key_columns, row_count, partition_count)?;
 
             for (partition_id, buffer) in buffers.iter_mut().enumerate() {
                 let take: Vec<bool> = targets.iter().map(|&t| t == partition_id).collect();
                 if take.iter().any(|&b| b) {
-                    buffer.push(select_rows(&batch, &schema, &take));
+                    buffer.push(select_rows(&batch, &schema, &take)?);
                 }
             }
         }
@@ -138,7 +141,7 @@ impl ShuffleWriterExec {
                 self.stage_id,
                 partition_id as i32,
                 &batches,
-            );
+            )?;
             locations.push(ShuffleLocation::new(
                 &self.job_uuid,
                 self.stage_id,
@@ -148,7 +151,7 @@ impl ShuffleWriterExec {
                 ctx.executor_port,
             ));
         }
-        locations
+        Ok(locations)
     }
 }
 
@@ -161,47 +164,41 @@ fn compute_targets(
     key_columns: &[Box<dyn ColumnVector>],
     row_count: usize,
     partition_count: usize,
-) -> Vec<usize> {
+) -> Result<Vec<usize>> {
     let mut targets = Vec::with_capacity(row_count);
     for row in 0..row_count {
         let key: Vec<ScalarValue> = key_columns
             .iter()
-            .map(|c| {
-                c.get_value(row)
-                    .expect("ShuffleWriterExec: get_value over key column")
-            })
-            .collect();
+            .map(|c| c.get_value(row))
+            .collect::<Result<Vec<_>>>()?;
         let mut hasher = DefaultHasher::new();
         RowKey(key).hash(&mut hasher);
         targets.push((hasher.finish() % partition_count as u64) as usize);
     }
-    targets
+    Ok(targets)
 }
 
 /// Build a new `RecordBatch` containing only the rows of `batch` where
 /// `take[i]` is true. The output schema equals the supplied `schema`. Same
 /// row-by-row construction shape as `SelectionExec::filter`, generalised to
 /// a boolean selection slice instead of a `ColumnVector`.
-fn select_rows(batch: &RecordBatch, schema: &Schema, take: &[bool]) -> RecordBatch {
+fn select_rows(batch: &RecordBatch, schema: &Schema, take: &[bool]) -> Result<RecordBatch> {
     let count = take.iter().filter(|&&b| b).count();
     let columns: Vec<Box<dyn ColumnVector>> = (0..batch.num_columns())
-        .map(|col_idx| {
+        .map(|col_idx| -> Result<Box<dyn ColumnVector>> {
             let source = record_batch::field(batch, col_idx);
             let mut builder = ArrowVectorBuilder::new(&source.get_type(), count);
             for (row, &t) in take.iter().enumerate() {
                 if t {
-                    let value = source
-                        .get_value(row)
-                        .expect("ShuffleWriterExec: get_value over input row");
+                    let value = source.get_value(row)?;
                     builder.append_value(&value);
                 }
             }
             builder.set_value_count(count);
-            Box::new(builder.build()) as Box<dyn ColumnVector>
+            Ok(Box::new(builder.build()) as Box<dyn ColumnVector>)
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     record_batch::create(schema, columns)
-        .expect("ShuffleWriterExec: schema/column mismatch building output batch")
 }
 
 impl PhysicalPlan for ShuffleWriterExec {
@@ -228,33 +225,38 @@ impl PhysicalPlan for ShuffleWriterExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert_eq!(
-            children.len(),
-            1,
-            "ShuffleWriterExec expects exactly 1 child"
-        );
-        Arc::new(ShuffleWriterExec::new(
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if children.len() != 1 {
+            return Err(FdapQueryError::Internal(format!(
+                "ShuffleWriterExec::with_new_children expected 1 child, got {}",
+                children.len()
+            )));
+        }
+        Ok(Arc::new(ShuffleWriterExec::new(
             children.into_iter().next().unwrap(),
             self.partition_expr.clone(),
             self.job_uuid.clone(),
             self.stage_id,
             self.partition_count,
-        ))
+        )))
     }
 
-    fn execute(&self, _ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        _ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         // Shape mismatch: shuffle writers consume batches and produce
         // `Vec<ShuffleLocation>`, not iterators of batches. The trait's
         // `execute(ctx) -> Iterator<RecordBatch>` shape doesn't fit. Use
         // `Self::write_shuffle(&ctx)` instead — the `do_action("execute_task")`
         // handler in `flight-server` downcasts to `ShuffleWriterExec` and
         // calls it directly.
-        unimplemented!(
-            "ShuffleWriterExec::execute() doesn't fit the trait's batch-yielding \
-             shape — use write_shuffle(&ExecutorContext) which returns Vec<ShuffleLocation>. \
+        Err(FdapQueryError::NotImplemented(
+            "ShuffleWriterExec::execute() doesn't fit the trait's batch-yielding shape \
+             — use write_shuffle(&ExecutorContext) which returns Vec<ShuffleLocation>. \
              flight-server's do_action handler does this via downcast."
-        )
+                .into(),
+        ))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -309,7 +311,7 @@ mod tests {
     fn writes_partitions_and_reports_locations_tagged_with_executor() {
         // 4-row employee.csv → partition by `id` into 3 buckets.
         let ds = employee_ds();
-        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)));
+        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
         let writer = ShuffleWriterExec::new(
             scan,
             vec![Arc::new(ColumnExpression::new(0))], // partition by `id`
@@ -321,7 +323,7 @@ mod tests {
         let base = temp_dir("writer-happy");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
 
-        let locations = writer.write_shuffle(&ctx);
+        let locations = writer.write_shuffle(&ctx).unwrap();
 
         // At least one partition must be non-empty (4 rows can't all hash to a
         // disjoint bucket-set), and the count never exceeds partition_count.
@@ -346,7 +348,9 @@ mod tests {
             let batches: Vec<_> = ctx
                 .shuffle_manager
                 .read_partition(&loc.job_uuid, loc.stage_id, loc.partition_id)
-                .collect();
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
             total_rows += batches.iter().map(|b| b.num_rows()).sum::<usize>();
         }
         assert_eq!(total_rows, 4, "round-trip row count must match input");
@@ -371,8 +375,11 @@ mod tests {
             fn schema(&self) -> Schema {
                 self.schema.clone()
             }
-            fn execute(&self, _ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
-                Box::new(std::iter::empty())
+            fn execute(
+                &self,
+                _ctx: &ExecutorContext,
+            ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+                Ok(Box::new(std::iter::empty()))
             }
             fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
                 vec![]
@@ -380,8 +387,8 @@ mod tests {
             fn with_new_children(
                 self: Arc<Self>,
                 _children: Vec<Arc<dyn PhysicalPlan>>,
-            ) -> Arc<dyn PhysicalPlan> {
-                self
+            ) -> Result<Arc<dyn PhysicalPlan>> {
+                Ok(self)
             }
             fn as_any(&self) -> &dyn std::any::Any {
                 self
@@ -407,7 +414,7 @@ mod tests {
         let base = temp_dir("writer-empty");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
 
-        let locations = writer.write_shuffle(&ctx);
+        let locations = writer.write_shuffle(&ctx).unwrap();
 
         assert!(
             locations.is_empty(),
@@ -438,7 +445,7 @@ mod tests {
         // partition_count = 1 → every row must land in partition 0,
         // regardless of how the partition_expr hashes.
         let ds = employee_ds();
-        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)));
+        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
         let writer = ShuffleWriterExec::new(
             scan,
             vec![Arc::new(ColumnExpression::new(0))],
@@ -450,7 +457,7 @@ mod tests {
         let base = temp_dir("writer-one");
         let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
 
-        let locations = writer.write_shuffle(&ctx);
+        let locations = writer.write_shuffle(&ctx).unwrap();
 
         assert_eq!(locations.len(), 1);
         assert_eq!(locations[0].partition_id, 0);
@@ -458,7 +465,9 @@ mod tests {
         let batches: Vec<_> = ctx
             .shuffle_manager
             .read_partition("test-job-shuffle-writer-one", 0, 0)
-            .collect();
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, 4);
 

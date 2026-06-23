@@ -143,6 +143,7 @@ fn substitute_shuffle_reader(
         .map(|c| substitute_shuffle_reader(Arc::clone(c), locations))
         .collect();
     plan.with_new_children(new_children)
+        .expect("substitute_shuffle_reader: with_new_children rebuilt with same arity")
 }
 
 #[cfg(test)]
@@ -177,7 +178,7 @@ mod tests {
         ));
 
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
-        let physical_plan = QueryPlanner::new().create_physical_plan(&optimized);
+        let physical_plan = QueryPlanner::new().create_physical_plan(&optimized).unwrap();
 
         let planner = DistributedPlanner::new(three_executor_config());
         let stages = planner.plan(physical_plan, "test-job-123");
@@ -220,7 +221,7 @@ mod tests {
     fn non_aggregate_query_produces_single_stage() {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
         let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
-        let physical_plan = QueryPlanner::new().create_physical_plan(&scan);
+        let physical_plan = QueryPlanner::new().create_physical_plan(&scan).unwrap();
 
         let planner = DistributedPlanner::new(three_executor_config());
         let stages = planner.plan(physical_plan, "test-job-456");

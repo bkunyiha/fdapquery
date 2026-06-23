@@ -7,7 +7,8 @@
 use crate::expressions::Expression;
 use arrow_schema::DataType;
 use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, record_batch,
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
+    record_batch,
 };
 use std::fmt;
 use std::sync::Arc;
@@ -25,33 +26,35 @@ impl CastExpression {
 }
 
 impl Expression for CastExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        let value = self.expr.evaluate(input);
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        let value = self.expr.evaluate(input)?;
         let mut builder = ArrowVectorBuilder::new(&self.data_type, record_batch::row_count(input));
 
         for i in 0..value.size() {
-            let vv = value
-                .get_value(i)
-                .expect("CastExpression: get_value over source column");
+            let vv = value.get_value(i)?;
             if vv.is_null() {
                 builder.append_null();
                 continue;
             }
             let cast = match &self.data_type {
-                DataType::Int8 => ScalarValue::Int8(to_i64(&vv) as i8),
-                DataType::Int16 => ScalarValue::Int16(to_i64(&vv) as i16),
-                DataType::Int32 => ScalarValue::Int32(to_i64(&vv) as i32),
-                DataType::Int64 => ScalarValue::Int64(to_i64(&vv)),
-                DataType::Float32 => ScalarValue::Float32(to_f32(&vv)),
-                DataType::Float64 => ScalarValue::Float64(to_f64(&vv)),
+                DataType::Int8 => ScalarValue::Int8(to_i64(&vv)? as i8),
+                DataType::Int16 => ScalarValue::Int16(to_i64(&vv)? as i16),
+                DataType::Int32 => ScalarValue::Int32(to_i64(&vv)? as i32),
+                DataType::Int64 => ScalarValue::Int64(to_i64(&vv)?),
+                DataType::Float32 => ScalarValue::Float32(to_f32(&vv)?),
+                DataType::Float64 => ScalarValue::Float64(to_f64(&vv)?),
                 DataType::Utf8 => ScalarValue::Utf8(scalar_to_string(&vv)),
-                other => panic!("Cast to {other:?} is not supported"),
+                other => {
+                    return Err(FdapQueryError::NotImplemented(format!(
+                        "Cast to {other:?} is not supported"
+                    )));
+                }
             };
             builder.append_value(&cast);
         }
 
         builder.set_value_count(value.size());
-        Box::new(builder.build())
+        Ok(Box::new(builder.build()))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -68,8 +71,10 @@ impl fmt::Display for CastExpression {
 }
 
 /// Convert a source value to `i64`: truncates floats, parses strings and bytes.
-fn to_i64(v: &ScalarValue) -> i64 {
-    match v {
+/// String/bytes parse failures surface as `Err(Execution(_))` — the SQL is
+/// well-formed and the cast is supported, but the actual data didn't fit.
+fn to_i64(v: &ScalarValue) -> Result<i64> {
+    Ok(match v {
         ScalarValue::Int8(n) => *n as i64,
         ScalarValue::Int16(n) => *n as i64,
         ScalarValue::Int32(n) => *n as i64,
@@ -80,24 +85,36 @@ fn to_i64(v: &ScalarValue) -> i64 {
         ScalarValue::UInt64(n) => *n as i64,
         ScalarValue::Float32(f) => *f as i64,
         ScalarValue::Float64(f) => *f as i64,
-        ScalarValue::Utf8(s) => s.trim().parse().expect("cannot cast string to integer"),
-        ScalarValue::Binary(b) => String::from_utf8_lossy(b)
-            .trim()
-            .parse()
-            .expect("cannot cast bytes to integer"),
-        other => panic!("Cannot cast value to integer: {other:?}"),
-    }
+        ScalarValue::Utf8(s) => s.trim().parse().map_err(|e| {
+            FdapQueryError::Execution(format!("cannot cast string '{s}' to integer: {e}"))
+        })?,
+        ScalarValue::Binary(b) => {
+            let s = String::from_utf8_lossy(b);
+            s.trim().parse().map_err(|e| {
+                FdapQueryError::Execution(format!("cannot cast bytes '{s}' to integer: {e}"))
+            })?
+        }
+        other => {
+            return Err(FdapQueryError::Internal(format!(
+                "to_i64: cannot cast value to integer: {other:?}"
+            )));
+        }
+    })
 }
 
-/// Convert a source value to `f32`. Strings/bytes are parsed directly to `f32`
-///; numbers are widened/narrowed.
-fn to_f32(v: &ScalarValue) -> f32 {
-    match v {
-        ScalarValue::Utf8(s) => s.trim().parse().expect("cannot cast string to float"),
-        ScalarValue::Binary(b) => String::from_utf8_lossy(b)
-            .trim()
-            .parse()
-            .expect("cannot cast bytes to float"),
+/// Convert a source value to `f32`. Strings/bytes are parsed directly to `f32`;
+/// numbers are widened/narrowed.
+fn to_f32(v: &ScalarValue) -> Result<f32> {
+    Ok(match v {
+        ScalarValue::Utf8(s) => s.trim().parse().map_err(|e| {
+            FdapQueryError::Execution(format!("cannot cast string '{s}' to float: {e}"))
+        })?,
+        ScalarValue::Binary(b) => {
+            let s = String::from_utf8_lossy(b);
+            s.trim().parse().map_err(|e| {
+                FdapQueryError::Execution(format!("cannot cast bytes '{s}' to float: {e}"))
+            })?
+        }
         ScalarValue::Float32(f) => *f,
         ScalarValue::Float64(f) => *f as f32,
         ScalarValue::Int8(n) => *n as f32,
@@ -108,18 +125,26 @@ fn to_f32(v: &ScalarValue) -> f32 {
         ScalarValue::UInt16(n) => *n as f32,
         ScalarValue::UInt32(n) => *n as f32,
         ScalarValue::UInt64(n) => *n as f32,
-        other => panic!("Cannot cast value to float: {other:?}"),
-    }
+        other => {
+            return Err(FdapQueryError::Internal(format!(
+                "to_f32: cannot cast value to float: {other:?}"
+            )));
+        }
+    })
 }
 
 /// Convert a source value to `f64`. Mirrors [`to_f32`] for the `Double` target.
-fn to_f64(v: &ScalarValue) -> f64 {
-    match v {
-        ScalarValue::Utf8(s) => s.trim().parse().expect("cannot cast string to double"),
-        ScalarValue::Binary(b) => String::from_utf8_lossy(b)
-            .trim()
-            .parse()
-            .expect("cannot cast bytes to double"),
+fn to_f64(v: &ScalarValue) -> Result<f64> {
+    Ok(match v {
+        ScalarValue::Utf8(s) => s.trim().parse().map_err(|e| {
+            FdapQueryError::Execution(format!("cannot cast string '{s}' to double: {e}"))
+        })?,
+        ScalarValue::Binary(b) => {
+            let s = String::from_utf8_lossy(b);
+            s.trim().parse().map_err(|e| {
+                FdapQueryError::Execution(format!("cannot cast bytes '{s}' to double: {e}"))
+            })?
+        }
         ScalarValue::Float64(f) => *f,
         ScalarValue::Float32(f) => *f as f64,
         ScalarValue::Int8(n) => *n as f64,
@@ -130,8 +155,12 @@ fn to_f64(v: &ScalarValue) -> f64 {
         ScalarValue::UInt16(n) => *n as f64,
         ScalarValue::UInt32(n) => *n as f64,
         ScalarValue::UInt64(n) => *n as f64,
-        other => panic!("Cannot cast value to double: {other:?}"),
-    }
+        other => {
+            return Err(FdapQueryError::Internal(format!(
+                "to_f64: cannot cast value to double: {other:?}"
+            )));
+        }
+    })
 }
 
 /// Render a source value as a string.
@@ -178,7 +207,7 @@ mod tests {
         let batch = batch1("a", INT8_TYPE, Arc::new(Int8Array::from(a.clone())));
 
         let expr = CastExpression::new(Arc::new(ColumnExpression::new(0)), STRING_TYPE);
-        let result = expr.evaluate(&batch);
+        let result = expr.evaluate(&batch).unwrap();
 
         assert_eq!(result.size(), a.len());
         for (i, val) in a.iter().enumerate() {
@@ -197,7 +226,7 @@ mod tests {
         let batch = batch1("a", STRING_TYPE, Arc::new(StringArray::from(a.clone())));
 
         let expr = CastExpression::new(Arc::new(ColumnExpression::new(0)), FLOAT_TYPE);
-        let result = expr.evaluate(&batch);
+        let result = expr.evaluate(&batch).unwrap();
 
         assert_eq!(result.size(), a.len());
         for (i, val) in a.iter().enumerate() {

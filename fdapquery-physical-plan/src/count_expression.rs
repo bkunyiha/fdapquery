@@ -4,7 +4,7 @@
 
 use crate::aggregate_expression::AggregateExpression;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression, number_to_i64};
-use fdapquery_datatypes::ScalarValue;
+use fdapquery_datatypes::{Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -55,22 +55,24 @@ impl Default for CountAccumulator {
 }
 
 impl Accumulator for CountAccumulator {
-    fn accumulate(&mut self, value: &ScalarValue) {
+    fn accumulate(&mut self, value: &ScalarValue) -> Result<()> {
         if !value.is_null() {
             self.count += 1;
         }
+        Ok(())
     }
 
-    fn final_value(&self) -> ScalarValue {
-        ScalarValue::Int32(self.count)
+    fn final_value(&self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Int32(self.count))
     }
 
-    fn merge(&mut self, other: &AccumulatorValue) {
+    fn merge(&mut self, other: &AccumulatorValue) -> Result<()> {
         // COUNT merges by adding the partial counts together.
         if let AccumulatorValue::Scalar(s) = other {
             if !s.is_null() {
-                self.count += number_to_i64(s) as i32;
+                self.count += number_to_i64(s)? as i32;
             }
         }
+        Ok(())
     }
 }

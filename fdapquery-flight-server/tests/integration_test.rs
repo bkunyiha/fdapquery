@@ -94,7 +94,7 @@ fn build_employee_scan_plan() -> LogicalPlan {
 fn build_shuffle_writer_task() -> Task {
     let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
     let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
-    let scan: Arc<dyn PhysicalPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns));
+    let scan: Arc<dyn PhysicalPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
     let writer: Arc<dyn PhysicalPlan> = Arc::new(ShuffleWriterExec::new(
         scan,
         vec![Arc::new(ColumnExpression::new(0))],

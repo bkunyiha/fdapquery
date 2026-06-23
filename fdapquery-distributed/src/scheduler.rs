@@ -311,7 +311,7 @@ mod tests {
         ));
 
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
-        let physical_plan = QueryPlanner::new().create_physical_plan(&optimized);
+        let physical_plan = QueryPlanner::new().create_physical_plan(&optimized).unwrap();
 
         // Drive execution. The final-task mock returns an empty iterator; we
         // collect to drain.

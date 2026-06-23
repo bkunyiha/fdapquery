@@ -148,7 +148,9 @@ impl ParallelContext {
         let optimized = Optimizer::new()
             .optimize(plan)
             .expect("ParallelContext::execute: optimize");
-        let physical = QueryPlanner::new().create_physical_plan(&optimized);
+        let physical = QueryPlanner::new()
+            .create_physical_plan(&optimized)
+            .expect("ParallelContext::execute: create_physical_plan");
         let ctx = ExecutorContext::new("parallel", "localhost", 0, "/tmp/rquery-parallel-ignored");
         self.execute_parallel(physical.as_ref(), &ctx)
     }
@@ -163,7 +165,10 @@ impl ParallelContext {
         if let Some(aggregate) = plan.as_any().downcast_ref::<HashAggregateExec>() {
             self.execute_parallel_aggregate(aggregate, ctx)
         } else {
-            plan.execute(ctx)
+            let stream = plan
+                .execute(ctx)
+                .expect("ParallelContext: start non-aggregate plan");
+            Box::new(stream.map(|r| r.expect("ParallelContext: per-batch read error")))
         }
     }
 
@@ -175,11 +180,20 @@ impl ParallelContext {
     ) -> Box<dyn Iterator<Item = RecordBatch>> {
         // With a single worker there is nothing to fan out — run it directly.
         if self.parallelism <= 1 {
-            return aggregate.execute(ctx);
+            let stream = aggregate
+                .execute(ctx)
+                .expect("ParallelContext: start aggregate plan");
+            return Box::new(stream.map(|r| r.expect("ParallelContext: aggregate per-batch error")));
         }
 
         // Collect the input batches and distribute them round-robin to workers.
-        let input_batches: Vec<RecordBatch> = aggregate.input.execute(ctx).collect();
+        let input_stream = aggregate
+            .input
+            .execute(ctx)
+            .expect("ParallelContext: start aggregate input");
+        let input_batches: Vec<RecordBatch> = input_stream
+            .map(|r| r.expect("ParallelContext: aggregate input per-batch error"))
+            .collect();
         let mut worker_batches: Vec<Vec<RecordBatch>> =
             (0..self.parallelism).map(|_| Vec::new()).collect();
         for (index, batch) in input_batches.into_iter().enumerate() {
@@ -223,7 +237,11 @@ fn execute_partial_aggregate(
         aggregate.schema.clone(),
         AggregateMode::Partial,
     );
-    partial.execute(ctx).collect()
+    partial
+        .execute(ctx)
+        .expect("execute_partial_aggregate: start partial plan")
+        .map(|r| r.expect("execute_partial_aggregate: per-batch error"))
+        .collect()
 }
 
 /// Merge the partial results with a `Final` aggregate. Note the input schema
@@ -241,7 +259,10 @@ fn execute_final_aggregate(
         aggregate.schema.clone(),
         AggregateMode::Final,
     );
-    final_aggregate.execute(ctx)
+    let stream = final_aggregate
+        .execute(ctx)
+        .expect("execute_final_aggregate: start final plan");
+    Box::new(stream.map(|r| r.expect("execute_final_aggregate: per-batch error")))
 }
 
 /// Leaf physical plan that replays pre-loaded batches. Used to feed batches
@@ -272,9 +293,13 @@ impl PhysicalPlan for InMemoryPlan {
         Vec::new()
     }
 
-    fn execute(&self, _ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        _ctx: &ExecutorContext,
+    ) -> fdapquery_datatypes::Result<Box<dyn Iterator<Item = fdapquery_datatypes::Result<RecordBatch>>>>
+    {
         // arrow `RecordBatch` is `Arc`-backed, so cloning the vec is cheap.
-        Box::new(self.batches.clone().into_iter())
+        Ok(Box::new(self.batches.clone().into_iter().map(Ok)))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -284,12 +309,14 @@ impl PhysicalPlan for InMemoryPlan {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert!(
-            children.is_empty(),
-            "InMemoryPlan is a leaf and expects no children"
-        );
-        self
+    ) -> fdapquery_datatypes::Result<Arc<dyn PhysicalPlan>> {
+        if !children.is_empty() {
+            return Err(fdapquery_datatypes::FdapQueryError::Internal(format!(
+                "InMemoryPlan is a leaf and expects no children, got {}",
+                children.len()
+            )));
+        }
+        Ok(self)
     }
 }
 

@@ -11,7 +11,7 @@
 
 use crate::expressions::{Expression, number_to_f64};
 use fdapquery_datatypes::arrow_types::DOUBLE_TYPE;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -25,21 +25,19 @@ pub trait UnaryMathExpression: Expression {
 
     /// Template method: evaluate the input, then map
     /// each non-null value through `apply`, producing a `Float64` column.
-    fn evaluate_unary(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        let n = self.input().evaluate(input);
+    fn evaluate_unary(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        let n = self.input().evaluate(input)?;
         let mut builder = ArrowVectorBuilder::new(&DOUBLE_TYPE, n.size());
         for i in 0..n.size() {
-            let value = n
-                .get_value(i)
-                .expect("UnaryMathExpression: get_value over input column");
+            let value = n.get_value(i)?;
             if value.is_null() {
                 builder.append_null();
             } else {
-                builder.append_value(&ScalarValue::Float64(self.apply(number_to_f64(&value))));
+                builder.append_value(&ScalarValue::Float64(self.apply(number_to_f64(&value)?)));
             }
         }
         builder.set_value_count(n.size());
-        Box::new(builder.build())
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -64,7 +62,7 @@ impl UnaryMathExpression for Sqrt {
 }
 
 impl Expression for Sqrt {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_unary(input)
     }
 
@@ -100,7 +98,7 @@ impl UnaryMathExpression for Log {
 }
 
 impl Expression for Log {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_unary(input)
     }
 

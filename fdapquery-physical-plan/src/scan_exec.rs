@@ -7,42 +7,51 @@
 use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
 use fdapquery_datasource::DataSource;
-use fdapquery_datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
 use std::fmt;
 use std::sync::Arc;
 
 /// Scan a data source with optional push-down projection.
 ///
 /// `ds` is held as `Arc<dyn DataSource>` (matching the logical `Scan` operator),
-/// so the same source can be shared across plan nodes.
+/// so the same source can be shared across plan nodes. The output schema is
+/// computed once at construction (`Schema::select` over the projection) and
+/// cached — matching DataFusion's `ExecutionPlan::schema(&self) -> SchemaRef`
+/// shape, where schema is infallible because it's known at plan-build time.
 pub struct ScanExec {
     pub ds: Arc<dyn DataSource>,
     pub projection: Vec<String>,
+    pub schema: Schema,
 }
 
 impl ScanExec {
-    pub fn new(ds: Arc<dyn DataSource>, projection: Vec<String>) -> Self {
-        Self { ds, projection }
+    /// Build a `ScanExec`, validating the projection against the data-source
+    /// schema. Invalid projection (a column name not present in the source)
+    /// surfaces as `Err(SchemaError(_))`.
+    pub fn new(ds: Arc<dyn DataSource>, projection: Vec<String>) -> Result<Self> {
+        let schema = ds.schema().select(&projection)?;
+        Ok(Self {
+            ds,
+            projection,
+            schema,
+        })
     }
 }
 
 impl PhysicalPlan for ScanExec {
     fn schema(&self) -> Schema {
-        self.ds
-            .schema()
-            .select(&self.projection)
-            .expect("ScanExec::schema: projection columns must be present in data-source schema")
+        self.schema.clone()
     }
 
-    fn execute(&self, _ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        _ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         // A leaf scan needs no executor context — the `DataSource` reads from
         // its own configured location (CSV path / Parquet path). `_ctx` is
         // present in the signature only so the trait contract is uniform.
-        let iter = self
-            .ds
-            .scan(&self.projection)
-            .expect("ScanExec: scan failed to start over data source");
-        Box::new(iter.map(|res| res.expect("ScanExec: per-batch read error during iteration")))
+        let iter = self.ds.scan(&self.projection)?;
+        Ok(Box::new(iter))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
@@ -66,12 +75,14 @@ impl PhysicalPlan for ScanExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert!(
-            children.is_empty(),
-            "ScanExec is a leaf and expects no children"
-        );
-        self
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if !children.is_empty() {
+            return Err(FdapQueryError::Internal(format!(
+                "ScanExec is a leaf and expects no children, got {}",
+                children.len()
+            )));
+        }
+        Ok(self)
     }
 }
 
@@ -81,8 +92,7 @@ impl fmt::Display for ScanExec {
         write!(
             f,
             "ScanExec: schema={:?}, projection={:?}",
-            self.schema(),
-            self.projection
+            self.schema, self.projection
         )
     }
 }

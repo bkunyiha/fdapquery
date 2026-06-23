@@ -77,7 +77,9 @@ impl<C: ExecutorClient> DistributedContext<C> {
         let optimized: LogicalPlan = Optimizer::new()
             .optimize(plan)
             .expect("DistributedContext::execute: optimize");
-        let physical: Arc<dyn PhysicalPlan> = QueryPlanner::new().create_physical_plan(&optimized);
+        let physical: Arc<dyn PhysicalPlan> = QueryPlanner::new()
+            .create_physical_plan(&optimized)
+            .expect("DistributedContext::execute: create_physical_plan");
         self.scheduler.execute(physical)
     }
 }

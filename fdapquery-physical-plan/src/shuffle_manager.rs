@@ -16,7 +16,7 @@
 
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
-use fdapquery_datatypes::RecordBatch;
+use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result};
 use std::fs::{File, create_dir_all};
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -50,55 +50,48 @@ impl ShuffleManager {
         stage_id: i32,
         partition_id: i32,
         batches: &[RecordBatch],
-    ) {
+    ) -> Result<()> {
         if batches.is_empty() {
-            return;
+            return Ok(());
         }
         let dir = self.partition_dir(job_uuid, stage_id);
-        create_dir_all(&dir).unwrap_or_else(|e| {
-            panic!("failed to create shuffle directory {}: {e}", dir.display())
-        });
+        create_dir_all(&dir)?;
         let file_path = dir.join(format!("partition_{partition_id}.arrow"));
-        let file = File::create(&file_path).unwrap_or_else(|e| {
-            panic!("failed to create shuffle file {}: {e}", file_path.display())
-        });
+        let file = File::create(&file_path)?;
 
         // The schema is taken from the first batch.
         let schema = batches[0].schema();
-        let mut writer =
-            FileWriter::try_new(file, &schema).expect("failed to initialise Arrow IPC FileWriter");
+        let mut writer = FileWriter::try_new(file, &schema)?;
         for batch in batches {
-            writer
-                .write(batch)
-                .expect("failed to write batch to Arrow IPC file");
+            writer.write(batch)?;
         }
-        writer.finish().expect("failed to finalise Arrow IPC file");
+        writer.finish()?;
+        Ok(())
     }
 
     /// Read a partition's batches from local Arrow IPC storage.
     ///
-    /// Returns a boxed iterator (matching the rest of the `PhysicalPlan`
-    /// shape). Each yielded batch is fully materialised before the next is
-    /// pulled — the iterator drains the on-disk file lazily.
+    /// Returns a boxed iterator whose `Item` is `Result<RecordBatch>`. Each
+    /// yielded batch is fully materialised before the next is pulled — the
+    /// iterator drains the on-disk file lazily.
     pub fn read_partition(
         &self,
         job_uuid: &str,
         stage_id: i32,
         partition_id: i32,
-    ) -> Box<dyn Iterator<Item = RecordBatch>> {
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         let file_path = self.get_partition_file(job_uuid, stage_id, partition_id);
         if !file_path.exists() {
-            panic!("Shuffle file not found: {}", file_path.display());
+            return Err(FdapQueryError::Execution(format!(
+                "shuffle file not found: {}",
+                file_path.display()
+            )));
         }
-        let file = File::open(&file_path)
-            .unwrap_or_else(|e| panic!("failed to open shuffle file {}: {e}", file_path.display()));
+        let file = File::open(&file_path)?;
         // BufReader because FileReader does many small reads while parsing the
         // IPC footer/dictionaries.
-        let reader = FileReader::try_new(BufReader::new(file), None)
-            .expect("failed to initialise Arrow IPC FileReader");
-        // FileReader yields `Result<RecordBatch>`; unwrap each batch (matches
-        // the panic-style error handling used everywhere else in rquery).
-        Box::new(reader.map(|r| r.expect("failed to read shuffle batch")))
+        let reader = FileReader::try_new(BufReader::new(file), None)?;
+        Ok(Box::new(reader.map(|r| r.map_err(FdapQueryError::from))))
     }
 
     /// Path of a shuffle partition file.
@@ -185,10 +178,13 @@ mod tests {
             stage_id,
             partition_id,
             &[batch1.clone(), batch2.clone()],
-        );
+        )
+        .unwrap();
         let read_back: Vec<RecordBatch> = mgr
             .read_partition(job_uuid, stage_id, partition_id)
-            .collect();
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
 
         assert_eq!(read_back.len(), 2);
         assert_eq!(read_back[0], batch1);
@@ -201,8 +197,8 @@ mod tests {
     fn write_partition_with_empty_batches_is_a_noop() {
         let base = temp_dir("empty");
         let mgr = ShuffleManager::new(&base);
-        mgr.write_partition("test-job-B", 0, 0, &[]);
-        // No file should have been created — `read_partition` panics on missing files.
+        mgr.write_partition("test-job-B", 0, 0, &[]).unwrap();
+        // No file should have been created — `read_partition` returns Err on missing files.
         assert!(!mgr.get_partition_file("test-job-B", 0, 0).exists());
         mgr.cleanup_all();
     }

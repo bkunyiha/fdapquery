@@ -56,7 +56,10 @@ pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn Physica
                 "parquet" => Arc::new(ParquetDataSource::new(&scan.path)),
                 other => panic!("Unsupported file format: {other:?}"),
             };
-            Arc::new(ScanExec::new(ds, scan.projection.clone()))
+            Arc::new(
+                ScanExec::new(ds, scan.projection.clone())
+                    .expect("ScanExecNode: invalid projection over data source schema"),
+            )
         }
         Some(PlanType::Projection(proj)) => {
             let input = deserialize_physical_plan(

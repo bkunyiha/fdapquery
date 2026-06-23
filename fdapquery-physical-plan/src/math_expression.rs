@@ -24,15 +24,21 @@
 use crate::binary_expression::BinaryExpression;
 use crate::expressions::{Expression, as_f32, as_f64, as_i8, as_i16, as_i32, as_i64};
 use arrow_schema::DataType;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
+};
 use std::fmt;
 use std::sync::Arc;
 
 /// An arithmetic binary expression.
 pub trait MathExpression: BinaryExpression {
     /// Compute one output cell from the two input cells and their (shared) type.
-    fn evaluate_cell(&self, l: &ScalarValue, r: &ScalarValue, arrow_type: &DataType)
-    -> ScalarValue;
+    fn evaluate_cell(
+        &self,
+        l: &ScalarValue,
+        r: &ScalarValue,
+        arrow_type: &DataType,
+    ) -> Result<ScalarValue>;
 
     /// Wire-format operator name (`"add"`, `"subtract"`, `"multiply"`,
     /// `"divide"`). Used by `fdapquery_protobuf::serialize_physical_expr` to serialise
@@ -51,21 +57,25 @@ pub(crate) fn math_evaluate_pair<M: MathExpression + ?Sized>(
     m: &M,
     l: &dyn ColumnVector,
     r: &dyn ColumnVector,
-) -> Box<dyn ColumnVector> {
+) -> Result<Box<dyn ColumnVector>> {
     let arrow_type = l.get_type();
     let mut builder = ArrowVectorBuilder::new(&arrow_type, l.size());
     for i in 0..l.size() {
-        let lv = l
-            .get_value(i)
-            .expect("MathExpression: get_value over left operand");
-        let rv = r
-            .get_value(i)
-            .expect("MathExpression: get_value over right operand");
-        let value = m.evaluate_cell(&lv, &rv, &arrow_type);
+        let lv = l.get_value(i)?;
+        let rv = r.get_value(i)?;
+        let value = m.evaluate_cell(&lv, &rv, &arrow_type)?;
         builder.append_value(&value);
     }
     builder.set_value_count(l.size());
-    Box::new(builder.build())
+    Ok(Box::new(builder.build()))
+}
+
+/// Standard "unsupported data type in math expression" error, factored out so
+/// every operator surfaces the same diagnostic.
+fn unsupported_math_type(arrow_type: &DataType) -> FdapQueryError {
+    FdapQueryError::Internal(format!(
+        "math expression got unsupported data type from child evaluators: {arrow_type:?}"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -90,19 +100,19 @@ impl MathExpression for AddExpression {
         l: &ScalarValue,
         r: &ScalarValue,
         arrow_type: &DataType,
-    ) -> ScalarValue {
+    ) -> Result<ScalarValue> {
         if l.is_null() || r.is_null() {
-            return ScalarValue::Null;
+            return Ok(ScalarValue::Null);
         }
-        match arrow_type {
-            DataType::Int8 => ScalarValue::Int8(as_i8(l).wrapping_add(as_i8(r))),
-            DataType::Int16 => ScalarValue::Int16(as_i16(l).wrapping_add(as_i16(r))),
-            DataType::Int32 => ScalarValue::Int32(as_i32(l).wrapping_add(as_i32(r))),
-            DataType::Int64 => ScalarValue::Int64(as_i64(l).wrapping_add(as_i64(r))),
-            DataType::Float32 => ScalarValue::Float32(as_f32(l) + as_f32(r)),
-            DataType::Float64 => ScalarValue::Float64(as_f64(l) + as_f64(r)),
-            other => panic!("Unsupported data type in math expression: {other:?}"),
-        }
+        Ok(match arrow_type {
+            DataType::Int8 => ScalarValue::Int8(as_i8(l)?.wrapping_add(as_i8(r)?)),
+            DataType::Int16 => ScalarValue::Int16(as_i16(l)?.wrapping_add(as_i16(r)?)),
+            DataType::Int32 => ScalarValue::Int32(as_i32(l)?.wrapping_add(as_i32(r)?)),
+            DataType::Int64 => ScalarValue::Int64(as_i64(l)?.wrapping_add(as_i64(r)?)),
+            DataType::Float32 => ScalarValue::Float32(as_f32(l)? + as_f32(r)?),
+            DataType::Float64 => ScalarValue::Float64(as_f64(l)? + as_f64(r)?),
+            other => return Err(unsupported_math_type(other)),
+        })
     }
 
     fn op_name(&self) -> &'static str {
@@ -117,13 +127,17 @@ impl BinaryExpression for AddExpression {
     fn right(&self) -> &Arc<dyn Expression> {
         &self.r
     }
-    fn evaluate_pair(&self, l: &dyn ColumnVector, r: &dyn ColumnVector) -> Box<dyn ColumnVector> {
+    fn evaluate_pair(
+        &self,
+        l: &dyn ColumnVector,
+        r: &dyn ColumnVector,
+    ) -> Result<Box<dyn ColumnVector>> {
         math_evaluate_pair(self, l, r)
     }
 }
 
 impl Expression for AddExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
 
@@ -164,19 +178,19 @@ impl MathExpression for SubtractExpression {
         l: &ScalarValue,
         r: &ScalarValue,
         arrow_type: &DataType,
-    ) -> ScalarValue {
+    ) -> Result<ScalarValue> {
         if l.is_null() || r.is_null() {
-            return ScalarValue::Null;
+            return Ok(ScalarValue::Null);
         }
-        match arrow_type {
-            DataType::Int8 => ScalarValue::Int8(as_i8(l).wrapping_sub(as_i8(r))),
-            DataType::Int16 => ScalarValue::Int16(as_i16(l).wrapping_sub(as_i16(r))),
-            DataType::Int32 => ScalarValue::Int32(as_i32(l).wrapping_sub(as_i32(r))),
-            DataType::Int64 => ScalarValue::Int64(as_i64(l).wrapping_sub(as_i64(r))),
-            DataType::Float32 => ScalarValue::Float32(as_f32(l) - as_f32(r)),
-            DataType::Float64 => ScalarValue::Float64(as_f64(l) - as_f64(r)),
-            other => panic!("Unsupported data type in math expression: {other:?}"),
-        }
+        Ok(match arrow_type {
+            DataType::Int8 => ScalarValue::Int8(as_i8(l)?.wrapping_sub(as_i8(r)?)),
+            DataType::Int16 => ScalarValue::Int16(as_i16(l)?.wrapping_sub(as_i16(r)?)),
+            DataType::Int32 => ScalarValue::Int32(as_i32(l)?.wrapping_sub(as_i32(r)?)),
+            DataType::Int64 => ScalarValue::Int64(as_i64(l)?.wrapping_sub(as_i64(r)?)),
+            DataType::Float32 => ScalarValue::Float32(as_f32(l)? - as_f32(r)?),
+            DataType::Float64 => ScalarValue::Float64(as_f64(l)? - as_f64(r)?),
+            other => return Err(unsupported_math_type(other)),
+        })
     }
 
     fn op_name(&self) -> &'static str {
@@ -191,13 +205,17 @@ impl BinaryExpression for SubtractExpression {
     fn right(&self) -> &Arc<dyn Expression> {
         &self.r
     }
-    fn evaluate_pair(&self, l: &dyn ColumnVector, r: &dyn ColumnVector) -> Box<dyn ColumnVector> {
+    fn evaluate_pair(
+        &self,
+        l: &dyn ColumnVector,
+        r: &dyn ColumnVector,
+    ) -> Result<Box<dyn ColumnVector>> {
         math_evaluate_pair(self, l, r)
     }
 }
 
 impl Expression for SubtractExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
 
@@ -238,19 +256,19 @@ impl MathExpression for MultiplyExpression {
         l: &ScalarValue,
         r: &ScalarValue,
         arrow_type: &DataType,
-    ) -> ScalarValue {
+    ) -> Result<ScalarValue> {
         if l.is_null() || r.is_null() {
-            return ScalarValue::Null;
+            return Ok(ScalarValue::Null);
         }
-        match arrow_type {
-            DataType::Int8 => ScalarValue::Int8(as_i8(l).wrapping_mul(as_i8(r))),
-            DataType::Int16 => ScalarValue::Int16(as_i16(l).wrapping_mul(as_i16(r))),
-            DataType::Int32 => ScalarValue::Int32(as_i32(l).wrapping_mul(as_i32(r))),
-            DataType::Int64 => ScalarValue::Int64(as_i64(l).wrapping_mul(as_i64(r))),
-            DataType::Float32 => ScalarValue::Float32(as_f32(l) * as_f32(r)),
-            DataType::Float64 => ScalarValue::Float64(as_f64(l) * as_f64(r)),
-            other => panic!("Unsupported data type in math expression: {other:?}"),
-        }
+        Ok(match arrow_type {
+            DataType::Int8 => ScalarValue::Int8(as_i8(l)?.wrapping_mul(as_i8(r)?)),
+            DataType::Int16 => ScalarValue::Int16(as_i16(l)?.wrapping_mul(as_i16(r)?)),
+            DataType::Int32 => ScalarValue::Int32(as_i32(l)?.wrapping_mul(as_i32(r)?)),
+            DataType::Int64 => ScalarValue::Int64(as_i64(l)?.wrapping_mul(as_i64(r)?)),
+            DataType::Float32 => ScalarValue::Float32(as_f32(l)? * as_f32(r)?),
+            DataType::Float64 => ScalarValue::Float64(as_f64(l)? * as_f64(r)?),
+            other => return Err(unsupported_math_type(other)),
+        })
     }
 
     fn op_name(&self) -> &'static str {
@@ -265,13 +283,17 @@ impl BinaryExpression for MultiplyExpression {
     fn right(&self) -> &Arc<dyn Expression> {
         &self.r
     }
-    fn evaluate_pair(&self, l: &dyn ColumnVector, r: &dyn ColumnVector) -> Box<dyn ColumnVector> {
+    fn evaluate_pair(
+        &self,
+        l: &dyn ColumnVector,
+        r: &dyn ColumnVector,
+    ) -> Result<Box<dyn ColumnVector>> {
         math_evaluate_pair(self, l, r)
     }
 }
 
 impl Expression for MultiplyExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
 
@@ -312,19 +334,19 @@ impl MathExpression for DivideExpression {
         l: &ScalarValue,
         r: &ScalarValue,
         arrow_type: &DataType,
-    ) -> ScalarValue {
+    ) -> Result<ScalarValue> {
         if l.is_null() || r.is_null() {
-            return ScalarValue::Null;
+            return Ok(ScalarValue::Null);
         }
-        match arrow_type {
-            DataType::Int8 => ScalarValue::Int8(as_i8(l) / as_i8(r)),
-            DataType::Int16 => ScalarValue::Int16(as_i16(l) / as_i16(r)),
-            DataType::Int32 => ScalarValue::Int32(as_i32(l) / as_i32(r)),
-            DataType::Int64 => ScalarValue::Int64(as_i64(l) / as_i64(r)),
-            DataType::Float32 => ScalarValue::Float32(as_f32(l) / as_f32(r)),
-            DataType::Float64 => ScalarValue::Float64(as_f64(l) / as_f64(r)),
-            other => panic!("Unsupported data type in math expression: {other:?}"),
-        }
+        Ok(match arrow_type {
+            DataType::Int8 => ScalarValue::Int8(as_i8(l)? / as_i8(r)?),
+            DataType::Int16 => ScalarValue::Int16(as_i16(l)? / as_i16(r)?),
+            DataType::Int32 => ScalarValue::Int32(as_i32(l)? / as_i32(r)?),
+            DataType::Int64 => ScalarValue::Int64(as_i64(l)? / as_i64(r)?),
+            DataType::Float32 => ScalarValue::Float32(as_f32(l)? / as_f32(r)?),
+            DataType::Float64 => ScalarValue::Float64(as_f64(l)? / as_f64(r)?),
+            other => return Err(unsupported_math_type(other)),
+        })
     }
 
     fn op_name(&self) -> &'static str {
@@ -339,13 +361,17 @@ impl BinaryExpression for DivideExpression {
     fn right(&self) -> &Arc<dyn Expression> {
         &self.r
     }
-    fn evaluate_pair(&self, l: &dyn ColumnVector, r: &dyn ColumnVector) -> Box<dyn ColumnVector> {
+    fn evaluate_pair(
+        &self,
+        l: &dyn ColumnVector,
+        r: &dyn ColumnVector,
+    ) -> Result<Box<dyn ColumnVector>> {
         math_evaluate_pair(self, l, r)
     }
 }
 
 impl Expression for DivideExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
 

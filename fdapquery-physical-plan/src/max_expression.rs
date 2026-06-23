@@ -3,7 +3,7 @@
 
 use crate::aggregate_expression::{AggregateExpression, scalar_gt};
 use crate::expressions::{Accumulator, AccumulatorValue, Expression};
-use fdapquery_datatypes::ScalarValue;
+use fdapquery_datatypes::{Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -56,23 +56,25 @@ impl Default for MaxAccumulator {
 }
 
 impl Accumulator for MaxAccumulator {
-    fn accumulate(&mut self, value: &ScalarValue) {
+    fn accumulate(&mut self, value: &ScalarValue) -> Result<()> {
         if value.is_null() {
-            return;
+            return Ok(());
         }
-        if self.value.is_null() || scalar_gt(value, &self.value) {
+        if self.value.is_null() || scalar_gt(value, &self.value)? {
             self.value = value.clone();
         }
+        Ok(())
     }
 
-    fn final_value(&self) -> ScalarValue {
-        self.value.clone()
+    fn final_value(&self) -> Result<ScalarValue> {
+        Ok(self.value.clone())
     }
 
-    fn merge(&mut self, other: &AccumulatorValue) {
+    fn merge(&mut self, other: &AccumulatorValue) -> Result<()> {
         // For MAX, merging a partial state is the same as accumulating it.
         if let AccumulatorValue::Scalar(v) = other {
-            self.accumulate(v);
+            self.accumulate(v)?;
         }
+        Ok(())
     }
 }

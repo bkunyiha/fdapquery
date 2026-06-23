@@ -140,10 +140,18 @@ impl ExecutorClient for LocalExecutorClient {
         // `execute()` deliberately panics because its return shape
         // (`Iterator<RecordBatch>`) doesn't fit "produce shuffle locations."
         if let Some(writer) = task.plan.as_any().downcast_ref::<ShuffleWriterExec>() {
-            writer.write_shuffle(&self.ctx)
+            writer
+                .write_shuffle(&self.ctx)
+                .expect("LocalExecutorClient: write_shuffle failed")
         } else {
             // Non-shuffle intermediate stage — drain and return no locations.
-            task.plan.execute(&self.ctx).for_each(|_| {});
+            let stream = task
+                .plan
+                .execute(&self.ctx)
+                .expect("LocalExecutorClient: start task plan");
+            for batch_res in stream {
+                let _ = batch_res.expect("LocalExecutorClient: per-batch read");
+            }
             Vec::new()
         }
     }
@@ -163,7 +171,11 @@ impl ExecutorClient for LocalExecutorClient {
         // `DistributedPlanner::update_shuffle_locations`. `execute(&ctx)`
         // flows the context through the aggregate to the reader, which
         // reads via `ctx.shuffle_manager.read_partition(...)`.
-        task.plan.execute(&self.ctx)
+        let stream = task
+            .plan
+            .execute(&self.ctx)
+            .expect("LocalExecutorClient: start final task plan");
+        Box::new(stream.map(|r| r.expect("LocalExecutorClient: final-task per-batch read")))
     }
 
     fn fetch_shuffle(
@@ -176,11 +188,12 @@ impl ExecutorClient for LocalExecutorClient {
         // ctx.executor_id`. With our shared `ctx` (id = "local-executor")
         // and locations all tagged with the same id by `write_shuffle`,
         // this branch should not fire — but if it does, we read locally.
-        self.ctx.shuffle_manager.read_partition(
-            &location.job_uuid,
-            location.stage_id,
-            location.partition_id,
-        )
+        let stream = self
+            .ctx
+            .shuffle_manager
+            .read_partition(&location.job_uuid, location.stage_id, location.partition_id)
+            .expect("LocalExecutorClient: read_partition setup");
+        Box::new(stream.map(|r| r.expect("LocalExecutorClient: shuffle per-batch read")))
     }
 }
 

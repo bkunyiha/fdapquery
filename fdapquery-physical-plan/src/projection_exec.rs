@@ -5,7 +5,9 @@
 use crate::executor_context::ExecutorContext;
 use crate::expressions::Expression;
 use crate::physical_plan::PhysicalPlan;
-use fdapquery_datatypes::{ColumnVector, RecordBatch, Schema, record_batch};
+use fdapquery_datatypes::{
+    ColumnVector, FdapQueryError, RecordBatch, Result, Schema, record_batch,
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -39,17 +41,23 @@ impl PhysicalPlan for ProjectionExec {
         self.schema.clone()
     }
 
-    fn execute(&self, ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         // Projection just evaluates expressions per batch — no context use; pass
         // through to the input so shuffle-bearing children downstream can find it.
         let schema = self.schema.clone();
         let exprs = self.expr.clone();
-        Box::new(self.input.execute(ctx).map(move |batch| {
-            let columns: Vec<Box<dyn ColumnVector>> =
-                exprs.iter().map(|e| e.evaluate(&batch)).collect();
+        let stream = self.input.execute(ctx)?;
+        Ok(Box::new(stream.map(move |batch_res| {
+            let batch = batch_res?;
+            let columns: Vec<Box<dyn ColumnVector>> = exprs
+                .iter()
+                .map(|e| e.evaluate(&batch))
+                .collect::<Result<Vec<_>>>()?;
             record_batch::create(&schema, columns)
-                .expect("ProjectionExec: schema/column mismatch building output batch")
-        }))
+        })))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
@@ -82,13 +90,18 @@ impl PhysicalPlan for ProjectionExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert_eq!(children.len(), 1, "ProjectionExec expects exactly 1 child");
-        Arc::new(ProjectionExec::new(
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if children.len() != 1 {
+            return Err(FdapQueryError::Internal(format!(
+                "ProjectionExec::with_new_children expected 1 child, got {}",
+                children.len()
+            )));
+        }
+        Ok(Arc::new(ProjectionExec::new(
             children.into_iter().next().unwrap(),
             self.schema.clone(),
             self.expr.clone(),
-        ))
+        )))
     }
 }
 

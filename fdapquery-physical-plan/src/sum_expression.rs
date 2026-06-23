@@ -8,7 +8,7 @@
 
 use crate::aggregate_expression::AggregateExpression;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression};
-use fdapquery_datatypes::ScalarValue;
+use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -61,34 +61,36 @@ impl Default for SumAccumulator {
 }
 
 impl Accumulator for SumAccumulator {
-    fn accumulate(&mut self, value: &ScalarValue) {
+    fn accumulate(&mut self, value: &ScalarValue) -> Result<()> {
         if value.is_null() {
-            return;
+            return Ok(());
         }
         if self.value.is_null() {
             self.value = value.clone();
         } else {
-            self.value = scalar_add(&self.value, value);
+            self.value = scalar_add(&self.value, value)?;
         }
+        Ok(())
     }
 
-    fn final_value(&self) -> ScalarValue {
-        self.value.clone()
+    fn final_value(&self) -> Result<ScalarValue> {
+        Ok(self.value.clone())
     }
 
-    fn merge(&mut self, other: &AccumulatorValue) {
+    fn merge(&mut self, other: &AccumulatorValue) -> Result<()> {
         // For SUM, merging a partial state is the same as accumulating it.
         if let AccumulatorValue::Scalar(v) = other {
-            self.accumulate(v);
+            self.accumulate(v)?;
         }
+        Ok(())
     }
 }
 
-/// Add two same-typed numeric scalars (integers wrap on overflow). Panics on a
-/// type SUM doesn't support.
-fn scalar_add(a: &ScalarValue, b: &ScalarValue) -> ScalarValue {
+/// Add two same-typed numeric scalars (integers wrap on overflow). A type SUM
+/// doesn't support surfaces as `Err(NotImplemented(_))`.
+fn scalar_add(a: &ScalarValue, b: &ScalarValue) -> Result<ScalarValue> {
     use ScalarValue::*;
-    match (a, b) {
+    Ok(match (a, b) {
         (Int8(x), Int8(y)) => Int8(x.wrapping_add(*y)),
         (Int16(x), Int16(y)) => Int16(x.wrapping_add(*y)),
         (Int32(x), Int32(y)) => Int32(x.wrapping_add(*y)),
@@ -99,6 +101,10 @@ fn scalar_add(a: &ScalarValue, b: &ScalarValue) -> ScalarValue {
         (UInt64(x), UInt64(y)) => UInt64(x.wrapping_add(*y)),
         (Float32(x), Float32(y)) => Float32(x + y),
         (Float64(x), Float64(y)) => Float64(x + y),
-        _ => panic!("SUM is not implemented for type: {a:?}"),
-    }
+        _ => {
+            return Err(FdapQueryError::NotImplemented(format!(
+                "SUM is not implemented for type: {a:?}"
+            )));
+        }
+    })
 }

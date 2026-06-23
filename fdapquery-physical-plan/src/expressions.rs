@@ -15,7 +15,8 @@
 
 use fdapquery_datatypes::arrow_types::{DATE_DAY_TYPE, DOUBLE_TYPE, INT64_TYPE, STRING_TYPE};
 use fdapquery_datatypes::{
-    ColumnVector, LiteralValueVector, RecordBatch, ScalarValue, record_batch,
+    ColumnVector, FdapQueryError, LiteralValueVector, RecordBatch, Result, ScalarValue,
+    record_batch,
 };
 use std::fmt;
 
@@ -29,8 +30,10 @@ use std::fmt;
 pub trait Expression: fmt::Display + Send + Sync {
     /// Evaluate against an input record batch and produce a column of output.
     ///
-    /// boxed trait object `Box<dyn ColumnVector>`.
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector>;
+    /// Returns a boxed trait object `Box<dyn ColumnVector>`. Failures
+    /// (type-dispatch invariants violated by a misplanner, child-expression
+    /// errors) surface as `FdapQueryError::Internal(_)`.
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>>;
 
     /// Type-erased self-reference for runtime downcasting (see
     /// `PhysicalPlan::as_any` for the rationale). The protobuf serializer
@@ -75,12 +78,12 @@ impl LiteralLongExpression {
 }
 
 impl Expression for LiteralLongExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        Box::new(LiteralValueVector::new(
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        Ok(Box::new(LiteralValueVector::new(
             INT64_TYPE,
             ScalarValue::Int64(self.value),
             record_batch::row_count(input),
-        ))
+        )))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -106,12 +109,12 @@ impl LiteralDoubleExpression {
 }
 
 impl Expression for LiteralDoubleExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        Box::new(LiteralValueVector::new(
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        Ok(Box::new(LiteralValueVector::new(
             DOUBLE_TYPE,
             ScalarValue::Float64(self.value),
             record_batch::row_count(input),
-        ))
+        )))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -141,12 +144,12 @@ impl LiteralStringExpression {
 }
 
 impl Expression for LiteralStringExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        Box::new(LiteralValueVector::new(
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        Ok(Box::new(LiteralValueVector::new(
             STRING_TYPE,
             ScalarValue::Utf8(self.value.clone()),
             record_batch::row_count(input),
-        ))
+        )))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -173,12 +176,12 @@ impl LiteralDateExpression {
 }
 
 impl Expression for LiteralDateExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        Box::new(LiteralValueVector::new(
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        Ok(Box::new(LiteralValueVector::new(
             DATE_DAY_TYPE,
             ScalarValue::Date32(self.days_since_epoch),
             record_batch::row_count(input),
-        ))
+        )))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -205,12 +208,12 @@ impl LiteralIntervalDaysExpression {
 }
 
 impl Expression for LiteralIntervalDaysExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        Box::new(LiteralValueVector::new(
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        Ok(Box::new(LiteralValueVector::new(
             INT64_TYPE,
             ScalarValue::Int64(self.days),
             record_batch::row_count(input),
-        ))
+        )))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -259,28 +262,30 @@ pub enum AccumulatorValue {
 /// traffic in [`AccumulatorValue`], which can also carry AVG's compound
 /// (sum, count) state — the one place a scalar is insufficient.
 pub trait Accumulator {
-    /// Fold one input value into the running state.
-    fn accumulate(&mut self, value: &ScalarValue);
+    /// Fold one input value into the running state. Type-mismatch invariants
+    /// surface as `FdapQueryError::Internal(_)`.
+    fn accumulate(&mut self, value: &ScalarValue) -> Result<()>;
 
     /// The final aggregate result.
-    fn final_value(&self) -> ScalarValue;
+    fn final_value(&self) -> Result<ScalarValue>;
 
     /// Intermediate state for partial (distributed) aggregation. Defaults to the
     /// final value wrapped as a scalar; only AVG (with its compound running
     /// sum + count state) overrides this.
-    fn intermediate_value(&self) -> AccumulatorValue {
-        AccumulatorValue::Scalar(self.final_value())
+    fn intermediate_value(&self) -> Result<AccumulatorValue> {
+        Ok(AccumulatorValue::Scalar(self.final_value()?))
     }
 
     /// Merge another accumulator's intermediate value into this one — used in the
     /// final stage of distributed aggregation.
-    fn merge(&mut self, other: &AccumulatorValue);
+    fn merge(&mut self, other: &AccumulatorValue) -> Result<()>;
 }
 
 /// Coerce any numeric (or date) [`ScalarValue`] to `i64`, truncating floats.
-/// Panics on a non-numeric value.
-pub(crate) fn number_to_i64(v: &ScalarValue) -> i64 {
-    match v {
+/// Non-numeric variant → `Err(Internal(_))` — the planner has already type-
+/// checked the dispatch arm; reaching this branch means an engine bug.
+pub(crate) fn number_to_i64(v: &ScalarValue) -> Result<i64> {
+    Ok(match v {
         ScalarValue::Int8(n) => *n as i64,
         ScalarValue::Int16(n) => *n as i64,
         ScalarValue::Int32(n) => *n as i64,
@@ -292,13 +297,18 @@ pub(crate) fn number_to_i64(v: &ScalarValue) -> i64 {
         ScalarValue::Float32(f) => *f as i64,
         ScalarValue::Float64(f) => *f as i64,
         ScalarValue::Date32(d) => *d as i64,
-        other => panic!("expected a number, got {other:?}"),
-    }
+        other => {
+            return Err(FdapQueryError::Internal(format!(
+                "number_to_i64: expected a number, got {other:?}"
+            )));
+        }
+    })
 }
 
-/// Coerce any numeric [`ScalarValue`] to `f64`. Panics on a non-numeric value.
-pub(crate) fn number_to_f64(v: &ScalarValue) -> f64 {
-    match v {
+/// Coerce any numeric [`ScalarValue`] to `f64`. Non-numeric variant →
+/// `Err(Internal(_))`.
+pub(crate) fn number_to_f64(v: &ScalarValue) -> Result<f64> {
+    Ok(match v {
         ScalarValue::Int8(n) => *n as f64,
         ScalarValue::Int16(n) => *n as f64,
         ScalarValue::Int32(n) => *n as f64,
@@ -309,55 +319,72 @@ pub(crate) fn number_to_f64(v: &ScalarValue) -> f64 {
         ScalarValue::UInt64(n) => *n as f64,
         ScalarValue::Float32(f) => *f as f64,
         ScalarValue::Float64(f) => *f,
-        other => panic!("expected a number, got {other:?}"),
-    }
+        other => {
+            return Err(FdapQueryError::Internal(format!(
+                "number_to_f64: expected a number, got {other:?}"
+            )));
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Shared ScalarValue extractors. Used by the math and boolean expression
 // families to pull a typed value out of a `ScalarValue` after dispatching on
-// the Arrow type. A wrong variant panics.
+// the Arrow type. A wrong variant signals a planner type-dispatch bug and
+// surfaces as `Err(Internal(_))`.
 // ---------------------------------------------------------------------------
 
-pub(crate) fn as_i8(v: &ScalarValue) -> i8 {
+pub(crate) fn as_i8(v: &ScalarValue) -> Result<i8> {
     match v {
-        ScalarValue::Int8(x) => *x,
-        other => panic!("expected Int8, got {other:?}"),
+        ScalarValue::Int8(x) => Ok(*x),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_i8: expected Int8, got {other:?}"
+        ))),
     }
 }
 
-pub(crate) fn as_i16(v: &ScalarValue) -> i16 {
+pub(crate) fn as_i16(v: &ScalarValue) -> Result<i16> {
     match v {
-        ScalarValue::Int16(x) => *x,
-        other => panic!("expected Int16, got {other:?}"),
+        ScalarValue::Int16(x) => Ok(*x),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_i16: expected Int16, got {other:?}"
+        ))),
     }
 }
 
-pub(crate) fn as_i32(v: &ScalarValue) -> i32 {
+pub(crate) fn as_i32(v: &ScalarValue) -> Result<i32> {
     match v {
-        ScalarValue::Int32(x) => *x,
-        other => panic!("expected Int32, got {other:?}"),
+        ScalarValue::Int32(x) => Ok(*x),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_i32: expected Int32, got {other:?}"
+        ))),
     }
 }
 
-pub(crate) fn as_i64(v: &ScalarValue) -> i64 {
+pub(crate) fn as_i64(v: &ScalarValue) -> Result<i64> {
     match v {
-        ScalarValue::Int64(x) => *x,
-        other => panic!("expected Int64, got {other:?}"),
+        ScalarValue::Int64(x) => Ok(*x),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_i64: expected Int64, got {other:?}"
+        ))),
     }
 }
 
-pub(crate) fn as_f32(v: &ScalarValue) -> f32 {
+pub(crate) fn as_f32(v: &ScalarValue) -> Result<f32> {
     match v {
-        ScalarValue::Float32(x) => *x,
-        other => panic!("expected Float32, got {other:?}"),
+        ScalarValue::Float32(x) => Ok(*x),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_f32: expected Float32, got {other:?}"
+        ))),
     }
 }
 
-pub(crate) fn as_f64(v: &ScalarValue) -> f64 {
+pub(crate) fn as_f64(v: &ScalarValue) -> Result<f64> {
     match v {
-        ScalarValue::Float64(x) => *x,
-        other => panic!("expected Float64, got {other:?}"),
+        ScalarValue::Float64(x) => Ok(*x),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_f64: expected Float64, got {other:?}"
+        ))),
     }
 }
 

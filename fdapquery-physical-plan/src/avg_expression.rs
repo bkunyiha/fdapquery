@@ -7,7 +7,7 @@
 
 use crate::aggregate_expression::AggregateExpression;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression, number_to_f64};
-use fdapquery_datatypes::ScalarValue;
+use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
@@ -59,36 +59,37 @@ impl Default for AvgAccumulator {
 }
 
 impl Accumulator for AvgAccumulator {
-    fn accumulate(&mut self, value: &ScalarValue) {
+    fn accumulate(&mut self, value: &ScalarValue) -> Result<()> {
         if !value.is_null() {
             self.count += 1;
-            self.sum += number_to_f64(value);
+            self.sum += number_to_f64(value)?;
         }
+        Ok(())
     }
 
-    fn final_value(&self) -> ScalarValue {
+    fn final_value(&self) -> Result<ScalarValue> {
         // Empty group: null. Otherwise: sum / count.
-        if self.count == 0 {
+        Ok(if self.count == 0 {
             ScalarValue::Null
         } else {
             ScalarValue::Float64(self.sum / self.count as f64)
-        }
+        })
     }
 
-    fn intermediate_value(&self) -> AccumulatorValue {
+    fn intermediate_value(&self) -> Result<AccumulatorValue> {
         // `AccumulatorValue` has no null variant; an empty group is represented
         // as a null scalar — the same observable "no partial state".
-        if self.count == 0 {
+        Ok(if self.count == 0 {
             AccumulatorValue::Scalar(ScalarValue::Null)
         } else {
             AccumulatorValue::AvgState {
                 sum: self.sum,
                 count: self.count,
             }
-        }
+        })
     }
 
-    fn merge(&mut self, other: &AccumulatorValue) {
+    fn merge(&mut self, other: &AccumulatorValue) -> Result<()> {
         // Merge sum and count separately from an `AvgState`.
         match other {
             AccumulatorValue::AvgState { sum, count } => {
@@ -97,7 +98,12 @@ impl Accumulator for AvgAccumulator {
             }
             // A null partial (empty group) contributes nothing.
             AccumulatorValue::Scalar(ScalarValue::Null) => {}
-            other => panic!("Cannot merge AVG with: {other:?}"),
+            other => {
+                return Err(FdapQueryError::Internal(format!(
+                    "AvgAccumulator::merge: cannot merge AVG with: {other:?}"
+                )));
+            }
         }
+        Ok(())
     }
 }

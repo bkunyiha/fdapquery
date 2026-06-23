@@ -10,7 +10,9 @@
 
 use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, Schema, record_batch};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, Schema, record_batch,
+};
 use std::sync::Arc;
 
 /// Execute a limit. `limit` is a row count.
@@ -34,30 +36,39 @@ impl PhysicalPlan for LimitExec {
         self
     }
 
-    fn execute(&self, ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         // Limit truncates input — no context use; pass through.
         let schema = self.input.schema();
         // `scan` carries `remaining` (the budget) across batches; returning `None`
-        // ends the stream as soon as the budget is exhausted.
-        Box::new(
-            self.input
-                .execute(ctx)
-                .scan(self.limit, move |remaining, batch| {
-                    if *remaining == 0 {
-                        return None;
-                    }
-                    let rows = batch.num_rows();
-                    if rows <= *remaining {
-                        *remaining -= rows;
-                        Some(batch)
-                    } else {
-                        // Truncate this boundary batch to the remaining count, then stop.
-                        let take = *remaining;
-                        *remaining = 0;
-                        Some(truncate(&batch, take, &schema))
-                    }
-                }),
-        )
+        // ends the stream as soon as the budget is exhausted. Each yielded item
+        // is itself a `Result<RecordBatch>` — the upstream's per-batch errors
+        // propagate as-is; truncation errors are also surfaced as `Err`.
+        let stream = self.input.execute(ctx)?;
+        Ok(Box::new(stream.scan(
+            self.limit,
+            move |remaining, batch_res| {
+                if *remaining == 0 {
+                    return None;
+                }
+                let batch = match batch_res {
+                    Ok(b) => b,
+                    Err(e) => return Some(Err(e)),
+                };
+                let rows = batch.num_rows();
+                if rows <= *remaining {
+                    *remaining -= rows;
+                    Some(Ok(batch))
+                } else {
+                    // Truncate this boundary batch to the remaining count, then stop.
+                    let take = *remaining;
+                    *remaining = 0;
+                    Some(truncate(&batch, take, &schema))
+                }
+            },
+        )))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
@@ -74,12 +85,17 @@ impl PhysicalPlan for LimitExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert_eq!(children.len(), 1, "LimitExec expects exactly 1 child");
-        Arc::new(LimitExec::new(
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if children.len() != 1 {
+            return Err(FdapQueryError::Internal(format!(
+                "LimitExec::with_new_children expected 1 child, got {}",
+                children.len()
+            )));
+        }
+        Ok(Arc::new(LimitExec::new(
             children.into_iter().next().unwrap(),
             self.limit,
-        ))
+        )))
     }
 }
 
@@ -91,23 +107,20 @@ impl std::fmt::Display for LimitExec {
 
 /// Build a new batch containing only the first `n` rows of `batch`, copying
 /// cell-by-cell.
-fn truncate(batch: &RecordBatch, n: usize, schema: &Schema) -> RecordBatch {
+fn truncate(batch: &RecordBatch, n: usize, schema: &Schema) -> Result<RecordBatch> {
     let columns: Vec<Box<dyn ColumnVector>> = (0..batch.num_columns())
-        .map(|i| {
+        .map(|i| -> Result<Box<dyn ColumnVector>> {
             let source = record_batch::field(batch, i);
             let mut builder = ArrowVectorBuilder::new(&source.get_type(), n);
             for row in 0..n {
-                let value = source
-                    .get_value(row)
-                    .expect("LimitExec: get_value over truncated input row");
+                let value = source.get_value(row)?;
                 builder.append_value(&value);
             }
             builder.set_value_count(n);
-            Box::new(builder.build()) as Box<dyn ColumnVector>
+            Ok(Box::new(builder.build()) as Box<dyn ColumnVector>)
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     record_batch::create(schema, columns)
-        .expect("LimitExec: schema/column mismatch building output batch")
 }
 
 #[cfg(test)]
@@ -149,13 +162,16 @@ mod tests {
     }
 
     fn total_rows(plan: &dyn PhysicalPlan) -> usize {
-        plan.execute(&test_ctx()).map(|b| b.num_rows()).sum()
+        plan.execute(&test_ctx())
+            .unwrap()
+            .map(|b| b.unwrap().num_rows())
+            .sum()
     }
 
     #[test]
     fn scan_reads_all_rows() {
         let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds));
+        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         assert_eq!(total_rows(&scan), 4);
         // ScanExec is a leaf.
         assert!(scan.children().is_empty());
@@ -164,7 +180,7 @@ mod tests {
     #[test]
     fn limit_truncates_to_budget() {
         let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds));
+        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         let limited = LimitExec::new(Arc::new(scan), 3);
         assert_eq!(total_rows(&limited), 3);
     }
@@ -172,7 +188,7 @@ mod tests {
     #[test]
     fn limit_above_total_keeps_everything() {
         let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds));
+        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         let limited = LimitExec::new(Arc::new(scan), 100);
         assert_eq!(total_rows(&limited), 4);
     }
@@ -180,7 +196,7 @@ mod tests {
     #[test]
     fn projection_keeps_one_column() {
         let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds));
+        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         // Output schema is just the first column (id).
         let schema = scan.schema().project(&[0]);
         let proj = ProjectionExec::new(
@@ -188,7 +204,11 @@ mod tests {
             schema,
             vec![Arc::new(ColumnExpression::new(0))],
         );
-        let batches: Vec<_> = proj.execute(&test_ctx()).collect();
+        let batches: Vec<_> = proj
+            .execute(&test_ctx())
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(rows, 4);
         assert!(batches.iter().all(|b| b.num_columns() == 1));
@@ -197,7 +217,7 @@ mod tests {
     #[test]
     fn selection_filters_rows() {
         let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds));
+        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         // WHERE id > 2  →  ids 3 and 4  →  2 rows. `id` is a non-null Int64 column,
         // so the comparison never sees a null.
         let predicate = GtExpression::new(
@@ -214,7 +234,7 @@ mod tests {
     fn pipeline_scan_select_project_limit() {
         // End-to-end: scan → WHERE id > 2 → SELECT id → LIMIT 1.
         let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds));
+        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         let selection = SelectionExec::new(
             Arc::new(scan),
             Arc::new(GtExpression::new(
@@ -230,7 +250,11 @@ mod tests {
         );
         let limited = LimitExec::new(Arc::new(projection), 1);
 
-        let batches: Vec<_> = limited.execute(&test_ctx()).collect();
+        let batches: Vec<_> = limited
+            .execute(&test_ctx())
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(rows, 1);
         assert!(batches.iter().all(|b| b.num_columns() == 1));

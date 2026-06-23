@@ -36,7 +36,9 @@
 use crate::expressions::Expression;
 use arrow_schema::DataType;
 use fdapquery_datatypes::arrow_types::BOOLEAN_TYPE;
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_datatypes::{
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
+};
 use std::sync::Arc;
 
 /// A boolean (comparison or logical) binary expression.
@@ -48,13 +50,13 @@ pub trait BooleanExpression: Expression {
 
     /// The per-cell predicate. Returns `Option<bool>`: `Some(b)` for a definite
     /// result, `None` for SQL `UNKNOWN` (produced whenever an operand is
-    /// `NULL`). See the module note on three-valued logic.
+    /// `NULL`). Outer `Result` carries dispatch-invariant failures.
     fn compare_value(
         &self,
         l: &ScalarValue,
         r: &ScalarValue,
         arrow_type: &DataType,
-    ) -> Option<bool>;
+    ) -> Result<Option<bool>>;
 
     /// Wire-format operator name (`"eq"`, `"and"`, …). Used by
     /// `fdapquery_protobuf::serialize_physical_expr` to serialise this expression as a
@@ -65,33 +67,35 @@ pub trait BooleanExpression: Expression {
     /// identical types, then build a *nullable* `Boolean` column by applying
     /// [`compare_value`](Self::compare_value) cell-by-cell. A `None` (SQL
     /// `UNKNOWN`) result is written as a null cell.
-    fn evaluate_boolean(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
-        let ll = self.left().evaluate(input);
-        let rr = self.right().evaluate(input);
-        assert_eq!(ll.size(), rr.size());
+    fn evaluate_boolean(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
+        let ll = self.left().evaluate(input)?;
+        let rr = self.right().evaluate(input)?;
+        if ll.size() != rr.size() {
+            return Err(FdapQueryError::Internal(format!(
+                "boolean expression operands have mismatched sizes: {} vs {}",
+                ll.size(),
+                rr.size()
+            )));
+        }
         if ll.get_type() != rr.get_type() {
-            panic!(
-                "Cannot compare values of different type: {:?} != {:?}",
+            return Err(FdapQueryError::Plan(format!(
+                "cannot compare values of different type: {:?} != {:?}",
                 ll.get_type(),
                 rr.get_type()
-            );
+            )));
         }
         let arrow_type = ll.get_type();
         let mut builder = ArrowVectorBuilder::new(&BOOLEAN_TYPE, ll.size());
         for i in 0..ll.size() {
-            let l = ll
-                .get_value(i)
-                .expect("BooleanExpression: get_value over left operand");
-            let r = rr
-                .get_value(i)
-                .expect("BooleanExpression: get_value over right operand");
-            match self.compare_value(&l, &r, &arrow_type) {
+            let l = ll.get_value(i)?;
+            let r = rr.get_value(i)?;
+            match self.compare_value(&l, &r, &arrow_type)? {
                 Some(b) => builder.append_value(&ScalarValue::Boolean(b)),
                 None => builder.append_value(&ScalarValue::Null), // SQL UNKNOWN → null cell
             }
         }
         builder.set_value_count(ll.size());
-        Box::new(builder.build())
+        Ok(Box::new(builder.build()))
     }
 }
 
@@ -103,15 +107,17 @@ pub trait BooleanExpression: Expression {
 macro_rules! compare_typed {
     ($l:expr, $r:expr, $t:expr, $op:tt) => {
         match $t {
-            DataType::Int8    => cmp_opt(as_opt_i8($l),   as_opt_i8($r),   |a, b| a $op b),
-            DataType::Int16   => cmp_opt(as_opt_i16($l),  as_opt_i16($r),  |a, b| a $op b),
-            DataType::Int32   => cmp_opt(as_opt_i32($l),  as_opt_i32($r),  |a, b| a $op b),
-            DataType::Int64   => cmp_opt(as_opt_i64($l),  as_opt_i64($r),  |a, b| a $op b),
-            DataType::Float32 => cmp_opt(as_opt_f32($l),  as_opt_f32($r),  |a, b| a $op b),
-            DataType::Float64 => cmp_opt(as_opt_f64($l),  as_opt_f64($r),  |a, b| a $op b),
-            DataType::Utf8    => cmp_opt(as_opt_str($l),  as_opt_str($r),  |a, b| a $op b),
-            DataType::Date32  => cmp_opt(as_opt_date($l), as_opt_date($r), |a, b| a $op b),
-            other => panic!("Unsupported data type in comparison expression: {other:?}"),
+            DataType::Int8    => Ok(cmp_opt(as_opt_i8($l)?,   as_opt_i8($r)?,   |a, b| a $op b)),
+            DataType::Int16   => Ok(cmp_opt(as_opt_i16($l)?,  as_opt_i16($r)?,  |a, b| a $op b)),
+            DataType::Int32   => Ok(cmp_opt(as_opt_i32($l)?,  as_opt_i32($r)?,  |a, b| a $op b)),
+            DataType::Int64   => Ok(cmp_opt(as_opt_i64($l)?,  as_opt_i64($r)?,  |a, b| a $op b)),
+            DataType::Float32 => Ok(cmp_opt(as_opt_f32($l)?,  as_opt_f32($r)?,  |a, b| a $op b)),
+            DataType::Float64 => Ok(cmp_opt(as_opt_f64($l)?,  as_opt_f64($r)?,  |a, b| a $op b)),
+            DataType::Utf8    => Ok(cmp_opt(as_opt_str($l)?,  as_opt_str($r)?,  |a, b| a $op b)),
+            DataType::Date32  => Ok(cmp_opt(as_opt_date($l)?, as_opt_date($r)?, |a, b| a $op b)),
+            other => Err(FdapQueryError::Internal(format!(
+                "compare_typed: unsupported data type from child evaluators: {other:?}"
+            ))),
         }
     };
 }
@@ -132,65 +138,81 @@ fn cmp_opt<T>(l: Option<T>, r: Option<T>, f: impl FnOnce(T, T) -> bool) -> Optio
 // propagate SQL UNKNOWN. A wrong *non-null* variant still panics, matching the
 // "types already coerced equal" contract of `evaluate_boolean`.
 
-fn as_opt_i8(v: &ScalarValue) -> Option<i8> {
+fn as_opt_i8(v: &ScalarValue) -> Result<Option<i8>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Int8(x) => Some(*x),
-        other => panic!("expected Int8, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Int8(x) => Ok(Some(*x)),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_i8: expected Int8, got {other:?}"
+        ))),
     }
 }
-fn as_opt_i16(v: &ScalarValue) -> Option<i16> {
+fn as_opt_i16(v: &ScalarValue) -> Result<Option<i16>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Int16(x) => Some(*x),
-        other => panic!("expected Int16, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Int16(x) => Ok(Some(*x)),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_i16: expected Int16, got {other:?}"
+        ))),
     }
 }
-fn as_opt_i32(v: &ScalarValue) -> Option<i32> {
+fn as_opt_i32(v: &ScalarValue) -> Result<Option<i32>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Int32(x) => Some(*x),
-        other => panic!("expected Int32, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Int32(x) => Ok(Some(*x)),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_i32: expected Int32, got {other:?}"
+        ))),
     }
 }
-fn as_opt_i64(v: &ScalarValue) -> Option<i64> {
+fn as_opt_i64(v: &ScalarValue) -> Result<Option<i64>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Int64(x) => Some(*x),
-        other => panic!("expected Int64, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Int64(x) => Ok(Some(*x)),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_i64: expected Int64, got {other:?}"
+        ))),
     }
 }
-fn as_opt_f32(v: &ScalarValue) -> Option<f32> {
+fn as_opt_f32(v: &ScalarValue) -> Result<Option<f32>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Float32(x) => Some(*x),
-        other => panic!("expected Float32, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Float32(x) => Ok(Some(*x)),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_f32: expected Float32, got {other:?}"
+        ))),
     }
 }
-fn as_opt_f64(v: &ScalarValue) -> Option<f64> {
+fn as_opt_f64(v: &ScalarValue) -> Result<Option<f64>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Float64(x) => Some(*x),
-        other => panic!("expected Float64, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Float64(x) => Ok(Some(*x)),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_f64: expected Float64, got {other:?}"
+        ))),
     }
 }
-fn as_opt_date(v: &ScalarValue) -> Option<i32> {
+fn as_opt_date(v: &ScalarValue) -> Result<Option<i32>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Date32(x) => Some(*x),
-        other => panic!("expected Date32, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Date32(x) => Ok(Some(*x)),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_date: expected Date32, got {other:?}"
+        ))),
     }
 }
 
 /// Borrow a string-typed cell as `&str`, or `None` if the cell is null. No
 /// allocation: `Utf8` borrows its `String`, `Binary` is validated in place
 /// (invalid UTF-8 → `None`).
-fn as_opt_str(v: &ScalarValue) -> Option<&str> {
+fn as_opt_str(v: &ScalarValue) -> Result<Option<&str>> {
     match v {
-        ScalarValue::Null => None,
-        ScalarValue::Utf8(s) => Some(s.as_str()),
-        ScalarValue::Binary(b) => std::str::from_utf8(b).ok(),
-        other => panic!("expected Utf8/Binary, got {other:?}"),
+        ScalarValue::Null => Ok(None),
+        ScalarValue::Utf8(s) => Ok(Some(s.as_str())),
+        ScalarValue::Binary(b) => Ok(std::str::from_utf8(b).ok()),
+        other => Err(FdapQueryError::Internal(format!(
+            "as_opt_str: expected Utf8/Binary, got {other:?}"
+        ))),
     }
 }
 
@@ -198,8 +220,8 @@ fn as_opt_str(v: &ScalarValue) -> Option<&str> {
 /// boolean, and `Some(n == 1)` for an integer. Used by the logical `AND`/`OR`
 /// operators. In practice their operands are already Boolean columns (the
 /// results of comparisons), which may now be null.
-fn as_opt_bool(v: &ScalarValue) -> Option<bool> {
-    match v {
+fn as_opt_bool(v: &ScalarValue) -> Result<Option<bool>> {
+    Ok(match v {
         ScalarValue::Null => None,
         ScalarValue::Boolean(b) => Some(*b),
         ScalarValue::Int8(n) => Some(*n == 1),
@@ -210,8 +232,12 @@ fn as_opt_bool(v: &ScalarValue) -> Option<bool> {
         ScalarValue::UInt16(n) => Some(*n == 1),
         ScalarValue::UInt32(n) => Some(*n == 1),
         ScalarValue::UInt64(n) => Some(*n == 1),
-        other => panic!("Cannot convert {other:?} to bool"),
-    }
+        other => {
+            return Err(FdapQueryError::Internal(format!(
+                "as_opt_bool: cannot convert {other:?} to bool"
+            )));
+        }
+    })
 }
 
 /// SQL Kleene `AND`: `FALSE` dominates (so `FALSE AND NULL = FALSE`), `TRUE AND
@@ -269,7 +295,7 @@ macro_rules! boolean_op {
                 $l: &ScalarValue,
                 $r: &ScalarValue,
                 $t: &DataType,
-            ) -> Option<bool> {
+            ) -> Result<Option<bool>> {
                 $body
             }
             fn op_name(&self) -> &'static str {
@@ -278,7 +304,7 @@ macro_rules! boolean_op {
         }
 
         impl Expression for $name {
-            fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+            fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
                 self.evaluate_boolean(input)
             }
             fn as_any(&self) -> &dyn std::any::Any {
@@ -299,14 +325,14 @@ macro_rules! boolean_op {
 
 // AND / OR ignore the Arrow type and operate on the truthiness of each side,
 // using SQL Kleene three-valued logic so a NULL operand propagates correctly.
-boolean_op!(AndExpression, "AND", "and", |l, r, _t| and3(
-    as_opt_bool(l),
-    as_opt_bool(r)
-));
-boolean_op!(OrExpression, "OR", "or", |l, r, _t| or3(
-    as_opt_bool(l),
-    as_opt_bool(r)
-));
+boolean_op!(AndExpression, "AND", "and", |l, r, _t| Ok(and3(
+    as_opt_bool(l)?,
+    as_opt_bool(r)?
+)));
+boolean_op!(OrExpression, "OR", "or", |l, r, _t| Ok(or3(
+    as_opt_bool(l)?,
+    as_opt_bool(r)?
+)));
 
 // Comparisons dispatch on the (shared) Arrow type via `compare_typed!`.
 boolean_op!(
@@ -377,7 +403,7 @@ mod tests {
             Arc::new(ColumnExpression::new(0)),
             Arc::new(ColumnExpression::new(1)),
         );
-        expr.evaluate(batch)
+        expr.evaluate(batch).unwrap()
     }
 
     #[test]
@@ -496,7 +522,7 @@ mod tests {
             Arc::new(ColumnExpression::new(0)),
             Arc::new(LiteralStringExpression::new("CO".to_string())),
         );
-        let result = expr.evaluate(&batch);
+        let result = expr.evaluate(&batch).unwrap();
         assert_eq!(result.get_value(0).unwrap(), ScalarValue::Boolean(true)); // "CO" == "CO"
         assert_eq!(result.get_value(1).unwrap(), ScalarValue::Null); // NULL = 'CO' -> UNKNOWN
         assert_eq!(result.get_value(2).unwrap(), ScalarValue::Boolean(false)); // "CA" != "CO"
@@ -521,7 +547,7 @@ mod tests {
             Arc::new(ColumnExpression::new(0)),
             Arc::new(LiteralStringExpression::new("CO".to_string())),
         );
-        let result = expr.evaluate(&batch);
+        let result = expr.evaluate(&batch).unwrap();
         assert_eq!(result.get_value(0).unwrap(), ScalarValue::Boolean(false)); // "CO" != "CO"
         assert_eq!(result.get_value(1).unwrap(), ScalarValue::Null); // NULL != 'CO' -> UNKNOWN
         assert_eq!(result.get_value(2).unwrap(), ScalarValue::Boolean(true)); // "CA" != "CO"
@@ -549,7 +575,8 @@ mod tests {
             Arc::new(ColumnExpression::new(0)),
             Arc::new(ColumnExpression::new(1)),
         )
-        .evaluate(&batch);
+        .evaluate(&batch)
+        .unwrap();
         assert_eq!(result.get_value(0).unwrap(), ScalarValue::Boolean(false)); // 5 > 10
         assert_eq!(result.get_value(1).unwrap(), ScalarValue::Null); // NULL > 10 -> UNKNOWN
         assert_eq!(result.get_value(2).unwrap(), ScalarValue::Boolean(true)); // 20 > 10

@@ -27,7 +27,8 @@ use crate::executor_context::ExecutorContext;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression};
 use crate::physical_plan::PhysicalPlan;
 use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue, Schema,
+    record_batch,
 };
 use std::collections::HashMap;
 use std::fmt;
@@ -109,46 +110,52 @@ impl PhysicalPlan for HashAggregateExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert_eq!(
-            children.len(),
-            1,
-            "HashAggregateExec expects exactly 1 child"
-        );
-        Arc::new(HashAggregateExec::new_with_mode(
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if children.len() != 1 {
+            return Err(FdapQueryError::Internal(format!(
+                "HashAggregateExec::with_new_children expected 1 child, got {}",
+                children.len()
+            )));
+        }
+        Ok(Arc::new(HashAggregateExec::new_with_mode(
             children.into_iter().next().unwrap(),
             self.group_expr.clone(),
             self.aggregate_expr.clone(),
             self.schema.clone(),
             self.mode,
-        ))
+        )))
     }
 
-    fn execute(&self, ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         // Aggregate doesn't read ctx itself, but threads it through so that
         // shuffle-bearing children (a `ShuffleReaderExec` under a Final-mode
         // aggregate) get the per-executor state they need.
         let mut map: HashMap<GroupKey, Vec<Box<dyn Accumulator>>> = HashMap::new();
 
-        for batch in self.input.execute(ctx) {
+        let input_stream = self.input.execute(ctx)?;
+        for batch_res in input_stream {
+            let batch = batch_res?;
             // Evaluate the group-by and aggregate-input expressions once per batch.
-            let group_keys: Vec<Box<dyn ColumnVector>> =
-                self.group_expr.iter().map(|e| e.evaluate(&batch)).collect();
+            let group_keys: Vec<Box<dyn ColumnVector>> = self
+                .group_expr
+                .iter()
+                .map(|e| e.evaluate(&batch))
+                .collect::<Result<Vec<_>>>()?;
             let aggr_inputs: Vec<Box<dyn ColumnVector>> = self
                 .aggregate_expr
                 .iter()
                 .map(|a| a.input_expression().evaluate(&batch))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
 
             for row in 0..batch.num_rows() {
                 let key = GroupKey(
                     group_keys
                         .iter()
-                        .map(|c| {
-                            c.get_value(row)
-                                .expect("HashAggregateExec: get_value over group-key column")
-                        })
-                        .collect(),
+                        .map(|c| c.get_value(row))
+                        .collect::<Result<Vec<_>>>()?,
                 );
                 let accumulators = map.entry(key).or_insert_with(|| {
                     self.aggregate_expr
@@ -157,13 +164,13 @@ impl PhysicalPlan for HashAggregateExec {
                         .collect()
                 });
                 for (i, acc) in accumulators.iter_mut().enumerate() {
-                    let value = aggr_inputs[i]
-                        .get_value(row)
-                        .expect("HashAggregateExec: get_value over aggregate-input column");
+                    let value = aggr_inputs[i].get_value(row)?;
                     match self.mode {
                         // FINAL merges incoming partial state; other modes accumulate raw values.
-                        AggregateMode::Final => acc.merge(&AccumulatorValue::Scalar(value)),
-                        _ => acc.accumulate(&value),
+                        AggregateMode::Final => {
+                            acc.merge(&AccumulatorValue::Scalar(value))?;
+                        }
+                        _ => acc.accumulate(&value)?,
                     }
                 }
             }
@@ -184,14 +191,17 @@ impl PhysicalPlan for HashAggregateExec {
             }
             for (i, acc) in accumulators.iter().enumerate() {
                 let output = match self.mode {
-                    AggregateMode::Partial => match acc.intermediate_value() {
+                    AggregateMode::Partial => match acc.intermediate_value()? {
                         AccumulatorValue::Scalar(s) => s,
-                        AccumulatorValue::AvgState { .. } => panic!(
-                            "HashAggregateExec PARTIAL output of AVG intermediate state \
-                             requires the distributed module (14)"
-                        ),
+                        AccumulatorValue::AvgState { .. } => {
+                            return Err(FdapQueryError::NotImplemented(
+                                "HashAggregateExec PARTIAL output of AVG intermediate state \
+                                 requires the distributed module"
+                                    .into(),
+                            ));
+                        }
                     },
-                    _ => acc.final_value(),
+                    _ => acc.final_value()?,
                 };
                 builders[n_group + i].append_value(&output);
             }
@@ -201,9 +211,8 @@ impl PhysicalPlan for HashAggregateExec {
             .into_iter()
             .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
             .collect();
-        let batch = record_batch::create(&self.schema, columns)
-            .expect("HashAggregateExec: schema/column mismatch building output batch");
-        Box::new(std::iter::once(batch))
+        let batch = record_batch::create(&self.schema, columns)?;
+        Ok(Box::new(std::iter::once(Ok(batch))))
     }
 }
 
@@ -305,27 +314,27 @@ mod tests {
     fn min_accumulator() {
         let mut a = MinExpression::new(Arc::new(ColumnExpression::new(0))).create_accumulator();
         for v in [10, 14, 4] {
-            a.accumulate(&ScalarValue::Int32(v));
+            a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
-        assert_eq!(a.final_value(), ScalarValue::Int32(4));
+        assert_eq!(a.final_value().unwrap(), ScalarValue::Int32(4));
     }
 
     #[test]
     fn max_accumulator() {
         let mut a = MaxExpression::new(Arc::new(ColumnExpression::new(0))).create_accumulator();
         for v in [10, 14, 4] {
-            a.accumulate(&ScalarValue::Int32(v));
+            a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
-        assert_eq!(a.final_value(), ScalarValue::Int32(14));
+        assert_eq!(a.final_value().unwrap(), ScalarValue::Int32(14));
     }
 
     #[test]
     fn sum_accumulator() {
         let mut a = SumExpression::new(Arc::new(ColumnExpression::new(0))).create_accumulator();
         for v in [10, 14, 4] {
-            a.accumulate(&ScalarValue::Int32(v));
+            a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
-        assert_eq!(a.final_value(), ScalarValue::Int32(28));
+        assert_eq!(a.final_value().unwrap(), ScalarValue::Int32(28));
     }
 
     // ---- Integration: GROUP BY state, MIN/MAX/COUNT(salary) over employee.csv. ----
@@ -339,7 +348,7 @@ mod tests {
             1024,
         ));
         let all: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
-        let scan = ScanExec::new(Arc::clone(&ds), all);
+        let scan = ScanExec::new(Arc::clone(&ds), all).unwrap();
 
         // Output: state, MIN(salary), MAX(salary), COUNT(salary).
         let out_schema = Schema::new(vec![
@@ -361,7 +370,7 @@ mod tests {
         );
 
         let ctx = ExecutorContext::new("test", "localhost", 0, "/tmp/rquery-test-ignored");
-        let batches: Vec<_> = agg.execute(&ctx).collect();
+        let batches: Vec<_> = agg.execute(&ctx).unwrap().collect::<Result<Vec<_>>>().unwrap();
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
         assert_eq!(batch.num_rows(), 3); // groups: CA, CO, and the null-state row

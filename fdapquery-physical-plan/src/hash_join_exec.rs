@@ -20,8 +20,8 @@ use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
 use crate::row_key::RowKey;
 use fdapquery_datatypes::{
-    ArrowFieldVector, ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema,
-    record_batch,
+    ArrowFieldVector, ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result,
+    ScalarValue, Schema, record_batch,
 };
 use fdapquery_logical_plan::JoinType;
 use std::collections::{HashMap, HashSet};
@@ -77,7 +77,7 @@ impl HashJoinExec {
     }
 
     /// Build an output batch from assembled rows, typed by the output schema.
-    fn create_batch(&self, rows: &[Vec<ScalarValue>]) -> RecordBatch {
+    fn create_batch(&self, rows: &[Vec<ScalarValue>]) -> Result<RecordBatch> {
         let mut builders: Vec<ArrowVectorBuilder> = self
             .schema
             .fields
@@ -94,7 +94,6 @@ impl HashJoinExec {
             .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
             .collect();
         record_batch::create(&self.schema, columns)
-            .expect("HashJoinExec: schema/column mismatch building output batch")
     }
 
     /// Wrap each column of `batch` once, so rows can be read by index without
@@ -106,26 +105,17 @@ impl HashJoinExec {
     }
 
     /// The join key for one row: the values of the given key columns.
-    fn key_of(cols: &[ArrowFieldVector], keys: &[usize], row: usize) -> RowKey {
-        RowKey(
+    fn key_of(cols: &[ArrowFieldVector], keys: &[usize], row: usize) -> Result<RowKey> {
+        Ok(RowKey(
             keys.iter()
-                .map(|&k| {
-                    cols[k]
-                        .get_value(row)
-                        .expect("HashJoinExec: get_value over key column")
-                })
-                .collect(),
-        )
+                .map(|&k| cols[k].get_value(row))
+                .collect::<Result<Vec<_>>>()?,
+        ))
     }
 
     /// Every column value for one row.
-    fn full_row(cols: &[ArrowFieldVector], row: usize) -> Vec<ScalarValue> {
-        cols.iter()
-            .map(|c| {
-                c.get_value(row)
-                    .expect("HashJoinExec: get_value over output column")
-            })
-            .collect()
+    fn full_row(cols: &[ArrowFieldVector], row: usize) -> Result<Vec<ScalarValue>> {
+        cols.iter().map(|c| c.get_value(row)).collect()
     }
 }
 
@@ -161,16 +151,17 @@ impl PhysicalPlan for HashJoinExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert_eq!(
-            children.len(),
-            2,
-            "HashJoinExec expects exactly 2 children (left, right)"
-        );
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if children.len() != 2 {
+            return Err(FdapQueryError::Internal(format!(
+                "HashJoinExec::with_new_children expected 2 children (left, right), got {}",
+                children.len()
+            )));
+        }
         let mut iter = children.into_iter();
         let left = iter.next().unwrap();
         let right = iter.next().unwrap();
-        Arc::new(HashJoinExec::new(
+        Ok(Arc::new(HashJoinExec::new(
             left,
             right,
             self.join_type.clone(),
@@ -178,21 +169,26 @@ impl PhysicalPlan for HashJoinExec {
             self.right_keys.clone(),
             self.schema.clone(),
             self.right_columns_to_exclude.clone(),
-        ))
+        )))
     }
 
-    fn execute(&self, ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn execute(
+        &self,
+        ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         // Join doesn't read ctx itself; threads it through to both children
         // so shuffle-bearing inputs find their executor state.
         let mut hash_table: HashMap<RowKey, Vec<Vec<ScalarValue>>> = HashMap::new();
-        for batch in self.right.execute(ctx) {
+        let right_stream = self.right.execute(ctx)?;
+        for batch_res in right_stream {
+            let batch = batch_res?;
             let cols = Self::columns_of(&batch);
             for row in 0..batch.num_rows() {
-                let key = Self::key_of(&cols, &self.right_keys, row);
+                let key = Self::key_of(&cols, &self.right_keys, row)?;
                 hash_table
                     .entry(key)
                     .or_default()
-                    .push(Self::full_row(&cols, row));
+                    .push(Self::full_row(&cols, row)?);
             }
         }
 
@@ -200,12 +196,14 @@ impl PhysicalPlan for HashJoinExec {
         let mut outputs: Vec<RecordBatch> = Vec::new();
 
         // --- Probe phase: find matches for each left row. ---
-        for left_batch in self.left.execute(ctx) {
+        let left_stream = self.left.execute(ctx)?;
+        for left_batch_res in left_stream {
+            let left_batch = left_batch_res?;
             let cols = Self::columns_of(&left_batch);
             let mut output_rows: Vec<Vec<ScalarValue>> = Vec::new();
             for row in 0..left_batch.num_rows() {
-                let probe_key = Self::key_of(&cols, &self.left_keys, row);
-                let left_row = Self::full_row(&cols, row);
+                let probe_key = Self::key_of(&cols, &self.left_keys, row)?;
+                let left_row = Self::full_row(&cols, row)?;
                 let matched = hash_table.get(&probe_key);
                 match self.join_type {
                     JoinType::Inner | JoinType::Right => {
@@ -229,17 +227,19 @@ impl PhysicalPlan for HashJoinExec {
                 }
             }
             if !output_rows.is_empty() {
-                outputs.push(self.create_batch(&output_rows));
+                outputs.push(self.create_batch(&output_rows)?);
             }
         }
 
         // --- Right join: emit unmatched right rows with nulls on the left. ---
         if matches!(self.join_type, JoinType::Right) {
             let mut matched_keys: HashSet<RowKey> = HashSet::new();
-            for left_batch in self.left.execute(ctx) {
+            let left_stream = self.left.execute(ctx)?;
+            for left_batch_res in left_stream {
+                let left_batch = left_batch_res?;
                 let cols = Self::columns_of(&left_batch);
                 for row in 0..left_batch.num_rows() {
-                    let probe_key = Self::key_of(&cols, &self.left_keys, row);
+                    let probe_key = Self::key_of(&cols, &self.left_keys, row)?;
                     if hash_table.contains_key(&probe_key) {
                         matched_keys.insert(probe_key);
                     }
@@ -256,11 +256,11 @@ impl PhysicalPlan for HashJoinExec {
                 }
             }
             if !unmatched.is_empty() {
-                outputs.push(self.create_batch(&unmatched));
+                outputs.push(self.create_batch(&unmatched)?);
             }
         }
 
-        Box::new(outputs.into_iter())
+        Ok(Box::new(outputs.into_iter().map(Ok)))
     }
 }
 
@@ -296,8 +296,11 @@ mod tests {
         fn schema(&self) -> Schema {
             self.schema.clone()
         }
-        fn execute(&self, _ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
-            Box::new(self.batches.clone().into_iter())
+        fn execute(
+            &self,
+            _ctx: &ExecutorContext,
+        ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+            Ok(Box::new(self.batches.clone().into_iter().map(Ok)))
         }
         fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
             vec![]
@@ -308,9 +311,9 @@ mod tests {
         fn with_new_children(
             self: Arc<Self>,
             children: Vec<Arc<dyn PhysicalPlan>>,
-        ) -> Arc<dyn PhysicalPlan> {
+        ) -> Result<Arc<dyn PhysicalPlan>> {
             assert!(children.is_empty());
-            self
+            Ok(self)
         }
     }
 
@@ -413,7 +416,9 @@ mod tests {
                 0,
                 "/tmp/rquery-test-ignored",
             ))
-            .collect(),
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap(),
         );
         rows.sort();
         assert_eq!(
@@ -443,7 +448,9 @@ mod tests {
                 0,
                 "/tmp/rquery-test-ignored",
             ))
-            .collect(),
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap(),
         );
         rows.sort();
         assert_eq!(

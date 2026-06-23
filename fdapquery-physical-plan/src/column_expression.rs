@@ -3,7 +3,7 @@
 //! hands back that column unchanged — the simplest possible physical expression.
 
 use crate::expressions::Expression;
-use fdapquery_datatypes::{ColumnVector, RecordBatch, record_batch};
+use fdapquery_datatypes::{ColumnVector, RecordBatch, Result, record_batch};
 use std::fmt;
 
 /// Reference a column in a batch by index.
@@ -18,10 +18,10 @@ impl ColumnExpression {
 }
 
 impl Expression for ColumnExpression {
-    fn evaluate(&self, input: &RecordBatch) -> Box<dyn ColumnVector> {
+    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         // `record_batch::field` wraps the existing arrow `ArrayRef`
         // (cheap, Arc-cloned) as a ColumnVector.
-        Box::new(record_batch::field(input, self.i))
+        Ok(Box::new(record_batch::field(input, self.i)))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

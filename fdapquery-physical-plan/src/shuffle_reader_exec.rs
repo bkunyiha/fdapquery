@@ -22,7 +22,7 @@
 use crate::executor_context::ExecutorContext;
 use crate::physical_plan::PhysicalPlan;
 use crate::shuffle_location::ShuffleLocation;
-use fdapquery_datatypes::{RecordBatch, Schema};
+use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
 use std::sync::Arc;
 
 /// Reads shuffle data from a set of locations.
@@ -59,48 +59,52 @@ impl PhysicalPlan for ShuffleReaderExec {
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Arc<dyn PhysicalPlan> {
-        assert!(
-            children.is_empty(),
-            "ShuffleReaderExec is a leaf and expects no children"
-        );
-        self
+    ) -> Result<Arc<dyn PhysicalPlan>> {
+        if !children.is_empty() {
+            return Err(FdapQueryError::Internal(format!(
+                "ShuffleReaderExec is a leaf and expects no children, got {}",
+                children.len()
+            )));
+        }
+        Ok(self)
     }
 
     /// Read every shuffle location in order and yield the resulting
     /// `RecordBatch`es as a single iterator.
     ///
     /// **Local reads only.** A location whose `executor_id` doesn't match
-    /// `ctx.executor_id` triggers `unimplemented!()`. Remote reads would
-    /// require a Flight client field on `ExecutorContext`; not currently
-    /// implemented.
-    fn execute(&self, ctx: &ExecutorContext) -> Box<dyn Iterator<Item = RecordBatch>> {
-        // Validate all locations are local up front so the panic — if one
+    /// `ctx.executor_id` surfaces as `Err(NotImplemented(_))`. Remote reads
+    /// would require a Flight client field on `ExecutorContext`; not
+    /// currently implemented.
+    fn execute(
+        &self,
+        ctx: &ExecutorContext,
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+        // Validate all locations are local up front so the error — if one
         // belongs to another executor — fires before any disk I/O.
         for loc in &self.shuffle_locations {
             if loc.executor_id != ctx.executor_id {
-                unimplemented!(
+                return Err(FdapQueryError::NotImplemented(format!(
                     "ShuffleReaderExec: remote shuffle reads require an Arrow Flight \
                      client. Location belongs to executor '{}' but this executor is \
                      '{}'. Remote reads need a Flight client field on ExecutorContext.",
-                    loc.executor_id,
-                    ctx.executor_id
-                );
+                    loc.executor_id, ctx.executor_id
+                )));
             }
         }
 
-        // Move owned copies into the closure: cheap Arc bump on the manager
-        // (one atomic op) and a `Vec<ShuffleLocation>` clone (small pure data).
-        let locations = self.shuffle_locations.clone();
-        let shuffle_manager = Arc::clone(&ctx.shuffle_manager);
-
-        Box::new(locations.into_iter().flat_map(move |location| {
-            shuffle_manager.read_partition(
+        // Open every partition up-front so any I/O failures surface from
+        // `execute()` itself (the outer Result), then chain their per-batch
+        // streams together. Per-batch errors propagate via the inner Result.
+        let mut streams: Vec<Box<dyn Iterator<Item = Result<RecordBatch>>>> = Vec::new();
+        for location in &self.shuffle_locations {
+            streams.push(ctx.shuffle_manager.read_partition(
                 &location.job_uuid,
                 location.stage_id,
                 location.partition_id,
-            )
-        }))
+            )?);
+        }
+        Ok(Box::new(streams.into_iter().flatten()))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -155,10 +159,14 @@ mod tests {
     ) -> (usize, Vec<ShuffleLocation>, Schema) {
         let ds = employee_ds();
         let schema = ds.schema();
-        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)));
-        let input_row_count: usize = scan.execute(ctx).map(|b| b.num_rows()).sum();
+        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
+        let input_row_count: usize = scan
+            .execute(ctx)
+            .unwrap()
+            .map(|b| b.unwrap().num_rows())
+            .sum();
         let writer = ShuffleWriterExec::new(
-            Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds))),
+            Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap()),
             vec![Arc::new(ColumnExpression::new(0))],
             job_uuid,
             0,
@@ -167,7 +175,7 @@ mod tests {
         // Note: ShuffleWriterExec has a separate `write_shuffle(ctx) -> locations` method
         // because writers don't fit the "execute returns iterator" shape — they have a
         // side effect (write files) and return a location list, not record batches.
-        let locations = writer.write_shuffle(ctx);
+        let locations = writer.write_shuffle(ctx).unwrap();
         (input_row_count, locations, schema)
     }
 
@@ -180,7 +188,11 @@ mod tests {
             write_employee_shuffle(&ctx, "test-job-reader-roundtrip", 3);
 
         let reader = ShuffleReaderExec::new(schema, locations);
-        let read_rows: usize = reader.execute(&ctx).map(|b| b.num_rows()).sum();
+        let read_rows: usize = reader
+            .execute(&ctx)
+            .unwrap()
+            .map(|b| b.unwrap().num_rows())
+            .sum();
 
         assert_eq!(
             read_rows, input_rows,
@@ -196,7 +208,11 @@ mod tests {
 
         let ds = employee_ds();
         let reader = ShuffleReaderExec::new(ds.schema(), vec![]);
-        let batches: Vec<RecordBatch> = reader.execute(&ctx).collect();
+        let batches: Vec<RecordBatch> = reader
+            .execute(&ctx)
+            .unwrap()
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
 
         assert!(batches.is_empty());
         ctx.shuffle_manager.cleanup_all();
@@ -216,20 +232,33 @@ mod tests {
         );
 
         let reader = ShuffleReaderExec::new(schema, locations);
-        let read_rows: usize = reader.execute(&ctx).map(|b| b.num_rows()).sum();
+        let read_rows: usize = reader
+            .execute(&ctx)
+            .unwrap()
+            .map(|b| b.unwrap().num_rows())
+            .sum();
 
         assert_eq!(read_rows, input_rows);
         ctx.shuffle_manager.cleanup_all();
     }
 
     #[test]
-    #[should_panic(expected = "remote shuffle reads require an Arrow Flight client")]
-    fn remote_location_panics_until_flight_client_lands() {
+    fn remote_location_errors_until_flight_client_lands() {
         let base = temp_dir("reader-remote");
         let ctx = ExecutorContext::new("exec-A", "127.0.0.1", 50099, &base);
 
         let remote_loc = ShuffleLocation::new("test-job-remote", 0, 0, "exec-B", "10.0.0.2", 50099);
         let reader = ShuffleReaderExec::new(employee_ds().schema(), vec![remote_loc]);
-        let _ = reader.execute(&ctx);
+        let err = reader.execute(&ctx).map(|_| ()).expect_err(
+            "remote shuffle reads must error until the Flight client is wired in",
+        );
+        assert!(
+            matches!(err, FdapQueryError::NotImplemented(_)),
+            "expected NotImplemented, got {err:?}"
+        );
+        assert!(
+            err.to_string()
+                .contains("remote shuffle reads require an Arrow Flight client")
+        );
     }
 }
