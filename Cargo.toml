@@ -99,6 +99,11 @@ tokio         = { version = "1", features = ["rt-multi-thread", "macros", "sync"
 # on top of `futures-core`; pulling `futures` keeps both surfaces available.
 futures       = "0.3"
 
+# `pin-project-lite` provides the `pin_project!` macro for safe pin-projection
+# in custom Stream wrappers (e.g. `RecordBatchStreamAdapter`). Same shape and
+# version DataFusion uses.
+pin-project-lite = "0.2"
+
 # UUID generation — used by `distributed::Scheduler` to mint a fresh
 # `job_uuid` per query.
 uuid          = { version = "1", features = ["v4"] }

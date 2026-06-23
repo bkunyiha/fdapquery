@@ -844,6 +844,8 @@ dependencies = [
  "fdapquery-datasource",
  "fdapquery-datatypes",
  "fdapquery-logical-plan",
+ "futures",
+ "pin-project-lite",
 ]
 
 [[package]]

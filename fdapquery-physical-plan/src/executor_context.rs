@@ -49,6 +49,12 @@ use std::sync::Arc;
 // adding it touches a separate operator file — deferred to whoever needs
 // `{:?}` on an `ExecutorContext`). `Clone` is required for handing the
 // context across the `spawn_blocking` boundary in `do_get`.
+#[deprecated(
+    since = "0.1.0",
+    note = "use `fdapquery_physical_plan::TaskContext` (constructed via \
+            `SessionConfig` + `RuntimeEnv`). This type is removed in \
+            Session 11 (Phase C) once all operators have migrated."
+)]
 #[derive(Clone)]
 pub struct ExecutorContext {
     /// Unique identifier for this executor in the cluster. Mirrors

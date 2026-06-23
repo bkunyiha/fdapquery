@@ -66,7 +66,9 @@ pub mod limit_exec;
 pub mod math_expression;
 pub mod max_expression;
 pub mod min_expression;
+pub mod partitioning;
 pub mod physical_plan;
+pub mod plan_properties;
 pub mod projection_exec;
 pub mod scan_exec;
 pub mod selection_exec;
@@ -74,8 +76,10 @@ pub mod shuffle_location;
 pub mod shuffle_manager;
 pub mod shuffle_reader_exec;
 pub mod shuffle_writer_exec;
+pub mod stream;
 pub mod sum_expression;
 pub mod task;
+pub mod task_context;
 pub mod unary_math_expression;
 
 // Internal helper: a float-aware hashable row key used by `HashJoinExec` for
@@ -101,7 +105,15 @@ pub use expressions::{
 pub use math_expression::{
     AddExpression, DivideExpression, MathExpression, MultiplyExpression, SubtractExpression,
 };
-pub use physical_plan::{PhysicalPlan, format};
+pub use physical_plan::{ExecutionPlan, PhysicalPlan, format};
+// Phase B foundation: per-task context, partitioning descriptor, and the
+// async record-batch stream surface. These live in `fdapquery-physical-plan`
+// during Phase B because the `ExecutionPlan` trait that references them is
+// in this crate; Phase C migrates them to `fdapquery-execution`.
+pub use partitioning::Partitioning;
+pub use plan_properties::PlanProperties;
+pub use stream::{RecordBatchStream, RecordBatchStreamAdapter, SendableRecordBatchStream};
+pub use task_context::{RuntimeEnv, SessionConfig, TaskContext};
 // Phase-2 operators.
 pub use limit_exec::LimitExec;
 pub use projection_exec::ProjectionExec;
