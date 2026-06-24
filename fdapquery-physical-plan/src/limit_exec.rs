@@ -3,33 +3,55 @@
 //! through untouched until the running budget would be exceeded; the boundary
 //! batch is truncated to exactly the remaining count and the stream then ends.
 //!
-//! ## Implementation — `Iterator::scan` for early exit
-//! `Iterator::scan` threads a mutable `remaining` budget through the stream and
-//! ends iteration as soon as the closure returns `None`, giving the operator a
-//! clean early-exit when the budget is exhausted.
+//! ## Implementation — `try_stream!` for the budget tracker
+//! The async-stream version uses `async_stream::try_stream!` to express the
+//! "consume input, track remaining, stop early" loop as a sequential body.
+//! The generator macro `.await`s on the input stream's `.next()` calls and
+//! `yield`s output batches; when the budget hits zero, the loop just `break`s
+//! and the generator ends. Same shape as DataFusion's `LimitStream` (which is
+//! a hand-rolled `Stream` impl carrying a remaining counter — the generator
+//! macro is more readable for the simple case).
 
-use crate::executor_context::ExecutorContext;
-use crate::physical_plan::PhysicalPlan;
+use crate::physical_plan::ExecutionPlan;
+use crate::plan_properties::PlanProperties;
+use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::task_context::TaskContext;
+use async_stream::try_stream;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, Schema, record_batch,
 };
+use futures::StreamExt;
 use std::sync::Arc;
 
 /// Execute a limit. `limit` is a row count.
 pub struct LimitExec {
-    pub input: Arc<dyn PhysicalPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     pub limit: usize,
+    properties: PlanProperties,
 }
 
 impl LimitExec {
-    pub fn new(input: Arc<dyn PhysicalPlan>, limit: usize) -> Self {
-        Self { input, limit }
+    pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize) -> Self {
+        let properties = PlanProperties::single_partition_unknown();
+        Self {
+            input,
+            limit,
+            properties,
+        }
     }
 }
 
-impl PhysicalPlan for LimitExec {
+impl ExecutionPlan for LimitExec {
+    fn name(&self) -> &str {
+        "LimitExec"
+    }
+
     fn schema(&self) -> Schema {
         self.input.schema()
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -38,54 +60,53 @@ impl PhysicalPlan for LimitExec {
 
     fn execute(
         &self,
-        ctx: &ExecutorContext,
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
-        // Limit truncates input — no context use; pass through.
+        partition: usize,
+        ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return Err(FdapQueryError::Internal(format!(
+                "LimitExec has 1 output partition; partition {partition} is out of range"
+            )));
+        }
         let schema = self.input.schema();
-        // `scan` carries `remaining` (the budget) across batches; returning `None`
-        // ends the stream as soon as the budget is exhausted. Each yielded item
-        // is itself a `Result<RecordBatch>` — the upstream's per-batch errors
-        // propagate as-is; truncation errors are also surfaced as `Err`.
-        let stream = self.input.execute(ctx)?;
-        Ok(Box::new(stream.scan(
-            self.limit,
-            move |remaining, batch_res| {
-                if *remaining == 0 {
-                    return None;
+        let arrow_schema = Arc::new(schema.to_arrow());
+        let limit = self.limit;
+        let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
+        let stream = try_stream! {
+            let mut remaining = limit;
+            let mut input = std::pin::pin!(input_stream);
+            while remaining > 0 {
+                match input.next().await {
+                    Some(Ok(batch)) => {
+                        let rows = batch.num_rows();
+                        if rows <= remaining {
+                            remaining -= rows;
+                            yield batch;
+                        } else {
+                            let take = remaining;
+                            remaining = 0;
+                            yield truncate(&batch, take, &schema)?;
+                        }
+                    }
+                    Some(Err(e)) => Err(e)?,
+                    None => break,
                 }
-                let batch = match batch_res {
-                    Ok(b) => b,
-                    Err(e) => return Some(Err(e)),
-                };
-                let rows = batch.num_rows();
-                if rows <= *remaining {
-                    *remaining -= rows;
-                    Some(Ok(batch))
-                } else {
-                    // Truncate this boundary batch to the remaining count, then stop.
-                    let take = *remaining;
-                    *remaining = 0;
-                    Some(truncate(&batch, take, &schema))
-                }
-            },
-        )))
+            }
+        };
+        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, stream)))
     }
 
-    fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
 
-    /// Rebuild this limit with a new input child. See the trait-level
-    /// `PhysicalPlan::with_new_children` doc for the general rewrite pattern.
-    ///
-    /// Arity 1: a limit has one input. `into_iter().next().unwrap()` consumes
-    /// the length-1 children vec and takes ownership of that single Arc. The
-    /// `limit` budget is reused — it's part of this operator's definition, not
-    /// the child's.
+    /// Rebuild this limit with a new input child. Arity 1: a limit has one
+    /// input. The `limit` budget is reused — it's part of this operator's
+    /// definition, not the child's.
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Result<Arc<dyn PhysicalPlan>> {
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(FdapQueryError::Internal(format!(
                 "LimitExec::with_new_children expected 1 child, got {}",
@@ -127,8 +148,7 @@ fn truncate(batch: &RecordBatch, n: usize, schema: &Schema) -> Result<RecordBatc
 mod tests {
     //! End-to-end pipeline verification: drives `ScanExec` →
     //! `Projection`/`Selection`/`LimitExec` over the `employee.csv` fixture and
-    //! checks row/column counts. Uses `CsvDataSource` directly (the `fuzzer`
-    //! crate covered in module 9 is not yet implemented).
+    //! checks row/column counts. Uses `CsvDataSource` directly.
     use super::*;
     use crate::boolean_expression::GtExpression;
     use crate::column_expression::ColumnExpression;
@@ -136,6 +156,7 @@ mod tests {
     use crate::projection_exec::ProjectionExec;
     use crate::scan_exec::ScanExec;
     use crate::selection_exec::SelectionExec;
+    use futures::TryStreamExt;
     use fdapquery_datasource::{CsvDataSource, DataSource};
     use std::sync::Arc;
 
@@ -154,47 +175,49 @@ mod tests {
         ds.schema().fields.iter().map(|f| f.name.clone()).collect()
     }
 
-    /// Build a throwaway `ExecutorContext` for tests of operators that don't
-    /// use the context (everything except shuffle ops). The executor identity
-    /// is meaningless and the `shuffle_manager` is never read.
-    fn test_ctx() -> ExecutorContext {
-        ExecutorContext::new("test", "localhost", 0, "/tmp/rquery-test-ignored")
+    /// Single-node test context fixture.
+    fn test_ctx() -> Arc<TaskContext> {
+        Arc::new(TaskContext::default_test())
     }
 
-    fn total_rows(plan: &dyn PhysicalPlan) -> usize {
-        plan.execute(&test_ctx())
+    async fn total_rows(plan: Arc<dyn ExecutionPlan>) -> usize {
+        let batches = plan
+            .execute(0, test_ctx())
             .unwrap()
-            .map(|b| b.unwrap().num_rows())
-            .sum()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        batches.iter().map(|b| b.num_rows()).sum()
     }
 
-    #[test]
-    fn scan_reads_all_rows() {
+    #[tokio::test]
+    async fn scan_reads_all_rows() {
         let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        assert_eq!(total_rows(&scan), 4);
+        let scan: Arc<dyn ExecutionPlan> =
+            Arc::new(ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap());
+        assert_eq!(total_rows(Arc::clone(&scan)).await, 4);
         // ScanExec is a leaf.
         assert!(scan.children().is_empty());
     }
 
-    #[test]
-    fn limit_truncates_to_budget() {
+    #[tokio::test]
+    async fn limit_truncates_to_budget() {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        let limited = LimitExec::new(Arc::new(scan), 3);
-        assert_eq!(total_rows(&limited), 3);
+        let limited: Arc<dyn ExecutionPlan> = Arc::new(LimitExec::new(Arc::new(scan), 3));
+        assert_eq!(total_rows(limited).await, 3);
     }
 
-    #[test]
-    fn limit_above_total_keeps_everything() {
+    #[tokio::test]
+    async fn limit_above_total_keeps_everything() {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        let limited = LimitExec::new(Arc::new(scan), 100);
-        assert_eq!(total_rows(&limited), 4);
+        let limited: Arc<dyn ExecutionPlan> = Arc::new(LimitExec::new(Arc::new(scan), 100));
+        assert_eq!(total_rows(limited).await, 4);
     }
 
-    #[test]
-    fn projection_keeps_one_column() {
+    #[tokio::test]
+    async fn projection_keeps_one_column() {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         // Output schema is just the first column (id).
@@ -204,34 +227,35 @@ mod tests {
             schema,
             vec![Arc::new(ColumnExpression::new(0))],
         );
-        let batches: Vec<_> = proj
-            .execute(&test_ctx())
+        let batches = proj
+            .execute(0, test_ctx())
             .unwrap()
-            .collect::<Result<Vec<_>>>()
+            .try_collect::<Vec<_>>()
+            .await
             .unwrap();
         let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(rows, 4);
         assert!(batches.iter().all(|b| b.num_columns() == 1));
     }
 
-    #[test]
-    fn selection_filters_rows() {
+    #[tokio::test]
+    async fn selection_filters_rows() {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        // WHERE id > 2  →  ids 3 and 4  →  2 rows. `id` is a non-null Int64 column,
-        // so the comparison never sees a null.
+        // WHERE id > 2  →  ids 3 and 4  →  2 rows.
         let predicate = GtExpression::new(
             Arc::new(ColumnExpression::new(0)),
             Arc::new(LiteralLongExpression::new(2)),
         );
-        let selection = SelectionExec::new(Arc::new(scan), Arc::new(predicate));
-        assert_eq!(total_rows(&selection), 2);
+        let selection: Arc<dyn ExecutionPlan> =
+            Arc::new(SelectionExec::new(Arc::new(scan), Arc::new(predicate)));
+        assert_eq!(total_rows(Arc::clone(&selection)).await, 2);
         // Selection preserves the schema (all six columns).
         assert_eq!(selection.schema().fields.len(), 6);
     }
 
-    #[test]
-    fn pipeline_scan_select_project_limit() {
+    #[tokio::test]
+    async fn pipeline_scan_select_project_limit() {
         // End-to-end: scan → WHERE id > 2 → SELECT id → LIMIT 1.
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
@@ -250,10 +274,11 @@ mod tests {
         );
         let limited = LimitExec::new(Arc::new(projection), 1);
 
-        let batches: Vec<_> = limited
-            .execute(&test_ctx())
+        let batches = limited
+            .execute(0, test_ctx())
             .unwrap()
-            .collect::<Result<Vec<_>>>()
+            .try_collect::<Vec<_>>()
+            .await
             .unwrap();
         let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(rows, 1);

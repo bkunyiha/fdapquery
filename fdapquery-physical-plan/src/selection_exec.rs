@@ -8,51 +8,75 @@
 //! downcast is needed, and it keeps the operator working against any
 //! `ColumnVector` implementation.
 
-use crate::executor_context::ExecutorContext;
 use crate::expressions::Expression;
-use crate::physical_plan::PhysicalPlan;
+use crate::physical_plan::ExecutionPlan;
+use crate::plan_properties::PlanProperties;
+use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::task_context::TaskContext;
 use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue, Schema,
-    record_batch,
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, Result, ScalarValue, Schema, record_batch,
 };
+use futures::StreamExt;
 use std::sync::Arc;
 
 /// Execute a selection (row filter).
 pub struct SelectionExec {
-    pub input: Arc<dyn PhysicalPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     pub expr: Arc<dyn Expression>,
+    properties: PlanProperties,
 }
 
 impl SelectionExec {
-    pub fn new(input: Arc<dyn PhysicalPlan>, expr: Arc<dyn Expression>) -> Self {
-        Self { input, expr }
+    pub fn new(input: Arc<dyn ExecutionPlan>, expr: Arc<dyn Expression>) -> Self {
+        let properties = PlanProperties::single_partition_unknown();
+        Self {
+            input,
+            expr,
+            properties,
+        }
     }
 }
 
-impl PhysicalPlan for SelectionExec {
+impl ExecutionPlan for SelectionExec {
+    fn name(&self) -> &str {
+        "SelectionExec"
+    }
+
     fn schema(&self) -> Schema {
         self.input.schema()
     }
 
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
     fn execute(
         &self,
-        ctx: &ExecutorContext,
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+        partition: usize,
+        ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return Err(FdapQueryError::Internal(format!(
+                "SelectionExec has 1 output partition; partition {partition} is out of range"
+            )));
+        }
         // Selection just filters per batch — no context use; pass through.
         let schema = self.input.schema();
+        let arrow_schema = Arc::new(schema.to_arrow());
         let expr = Arc::clone(&self.expr);
-        let stream = self.input.execute(ctx)?;
-        Ok(Box::new(stream.map(move |batch_res| {
+        let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
+        let filtered = input_stream.map(move |batch_res| {
             let batch = batch_res?;
             let selection = expr.evaluate(&batch)?;
             let columns: Vec<Box<dyn ColumnVector>> = (0..batch.num_columns())
                 .map(|i| filter(&record_batch::field(&batch, i), selection.as_ref()))
                 .collect::<Result<Vec<_>>>()?;
             record_batch::create(&schema, columns)
-        })))
+        });
+        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, filtered)))
     }
 
-    fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
 
@@ -60,18 +84,14 @@ impl PhysicalPlan for SelectionExec {
         self
     }
 
-    /// Rebuild this selection with a new input child. See the trait-level
-    /// `PhysicalPlan::with_new_children` doc for the general rewrite pattern.
-    ///
-    /// Arity 1: a selection has one input (the relation being filtered). The
-    /// incoming `children` vec is therefore always length 1; `into_iter().next()
-    /// .unwrap()` takes ownership of that single Arc without an atomic refcount
-    /// bump. The predicate `expr` is reused — it doesn't depend on which
-    /// concrete input feeds the selection.
+    /// Rebuild this selection with a new input child. Arity 1: a selection has
+    /// one input (the relation being filtered). The predicate `expr` is
+    /// reused — it doesn't depend on which concrete input feeds the
+    /// selection.
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Result<Arc<dyn PhysicalPlan>> {
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(FdapQueryError::Internal(format!(
                 "SelectionExec::with_new_children expected 1 child, got {}",

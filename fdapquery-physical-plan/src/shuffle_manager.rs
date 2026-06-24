@@ -22,6 +22,7 @@ use std::io::BufReader;
 use std::path::PathBuf;
 
 /// Local shuffle-file storage manager.
+#[derive(Debug)]
 pub struct ShuffleManager {
     pub base_dir: String,
 }
@@ -79,7 +80,7 @@ impl ShuffleManager {
         job_uuid: &str,
         stage_id: i32,
         partition_id: i32,
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>> + Send>> {
         let file_path = self.get_partition_file(job_uuid, stage_id, partition_id);
         if !file_path.exists() {
             return Err(FdapQueryError::Execution(format!(

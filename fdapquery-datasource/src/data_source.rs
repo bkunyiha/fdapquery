@@ -28,7 +28,10 @@ pub trait DataSource: Send + Sync {
     /// `projection` slice means "all columns". Returns `Err` if the scan
     /// can't start (file open, schema validation, reader construction);
     /// the inner iterator yields `Err` for per-batch read failures.
-    fn scan(&self, projection: &[String]) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>>;
+    fn scan(
+        &self,
+        projection: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>> + Send>>;
 
     /// Type-erased self-reference for runtime downcasting (see
     /// `fdapquery_physical_plan::PhysicalPlan::as_any`). `protobuf` — the only caller

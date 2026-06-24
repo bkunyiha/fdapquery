@@ -89,7 +89,10 @@ impl DataSource for CsvDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+    fn scan(
+        &self,
+        projection: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>> + Send>> {
         let file = File::open(&self.filename)?;
 
         // Determine the schema used by the reader (typed schema, not projected).

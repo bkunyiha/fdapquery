@@ -81,13 +81,30 @@ impl RuntimeEnv {
 /// ref-count cost (one atomic increment per `execute` call) is negligible
 /// compared to per-batch work.
 ///
-/// Same shape as DataFusion's `TaskContext`.
+/// ## Network identity here for now
+/// `executor_host` and `executor_port` live on this struct in Phase B
+/// because every existing `ExecutorContext::new(id, host, port, dir)`
+/// call site migrates one-to-one to `TaskContext::new(...)`. Phase C
+/// reshapes — these fields belong in `RuntimeEnv` for a clean
+/// DataFusion-shape, and Session 11 makes the move as part of the
+/// broader `fdapquery-execution` crate reorg.
+///
+/// Same shape as DataFusion's `TaskContext` modulo the network identity
+/// note above.
 #[derive(Debug)]
 pub struct TaskContext {
     /// Identifies which executor is running this task. Used by
     /// `ShuffleReaderExec` to decide whether a shuffle location is local
     /// (read from disk) or remote (fetch via Flight client).
     pub executor_id: String,
+    /// Hostname or IP this executor listens on. Tagged onto the
+    /// `ShuffleLocation`s a `ShuffleWriterExec` produces so downstream
+    /// readers know which executor to fetch from. Phase C migrates this
+    /// to `RuntimeEnv`.
+    pub executor_host: String,
+    /// Port this executor listens on. Same Phase B / Phase C story as
+    /// `executor_host`.
+    pub executor_port: u16,
     /// Tunable settings for this query session.
     pub session_config: SessionConfig,
     /// Per-process runtime resources (shuffle manager today, more later).
@@ -97,23 +114,30 @@ pub struct TaskContext {
 impl TaskContext {
     pub fn new(
         executor_id: impl Into<String>,
+        executor_host: impl Into<String>,
+        executor_port: u16,
         session_config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
             executor_id: executor_id.into(),
+            executor_host: executor_host.into(),
+            executor_port,
             session_config,
             runtime,
         }
     }
 
     /// Convenience constructor for single-node tests: a `"test"`
-    /// executor id, a default `SessionConfig`, and a default
-    /// `RuntimeEnv` (the `/tmp/rquery-shuffle` directory). Useful for
-    /// tests that don't exercise shuffle.
+    /// executor id, `localhost:0` as the network identity, a default
+    /// `SessionConfig`, and a default `RuntimeEnv` (the
+    /// `/tmp/rquery-shuffle` directory). Useful for tests that don't
+    /// exercise shuffle.
     pub fn default_test() -> Self {
         Self::new(
             "test",
+            "localhost",
+            0,
             SessionConfig::new(),
             Arc::new(RuntimeEnv::default_local()),
         )
@@ -154,8 +178,10 @@ mod tests {
     fn task_context_construction() {
         let runtime = Arc::new(RuntimeEnv::default_local());
         let config = SessionConfig::new();
-        let ctx = TaskContext::new("exec-1", config, Arc::clone(&runtime));
+        let ctx = TaskContext::new("exec-1", "10.0.0.1", 50051, config, Arc::clone(&runtime));
         assert_eq!(ctx.executor_id, "exec-1");
+        assert_eq!(ctx.executor_host, "10.0.0.1");
+        assert_eq!(ctx.executor_port, 50051);
         assert!(Arc::ptr_eq(&ctx.runtime, &runtime));
     }
 }

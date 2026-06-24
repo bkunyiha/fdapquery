@@ -23,13 +23,16 @@
 
 use crate::aggregate_expression::AggregateExpression;
 use crate::aggregate_mode::AggregateMode;
-use crate::executor_context::ExecutorContext;
 use crate::expressions::{Accumulator, AccumulatorValue, Expression};
-use crate::physical_plan::PhysicalPlan;
+use crate::physical_plan::ExecutionPlan;
+use crate::plan_properties::PlanProperties;
+use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::task_context::TaskContext;
+use async_stream::try_stream;
 use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue, Schema,
-    record_batch,
+    ArrowVectorBuilder, ColumnVector, FdapQueryError, Result, ScalarValue, Schema, record_batch,
 };
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -37,17 +40,18 @@ use std::sync::Arc;
 
 /// Group-by hash aggregation.
 pub struct HashAggregateExec {
-    pub input: Arc<dyn PhysicalPlan>,
+    pub input: Arc<dyn ExecutionPlan>,
     pub group_expr: Vec<Arc<dyn Expression>>,
     pub aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
     pub schema: Schema,
     pub mode: AggregateMode,
+    properties: PlanProperties,
 }
 
 impl HashAggregateExec {
     /// Single-node (`Complete`) aggregation — the common case.
     pub fn new(
-        input: Arc<dyn PhysicalPlan>,
+        input: Arc<dyn ExecutionPlan>,
         group_expr: Vec<Arc<dyn Expression>>,
         aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
         schema: Schema,
@@ -63,54 +67,54 @@ impl HashAggregateExec {
 
     /// Construct with an explicit [`AggregateMode`] (for distributed execution).
     pub fn new_with_mode(
-        input: Arc<dyn PhysicalPlan>,
+        input: Arc<dyn ExecutionPlan>,
         group_expr: Vec<Arc<dyn Expression>>,
         aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
         schema: Schema,
         mode: AggregateMode,
     ) -> Self {
+        let properties = PlanProperties::single_partition_unknown();
         Self {
             input,
             group_expr,
             aggregate_expr,
             schema,
             mode,
+            properties,
         }
     }
 }
 
-impl PhysicalPlan for HashAggregateExec {
+impl ExecutionPlan for HashAggregateExec {
+    fn name(&self) -> &str {
+        "HashAggregateExec"
+    }
+
     fn schema(&self) -> Schema {
         self.schema.clone()
     }
 
-    fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
 
-    /// Override the [`PhysicalPlan::as_any`] hook so `ParallelContext` can
-    /// downcast and recover the concrete aggregate for its partial/final
-    /// split.
+    /// Override the `as_any` hook so `ParallelContext` can downcast and
+    /// recover the concrete aggregate for its partial/final split.
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    /// Rebuild this aggregate with a new input child. See the trait-level
-    /// `PhysicalPlan::with_new_children` doc for the general rewrite pattern.
-    ///
-    /// Arity 1: an aggregate has one input (the relation being grouped).
-    /// `into_iter().next().unwrap()` consumes the length-1 children vec and
-    /// takes ownership of that single Arc.
-    ///
-    /// We use `new_with_mode` (not `new`) so the `mode` (Complete / Partial /
-    /// Final) is preserved through the rewrite — the distributed planner sets
-    /// Partial/Final modes during stage splitting (`DistributedPlanner::plan`)
-    /// and a subsequent rewrite like `substitute_shuffle_reader` must not
-    /// silently demote the operator back to Complete.
+    /// Rebuild this aggregate with a new input child. Arity 1. We use
+    /// `new_with_mode` (not `new`) so the `mode` (Complete / Partial /
+    /// Final) is preserved through the rewrite.
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Result<Arc<dyn PhysicalPlan>> {
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(FdapQueryError::Internal(format!(
                 "HashAggregateExec::with_new_children expected 1 child, got {}",
@@ -128,91 +132,110 @@ impl PhysicalPlan for HashAggregateExec {
 
     fn execute(
         &self,
-        ctx: &ExecutorContext,
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
-        // Aggregate doesn't read ctx itself, but threads it through so that
-        // shuffle-bearing children (a `ShuffleReaderExec` under a Final-mode
-        // aggregate) get the per-executor state they need.
-        let mut map: HashMap<GroupKey, Vec<Box<dyn Accumulator>>> = HashMap::new();
+        partition: usize,
+        ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return Err(FdapQueryError::Internal(format!(
+                "HashAggregateExec has 1 output partition; partition {partition} is out of range"
+            )));
+        }
+        // Capture everything the generator body needs by clone — the
+        // generator runs detached from `self`, so it can't hold &self.
+        let group_expr = self.group_expr.clone();
+        let aggregate_expr = self.aggregate_expr.clone();
+        let schema = self.schema.clone();
+        let mode = self.mode;
+        let n_group = self.group_expr.len();
 
-        let input_stream = self.input.execute(ctx)?;
-        for batch_res in input_stream {
-            let batch = batch_res?;
-            // Evaluate the group-by and aggregate-input expressions once per batch.
-            let group_keys: Vec<Box<dyn ColumnVector>> = self
-                .group_expr
-                .iter()
-                .map(|e| e.evaluate(&batch))
-                .collect::<Result<Vec<_>>>()?;
-            let aggr_inputs: Vec<Box<dyn ColumnVector>> = self
-                .aggregate_expr
-                .iter()
-                .map(|a| a.input_expression().evaluate(&batch))
-                .collect::<Result<Vec<_>>>()?;
+        let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
+        let arrow_schema = Arc::new(self.schema.to_arrow());
 
-            for row in 0..batch.num_rows() {
-                let key = GroupKey(
-                    group_keys
-                        .iter()
-                        .map(|c| c.get_value(row))
-                        .collect::<Result<Vec<_>>>()?,
-                );
-                let accumulators = map.entry(key).or_insert_with(|| {
-                    self.aggregate_expr
-                        .iter()
-                        .map(|a| a.create_accumulator())
-                        .collect()
-                });
-                for (i, acc) in accumulators.iter_mut().enumerate() {
-                    let value = aggr_inputs[i].get_value(row)?;
-                    match self.mode {
-                        // FINAL merges incoming partial state; other modes accumulate raw values.
-                        AggregateMode::Final => {
-                            acc.merge(&AccumulatorValue::Scalar(value))?;
+        // The aggregator is blocking: it must see every input batch before
+        // it can emit its single output batch. The `try_stream!` macro lets
+        // us express that as a sequential body that `.await`s on input and
+        // `yield`s the result.
+        let stream = try_stream! {
+            let mut map: HashMap<GroupKey, Vec<Box<dyn Accumulator>>> = HashMap::new();
+            let mut input = std::pin::pin!(input_stream);
+            while let Some(batch_res) = input.next().await {
+                let batch = batch_res?;
+                // Evaluate the group-by and aggregate-input expressions once per batch.
+                let group_keys: Vec<Box<dyn ColumnVector>> = group_expr
+                    .iter()
+                    .map(|e| e.evaluate(&batch))
+                    .collect::<Result<Vec<_>>>()?;
+                let aggr_inputs: Vec<Box<dyn ColumnVector>> = aggregate_expr
+                    .iter()
+                    .map(|a| a.input_expression().evaluate(&batch))
+                    .collect::<Result<Vec<_>>>()?;
+
+                for row in 0..batch.num_rows() {
+                    let key = GroupKey(
+                        group_keys
+                            .iter()
+                            .map(|c| c.get_value(row))
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                    let accumulators = map.entry(key).or_insert_with(|| {
+                        aggregate_expr
+                            .iter()
+                            .map(|a| a.create_accumulator())
+                            .collect()
+                    });
+                    for (i, acc) in accumulators.iter_mut().enumerate() {
+                        let value = aggr_inputs[i].get_value(row)?;
+                        match mode {
+                            // FINAL merges incoming partial state; other modes accumulate raw values.
+                            AggregateMode::Final => {
+                                acc.merge(&AccumulatorValue::Scalar(value))?;
+                            }
+                            _ => acc.accumulate(&value)?,
                         }
-                        _ => acc.accumulate(&value)?,
                     }
                 }
             }
-        }
 
-        // Build the output batch: one row per group key.
-        let n_group = self.group_expr.len();
-        let mut builders: Vec<ArrowVectorBuilder> = self
-            .schema
-            .fields
-            .iter()
-            .map(|f| ArrowVectorBuilder::new(&f.data_type, map.len()))
-            .collect();
+            // Build the output batch: one row per group key.
+            let mut builders: Vec<ArrowVectorBuilder> = schema
+                .fields
+                .iter()
+                .map(|f| ArrowVectorBuilder::new(&f.data_type, map.len()))
+                .collect();
 
-        for (key, accumulators) in &map {
-            for (i, group_value) in key.0.iter().enumerate() {
-                builders[i].append_value(group_value);
-            }
-            for (i, acc) in accumulators.iter().enumerate() {
-                let output = match self.mode {
-                    AggregateMode::Partial => match acc.intermediate_value()? {
-                        AccumulatorValue::Scalar(s) => s,
-                        AccumulatorValue::AvgState { .. } => {
-                            return Err(FdapQueryError::NotImplemented(
+            for (key, accumulators) in &map {
+                for (i, group_value) in key.0.iter().enumerate() {
+                    builders[i].append_value(group_value);
+                }
+                for (i, acc) in accumulators.iter().enumerate() {
+                    // Inner-Result trick: wrap each match arm so the whole
+                    // match evaluates to `Result<ScalarValue>` that we apply
+                    // `?` to, avoiding an `unreachable!()` after the AVG-state
+                    // error path.
+                    let output: ScalarValue = match mode {
+                        AggregateMode::Partial => match acc.intermediate_value()? {
+                            AccumulatorValue::Scalar(s) => Ok(s),
+                            AccumulatorValue::AvgState { .. } => Err(FdapQueryError::NotImplemented(
                                 "HashAggregateExec PARTIAL output of AVG intermediate state \
                                  requires the distributed module"
                                     .into(),
-                            ));
-                        }
-                    },
-                    _ => acc.final_value()?,
-                };
-                builders[n_group + i].append_value(&output);
+                            )),
+                        }?,
+                        _ => acc.final_value()?,
+                    };
+                    builders[n_group + i].append_value(&output);
+                }
             }
-        }
 
-        let columns: Vec<Box<dyn ColumnVector>> = builders
-            .into_iter()
-            .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
-            .collect();
-        let batch = record_batch::create(&self.schema, columns)?;
-        Ok(Box::new(std::iter::once(Ok(batch))))
+            let columns: Vec<Box<dyn ColumnVector>> = builders
+                .into_iter()
+                .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
+                .collect();
+            let batch = record_batch::create(&schema, columns)?;
+            yield batch;
+        };
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, stream)))
     }
 }
 
@@ -307,6 +330,7 @@ mod tests {
     use fdapquery_datasource::{CsvDataSource, DataSource};
     use fdapquery_datatypes::Field;
     use fdapquery_datatypes::arrow_types::{INT32_TYPE, INT64_TYPE, STRING_TYPE};
+    use futures::TryStreamExt;
 
     // ---- Accumulators driven directly. ----
 
@@ -339,8 +363,8 @@ mod tests {
 
     // ---- Integration: GROUP BY state, MIN/MAX/COUNT(salary) over employee.csv. ----
 
-    #[test]
-    fn group_by_state_min_max_count() {
+    #[tokio::test]
+    async fn group_by_state_min_max_count() {
         let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(
             "../testdata/employee.csv",
             None,
@@ -369,8 +393,13 @@ mod tests {
             out_schema,
         );
 
-        let ctx = ExecutorContext::new("test", "localhost", 0, "/tmp/rquery-test-ignored");
-        let batches: Vec<_> = agg.execute(&ctx).unwrap().collect::<Result<Vec<_>>>().unwrap();
+        let ctx = Arc::new(TaskContext::default_test());
+        let batches: Vec<_> = agg
+            .execute(0, ctx)
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
         assert_eq!(batches.len(), 1);
         let batch = &batches[0];
         assert_eq!(batch.num_rows(), 3); // groups: CA, CO, and the null-state row

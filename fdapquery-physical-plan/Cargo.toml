@@ -22,6 +22,10 @@ arrow-ipc     = { workspace = true }
 futures          = { workspace = true }
 # `pin-project-lite` powers safe pin-projection in `RecordBatchStreamAdapter`.
 pin-project-lite = { workspace = true }
+# `async-stream` provides the `try_stream!` generator macro used by the
+# stateful operators (HashAggregateExec, HashJoinExec, LimitExec) to express
+# blocking aggregation as a sequential body that .awaits and yields.
+async-stream     = { workspace = true }
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
 fdapquery-datasource    = { path = "../fdapquery-datasource" }
 fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
@@ -32,3 +36,6 @@ fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
 # arrow-array directly; the operators go through the `datatypes`
 # builder/vector layer.
 arrow-array   = { workspace = true }
+# Tokio runtime for `#[tokio::test]` — every operator's test drives an async
+# stream to completion via `try_collect().await`.
+tokio         = { workspace = true }

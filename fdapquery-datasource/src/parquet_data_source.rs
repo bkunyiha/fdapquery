@@ -52,7 +52,10 @@ impl DataSource for ParquetDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+    fn scan(
+        &self,
+        projection: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>> + Send>> {
         let builder = self.open_builder()?;
 
         let builder = if projection.is_empty() {

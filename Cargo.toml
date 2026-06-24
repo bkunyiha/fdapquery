@@ -104,6 +104,12 @@ futures       = "0.3"
 # version DataFusion uses.
 pin-project-lite = "0.2"
 
+# `async-stream` provides the `try_stream!` macro for writing stateful operators
+# as sequential-style generators that .await on input batches and yield output
+# batches. Used by `HashAggregateExec`, `HashJoinExec`, and `LimitExec`. Same
+# crate DataFusion uses for the same pattern.
+async-stream = "0.3"
+
 # UUID generation — used by `distributed::Scheduler` to mint a fresh
 # `job_uuid` per query.
 uuid          = { version = "1", features = ["v4"] }

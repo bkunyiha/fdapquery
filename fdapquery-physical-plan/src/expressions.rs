@@ -261,7 +261,7 @@ pub enum AccumulatorValue {
 /// "result is null" case). The distributed-only `intermediate_value`/`merge`
 /// traffic in [`AccumulatorValue`], which can also carry AVG's compound
 /// (sum, count) state — the one place a scalar is insufficient.
-pub trait Accumulator {
+pub trait Accumulator: Send + Sync {
     /// Fold one input value into the running state. Type-mismatch invariants
     /// surface as `FdapQueryError::Internal(_)`.
     fn accumulate(&mut self, value: &ScalarValue) -> Result<()>;

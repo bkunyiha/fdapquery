@@ -31,7 +31,10 @@ impl DataSource for InMemoryDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
+    fn scan(
+        &self,
+        projection: &[String],
+    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>> + Send>> {
         if projection.is_empty() {
             // No projection: hand back wrapped clones of the underlying batches.
             // arrow_array::RecordBatch is Arc-backed so each clone is cheap.

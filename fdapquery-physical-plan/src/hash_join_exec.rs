@@ -16,39 +16,45 @@
 //! - **Right join** re-scans the left side to find which right keys matched, then
 //!   emits the unmatched right rows with nulls on the left.
 
-use crate::executor_context::ExecutorContext;
-use crate::physical_plan::PhysicalPlan;
+use crate::physical_plan::ExecutionPlan;
+use crate::plan_properties::PlanProperties;
 use crate::row_key::RowKey;
+use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::task_context::TaskContext;
+use async_stream::try_stream;
 use fdapquery_datatypes::{
     ArrowFieldVector, ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result,
     ScalarValue, Schema, record_batch,
 };
 use fdapquery_logical_plan::JoinType;
+use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Hash join physical operator.
 pub struct HashJoinExec {
-    pub left: Arc<dyn PhysicalPlan>,
-    pub right: Arc<dyn PhysicalPlan>,
+    pub left: Arc<dyn ExecutionPlan>,
+    pub right: Arc<dyn ExecutionPlan>,
     pub join_type: JoinType,
     pub left_keys: Vec<usize>,
     pub right_keys: Vec<usize>,
     pub schema: Schema,
     pub right_columns_to_exclude: HashSet<usize>,
+    properties: PlanProperties,
 }
 
 impl HashJoinExec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        left: Arc<dyn PhysicalPlan>,
-        right: Arc<dyn PhysicalPlan>,
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
         join_type: JoinType,
         left_keys: Vec<usize>,
         right_keys: Vec<usize>,
         schema: Schema,
         right_columns_to_exclude: HashSet<usize>,
     ) -> Self {
+        let properties = PlanProperties::single_partition_unknown();
         Self {
             left,
             right,
@@ -57,74 +63,83 @@ impl HashJoinExec {
             right_keys,
             schema,
             right_columns_to_exclude,
+            properties,
         }
-    }
-
-    /// Concatenate a left row with a right row, dropping the right columns listed
-    /// in `right_columns_to_exclude` (the duplicate join keys).
-    fn combine_rows(
-        &self,
-        left_row: &[ScalarValue],
-        right_row: &[ScalarValue],
-    ) -> Vec<ScalarValue> {
-        let mut result: Vec<ScalarValue> = left_row.to_vec();
-        for (i, value) in right_row.iter().enumerate() {
-            if !self.right_columns_to_exclude.contains(&i) {
-                result.push(value.clone());
-            }
-        }
-        result
-    }
-
-    /// Build an output batch from assembled rows, typed by the output schema.
-    fn create_batch(&self, rows: &[Vec<ScalarValue>]) -> Result<RecordBatch> {
-        let mut builders: Vec<ArrowVectorBuilder> = self
-            .schema
-            .fields
-            .iter()
-            .map(|f| ArrowVectorBuilder::new(&f.data_type, rows.len()))
-            .collect();
-        for row in rows {
-            for (col, value) in row.iter().enumerate() {
-                builders[col].append_value(value);
-            }
-        }
-        let columns: Vec<Box<dyn ColumnVector>> = builders
-            .into_iter()
-            .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
-            .collect();
-        record_batch::create(&self.schema, columns)
-    }
-
-    /// Wrap each column of `batch` once, so rows can be read by index without
-    /// re-wrapping the arrays per row.
-    fn columns_of(batch: &RecordBatch) -> Vec<ArrowFieldVector> {
-        (0..batch.num_columns())
-            .map(|i| record_batch::field(batch, i))
-            .collect()
-    }
-
-    /// The join key for one row: the values of the given key columns.
-    fn key_of(cols: &[ArrowFieldVector], keys: &[usize], row: usize) -> Result<RowKey> {
-        Ok(RowKey(
-            keys.iter()
-                .map(|&k| cols[k].get_value(row))
-                .collect::<Result<Vec<_>>>()?,
-        ))
-    }
-
-    /// Every column value for one row.
-    fn full_row(cols: &[ArrowFieldVector], row: usize) -> Result<Vec<ScalarValue>> {
-        cols.iter().map(|c| c.get_value(row)).collect()
     }
 }
 
-impl PhysicalPlan for HashJoinExec {
+/// Concatenate a left row with a right row, dropping the right columns listed
+/// in `right_columns_to_exclude` (the duplicate join keys). Free function so
+/// the generator body can call it without holding `&self`.
+fn combine_rows(
+    left_row: &[ScalarValue],
+    right_row: &[ScalarValue],
+    right_columns_to_exclude: &HashSet<usize>,
+) -> Vec<ScalarValue> {
+    let mut result: Vec<ScalarValue> = left_row.to_vec();
+    for (i, value) in right_row.iter().enumerate() {
+        if !right_columns_to_exclude.contains(&i) {
+            result.push(value.clone());
+        }
+    }
+    result
+}
+
+/// Build an output batch from assembled rows, typed by the output schema.
+fn create_batch(rows: &[Vec<ScalarValue>], schema: &Schema) -> Result<RecordBatch> {
+    let mut builders: Vec<ArrowVectorBuilder> = schema
+        .fields
+        .iter()
+        .map(|f| ArrowVectorBuilder::new(&f.data_type, rows.len()))
+        .collect();
+    for row in rows {
+        for (col, value) in row.iter().enumerate() {
+            builders[col].append_value(value);
+        }
+    }
+    let columns: Vec<Box<dyn ColumnVector>> = builders
+        .into_iter()
+        .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
+        .collect();
+    record_batch::create(schema, columns)
+}
+
+/// Wrap each column of `batch` once, so rows can be read by index without
+/// re-wrapping the arrays per row.
+fn columns_of(batch: &RecordBatch) -> Vec<ArrowFieldVector> {
+    (0..batch.num_columns())
+        .map(|i| record_batch::field(batch, i))
+        .collect()
+}
+
+/// The join key for one row: the values of the given key columns.
+fn key_of(cols: &[ArrowFieldVector], keys: &[usize], row: usize) -> Result<RowKey> {
+    Ok(RowKey(
+        keys.iter()
+            .map(|&k| cols[k].get_value(row))
+            .collect::<Result<Vec<_>>>()?,
+    ))
+}
+
+/// Every column value for one row.
+fn full_row(cols: &[ArrowFieldVector], row: usize) -> Result<Vec<ScalarValue>> {
+    cols.iter().map(|c| c.get_value(row)).collect()
+}
+
+impl ExecutionPlan for HashJoinExec {
+    fn name(&self) -> &str {
+        "HashJoinExec"
+    }
+
     fn schema(&self) -> Schema {
         self.schema.clone()
     }
 
-    fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.left, &self.right]
     }
 
@@ -132,26 +147,14 @@ impl PhysicalPlan for HashJoinExec {
         self
     }
 
-    /// Rebuild this join with new left and right inputs. See the trait-level
-    /// `PhysicalPlan::with_new_children` doc for the general rewrite pattern.
-    ///
-    /// Arity 2: a hash join has two inputs, conventionally `[left, right]` in
-    /// `children()` order. The incoming `children` vec is therefore length 2.
-    /// We drain it via `into_iter()` and take each element in order — the
-    /// first is the left (probe) side, the second is the right (build) side.
-    /// Ordering matters: swapping left and right changes the hash table's
-    /// key columns and would silently produce a different join.
-    ///
-    /// Both new inputs are taken by owned move (no Arc clones). All non-input
-    /// fields (`join_type`, key indices, output schema, exclude set) are
-    /// reused — they're properties of the join definition, not the children.
-    ///
-    /// DataFusion equivalently writes `children[0].clone()` / `children[1].clone()`,
-    /// which trades two atomic refcount bumps for terseness. Both are correct.
+    /// Rebuild this join with new left and right inputs. Arity 2: a hash
+    /// join has two inputs in `[left, right]` order. Ordering matters:
+    /// swapping left and right changes the hash table's key columns and
+    /// would silently produce a different join.
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn PhysicalPlan>>,
-    ) -> Result<Arc<dyn PhysicalPlan>> {
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 2 {
             return Err(FdapQueryError::Internal(format!(
                 "HashJoinExec::with_new_children expected 2 children (left, right), got {}",
@@ -174,93 +177,133 @@ impl PhysicalPlan for HashJoinExec {
 
     fn execute(
         &self,
-        ctx: &ExecutorContext,
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
-        // Join doesn't read ctx itself; threads it through to both children
-        // so shuffle-bearing inputs find their executor state.
-        let mut hash_table: HashMap<RowKey, Vec<Vec<ScalarValue>>> = HashMap::new();
-        let right_stream = self.right.execute(ctx)?;
-        for batch_res in right_stream {
-            let batch = batch_res?;
-            let cols = Self::columns_of(&batch);
-            for row in 0..batch.num_rows() {
-                let key = Self::key_of(&cols, &self.right_keys, row)?;
-                hash_table
-                    .entry(key)
-                    .or_default()
-                    .push(Self::full_row(&cols, row)?);
-            }
+        partition: usize,
+        ctx: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return Err(FdapQueryError::Internal(format!(
+                "HashJoinExec has 1 output partition; partition {partition} is out of range"
+            )));
         }
-
+        // Clone everything the generator needs — it runs detached from `self`.
+        let left = Arc::clone(&self.left);
+        let right = Arc::clone(&self.right);
+        let join_type = self.join_type.clone();
+        let left_keys = self.left_keys.clone();
+        let right_keys = self.right_keys.clone();
+        let schema = self.schema.clone();
+        let right_columns_to_exclude = self.right_columns_to_exclude.clone();
         let right_field_count = self.right.schema().fields.len();
-        let mut outputs: Vec<RecordBatch> = Vec::new();
+        let left_field_count = self.left.schema().fields.len();
+        let arrow_schema = Arc::new(self.schema.to_arrow());
+        let ctx_for_probe = Arc::clone(&ctx);
+        let ctx_for_unmatched = Arc::clone(&ctx);
 
-        // --- Probe phase: find matches for each left row. ---
-        let left_stream = self.left.execute(ctx)?;
-        for left_batch_res in left_stream {
-            let left_batch = left_batch_res?;
-            let cols = Self::columns_of(&left_batch);
-            let mut output_rows: Vec<Vec<ScalarValue>> = Vec::new();
-            for row in 0..left_batch.num_rows() {
-                let probe_key = Self::key_of(&cols, &self.left_keys, row)?;
-                let left_row = Self::full_row(&cols, row)?;
-                let matched = hash_table.get(&probe_key);
-                match self.join_type {
-                    JoinType::Inner | JoinType::Right => {
-                        if let Some(rows) = matched {
-                            for right_row in rows {
-                                output_rows.push(self.combine_rows(&left_row, right_row));
-                            }
-                        }
-                    }
-                    JoinType::Left => {
-                        if let Some(rows) = matched {
-                            for right_row in rows {
-                                output_rows.push(self.combine_rows(&left_row, right_row));
-                            }
-                        } else {
-                            // No match: left row with nulls for the right columns.
-                            let null_right = vec![ScalarValue::Null; right_field_count];
-                            output_rows.push(self.combine_rows(&left_row, &null_right));
-                        }
-                    }
+        let stream = try_stream! {
+            // --- Build phase: load the right side into a hash table. ---
+            let mut hash_table: HashMap<RowKey, Vec<Vec<ScalarValue>>> = HashMap::new();
+            let right_stream = right.execute(0, Arc::clone(&ctx))?;
+            let mut right_pinned = std::pin::pin!(right_stream);
+            while let Some(batch_res) = right_pinned.next().await {
+                let batch = batch_res?;
+                let cols = columns_of(&batch);
+                for row in 0..batch.num_rows() {
+                    let key = key_of(&cols, &right_keys, row)?;
+                    hash_table
+                        .entry(key)
+                        .or_default()
+                        .push(full_row(&cols, row)?);
                 }
             }
-            if !output_rows.is_empty() {
-                outputs.push(self.create_batch(&output_rows)?);
-            }
-        }
 
-        // --- Right join: emit unmatched right rows with nulls on the left. ---
-        if matches!(self.join_type, JoinType::Right) {
-            let mut matched_keys: HashSet<RowKey> = HashSet::new();
-            let left_stream = self.left.execute(ctx)?;
-            for left_batch_res in left_stream {
+            // --- Probe phase: emit one batch per left input batch. ---
+            let left_stream = left.execute(0, ctx_for_probe)?;
+            let mut left_pinned = std::pin::pin!(left_stream);
+            while let Some(left_batch_res) = left_pinned.next().await {
                 let left_batch = left_batch_res?;
-                let cols = Self::columns_of(&left_batch);
+                let cols = columns_of(&left_batch);
+                let mut output_rows: Vec<Vec<ScalarValue>> = Vec::new();
                 for row in 0..left_batch.num_rows() {
-                    let probe_key = Self::key_of(&cols, &self.left_keys, row)?;
-                    if hash_table.contains_key(&probe_key) {
-                        matched_keys.insert(probe_key);
+                    let probe_key = key_of(&cols, &left_keys, row)?;
+                    let left_row = full_row(&cols, row)?;
+                    let matched = hash_table.get(&probe_key);
+                    match join_type {
+                        JoinType::Inner | JoinType::Right => {
+                            if let Some(rows) = matched {
+                                for right_row in rows {
+                                    output_rows.push(combine_rows(
+                                        &left_row,
+                                        right_row,
+                                        &right_columns_to_exclude,
+                                    ));
+                                }
+                            }
+                        }
+                        JoinType::Left => {
+                            if let Some(rows) = matched {
+                                for right_row in rows {
+                                    output_rows.push(combine_rows(
+                                        &left_row,
+                                        right_row,
+                                        &right_columns_to_exclude,
+                                    ));
+                                }
+                            } else {
+                                // No match: left row with nulls for the right columns.
+                                let null_right = vec![ScalarValue::Null; right_field_count];
+                                output_rows.push(combine_rows(
+                                    &left_row,
+                                    &null_right,
+                                    &right_columns_to_exclude,
+                                ));
+                            }
+                        }
                     }
                 }
-            }
-            let left_field_count = self.left.schema().fields.len();
-            let mut unmatched: Vec<Vec<ScalarValue>> = Vec::new();
-            for (key, rows) in &hash_table {
-                if !matched_keys.contains(key) {
-                    let null_left = vec![ScalarValue::Null; left_field_count];
-                    for right_row in rows {
-                        unmatched.push(self.combine_rows(&null_left, right_row));
-                    }
+                if !output_rows.is_empty() {
+                    yield create_batch(&output_rows, &schema)?;
                 }
             }
-            if !unmatched.is_empty() {
-                outputs.push(self.create_batch(&unmatched)?);
-            }
-        }
 
-        Ok(Box::new(outputs.into_iter().map(Ok)))
+            // --- Right join: re-scan left to find which right keys matched,
+            // then emit the unmatched right rows with nulls on the left.
+            // Session 7 did this with a second left.execute(); we keep the
+            // same shape. A buffering optimisation that avoided the
+            // re-execute lives in the deferred-to-later-session list. ---
+            if matches!(join_type, JoinType::Right) {
+                let mut matched_keys: HashSet<RowKey> = HashSet::new();
+                let left_stream_2 = left.execute(0, ctx_for_unmatched)?;
+                let mut left_pinned_2 = std::pin::pin!(left_stream_2);
+                while let Some(left_batch_res) = left_pinned_2.next().await {
+                    let left_batch = left_batch_res?;
+                    let cols = columns_of(&left_batch);
+                    for row in 0..left_batch.num_rows() {
+                        let probe_key = key_of(&cols, &left_keys, row)?;
+                        if hash_table.contains_key(&probe_key) {
+                            matched_keys.insert(probe_key);
+                        }
+                    }
+                }
+                let mut unmatched: Vec<Vec<ScalarValue>> = Vec::new();
+                for (key, rows) in &hash_table {
+                    if !matched_keys.contains(key) {
+                        let null_left = vec![ScalarValue::Null; left_field_count];
+                        for right_row in rows {
+                            unmatched.push(combine_rows(
+                                &null_left,
+                                right_row,
+                                &right_columns_to_exclude,
+                            ));
+                        }
+                    }
+                }
+                if !unmatched.is_empty() {
+                    yield create_batch(&unmatched, &schema)?;
+                }
+            }
+        };
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, stream)))
     }
 }
 
@@ -284,25 +327,46 @@ mod tests {
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
     use fdapquery_datatypes::Field;
     use fdapquery_datatypes::arrow_types::{INT64_TYPE, STRING_TYPE};
+    use futures::TryStreamExt;
     use std::sync::Arc;
 
-    /// A `PhysicalPlan` that simply replays preset batches.
+    /// An `ExecutionPlan` that simply replays preset batches.
     struct VecExec {
         schema: Schema,
         batches: Vec<RecordBatch>,
+        properties: PlanProperties,
     }
 
-    impl PhysicalPlan for VecExec {
+    impl VecExec {
+        fn new(schema: Schema, batches: Vec<RecordBatch>) -> Self {
+            Self {
+                schema,
+                batches,
+                properties: PlanProperties::single_partition_unknown(),
+            }
+        }
+    }
+
+    impl ExecutionPlan for VecExec {
+        fn name(&self) -> &str {
+            "VecExec"
+        }
         fn schema(&self) -> Schema {
             self.schema.clone()
         }
+        fn properties(&self) -> &PlanProperties {
+            &self.properties
+        }
         fn execute(
             &self,
-            _ctx: &ExecutorContext,
-        ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
-            Ok(Box::new(self.batches.clone().into_iter().map(Ok)))
+            _partition: usize,
+            _ctx: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            let arrow_schema = Arc::new(self.schema.to_arrow());
+            let inner = futures::stream::iter(self.batches.clone().into_iter().map(Ok));
+            Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, inner)))
         }
-        fn children(&self) -> Vec<&Arc<dyn PhysicalPlan>> {
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
             vec![]
         }
         fn as_any(&self) -> &dyn std::any::Any {
@@ -310,8 +374,8 @@ mod tests {
         }
         fn with_new_children(
             self: Arc<Self>,
-            children: Vec<Arc<dyn PhysicalPlan>>,
-        ) -> Result<Arc<dyn PhysicalPlan>> {
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
             assert!(children.is_empty());
             Ok(self)
         }
@@ -335,10 +399,10 @@ mod tests {
         ]));
         let id: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         let name: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
-        VecExec {
+        VecExec::new(
             schema,
-            batches: vec![RecordBatch::try_new(arrow, vec![id, name]).unwrap()],
-        }
+            vec![RecordBatch::try_new(arrow, vec![id, name]).unwrap()],
+        )
     }
 
     /// right: (id: Int64, dept: Utf8) = (1,eng),(2,sales)
@@ -353,10 +417,10 @@ mod tests {
         ]));
         let id: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
         let dept: ArrayRef = Arc::new(StringArray::from(vec!["eng", "sales"]));
-        VecExec {
+        VecExec::new(
             schema,
-            batches: vec![RecordBatch::try_new(arrow, vec![id, dept]).unwrap()],
-        }
+            vec![RecordBatch::try_new(arrow, vec![id, dept]).unwrap()],
+        )
     }
 
     /// Output schema: id, name, dept (the right `id` is excluded as a duplicate key).
@@ -398,8 +462,12 @@ mod tests {
         out
     }
 
-    #[test]
-    fn inner_join_on_id() {
+    fn test_ctx() -> Arc<TaskContext> {
+        Arc::new(TaskContext::default_test())
+    }
+
+    #[tokio::test]
+    async fn inner_join_on_id() {
         let join = HashJoinExec::new(
             Arc::new(left_exec()),
             Arc::new(right_exec()),
@@ -410,15 +478,11 @@ mod tests {
             HashSet::from([0]),
         );
         let mut rows = collect_rows(
-            join.execute(&ExecutorContext::new(
-                "test",
-                "localhost",
-                0,
-                "/tmp/rquery-test-ignored",
-            ))
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap(),
+            join.execute(0, test_ctx())
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap(),
         );
         rows.sort();
         assert_eq!(
@@ -430,8 +494,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn left_join_keeps_unmatched_left() {
+    #[tokio::test]
+    async fn left_join_keeps_unmatched_left() {
         let join = HashJoinExec::new(
             Arc::new(left_exec()),
             Arc::new(right_exec()),
@@ -442,15 +506,11 @@ mod tests {
             HashSet::from([0]),
         );
         let mut rows = collect_rows(
-            join.execute(&ExecutorContext::new(
-                "test",
-                "localhost",
-                0,
-                "/tmp/rquery-test-ignored",
-            ))
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap(),
+            join.execute(0, test_ctx())
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap(),
         );
         rows.sort();
         assert_eq!(

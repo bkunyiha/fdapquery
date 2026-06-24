@@ -14,7 +14,13 @@ use crate::scalar_value::ScalarValue;
 use arrow_schema::DataType;
 
 /// Abstraction over different implementations of a column vector.
-pub trait ColumnVector {
+///
+/// `Send + Sync` because column vectors flow through async streams
+/// (`SendableRecordBatchStream`) and across `tokio` worker threads. Every
+/// existing implementation (arrow array wrappers, literal vectors,
+/// coerced doubles) satisfies these bounds automatically since they hold
+/// only `Send + Sync` data underneath.
+pub trait ColumnVector: Send + Sync {
     /// The Arrow data type stored in this column.
     fn get_type(&self) -> DataType;
 

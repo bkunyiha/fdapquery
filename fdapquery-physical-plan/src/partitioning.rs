@@ -19,7 +19,12 @@ use std::sync::Arc;
 ///   operators (scans) where the source dictates partitioning.
 ///
 /// Same shape as `datafusion-physical-expr::Partitioning`.
-#[derive(Debug, Clone)]
+///
+/// No `Debug` derive: `dyn Expression` is not `Debug`-bound (operators
+/// implement `Display` for human-readable rendering instead). The
+/// `Display` impl below renders the variant in a tree-printer-friendly
+/// form.
+#[derive(Clone)]
 pub enum Partitioning {
     /// Each output partition receives input batches round-robin.
     RoundRobinBatch(usize),
@@ -35,6 +40,19 @@ impl Partitioning {
         match self {
             Self::RoundRobinBatch(n) | Self::UnknownPartitioning(n) => *n,
             Self::Hash(_, n) => *n,
+        }
+    }
+}
+
+impl std::fmt::Debug for Partitioning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RoundRobinBatch(n) => write!(f, "RoundRobinBatch({n})"),
+            Self::Hash(keys, n) => {
+                let key_str: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+                write!(f, "Hash([{}], {n})", key_str.join(", "))
+            }
+            Self::UnknownPartitioning(n) => write!(f, "UnknownPartitioning({n})"),
         }
     }
 }
