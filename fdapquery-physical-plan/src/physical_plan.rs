@@ -144,16 +144,6 @@ pub trait ExecutionPlan: fmt::Display + Send + Sync {
     }
 }
 
-/// Deprecated alias for the pre-rename trait name. Kept for the duration
-/// of the Phase B red window so external doc references compile with a
-/// warning rather than a hard error. Phase C (Session 11) deletes this.
-#[deprecated(
-    since = "0.1.0",
-    note = "use `fdapquery_physical_plan::ExecutionPlan`; the rename is part of \
-            Phase B's DataFusion-shape alignment"
-)]
-pub type PhysicalPlan = dyn ExecutionPlan;
-
 /// Format a physical plan in human-readable form: one line per node,
 /// indented by depth with tabs.
 pub fn format(plan: &dyn ExecutionPlan) -> String {

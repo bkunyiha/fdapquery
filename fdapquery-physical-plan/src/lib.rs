@@ -53,12 +53,6 @@ pub mod cast_expression;
 pub mod column_expression;
 pub mod count_expression;
 pub mod date_expression;
-// `executor_context.rs` bundles the per-executor identity
-// (executor_id / host / port) with the shuffle storage handle (Arc<ShuffleManager>)
-// into a single value that operators receive through `execute(&ctx)`. Placement
-// here in `physical-plan/` is forced by the dependency graph (every other
-// candidate crate transitively depends on this one).
-pub mod executor_context;
 pub mod expressions;
 pub mod hash_aggregate_exec;
 pub mod hash_join_exec;
@@ -105,7 +99,7 @@ pub use expressions::{
 pub use math_expression::{
     AddExpression, DivideExpression, MathExpression, MultiplyExpression, SubtractExpression,
 };
-pub use physical_plan::{ExecutionPlan, PhysicalPlan, format};
+pub use physical_plan::{ExecutionPlan, format};
 // Phase B foundation: per-task context, partitioning descriptor, and the
 // async record-batch stream surface. These live in `fdapquery-physical-plan`
 // during Phase B because the `ExecutionPlan` trait that references them is
@@ -139,6 +133,3 @@ pub use shuffle_manager::ShuffleManager;
 pub use shuffle_reader_exec::ShuffleReaderExec;
 pub use shuffle_writer_exec::ShuffleWriterExec;
 pub use task::Task;
-// Executor context — consumed by flight-server and the shuffle operator
-// bodies.
-pub use executor_context::ExecutorContext;
