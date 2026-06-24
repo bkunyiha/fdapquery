@@ -43,13 +43,13 @@ use crate::pb;
 use fdapquery_datasource::DataSource;
 use fdapquery_datatypes::{Field, Schema};
 use fdapquery_physical_plan::{
-    AggregateExpression, AggregateMode, Expression, PhysicalPlan, ShuffleLocation, Task,
+    AggregateExpression, AggregateMode, ExecutionPlan, Expression, ShuffleLocation, Task,
 };
 
 use arrow_schema::DataType;
 
-/// `&dyn PhysicalPlan` → `pb::PhysicalPlanNode`.
-pub fn serialize_physical_plan(plan: &dyn PhysicalPlan) -> pb::PhysicalPlanNode {
+/// `&dyn ExecutionPlan` → `pb::PhysicalPlanNode`.
+pub fn serialize_physical_plan(plan: &dyn ExecutionPlan) -> pb::PhysicalPlanNode {
     use pb::physical_plan_node::PlanType;
     let any = plan.as_any();
 

@@ -26,19 +26,20 @@
 //! `ShuffleReaderExec` reads via `ctx.shuffle_manager` and never hits the
 //! cross-executor remote-fetch path (currently unimplemented).
 //!
-//! ## Threading model — sync test, server in a background thread
+//! ## Threading model — async test, server in a background thread
 //!
-//! `Client::new` (in this crate) builds its own tokio runtime and uses
-//! `block_on` for the gRPC connect. `block_on` panics inside an existing
-//! tokio runtime context, so we can't use `#[tokio::test]`. The test
-//! function is plain `#[test]` (sync). The server runs in a
+//! `Client::connect`, `FlightExecutorClient::connect`, and the scheduler's
+//! `execute()` are all `async fn` after Phase B, so the test runs on a
+//! tokio runtime via `#[tokio::test]`. The server still runs in a
 //! `std::thread::spawn`ed background thread that owns its own tokio
-//! runtime; an `mpsc` channel ships the bound address back to the test
-//! thread.
+//! runtime so the test and server runtimes don't share workers; an
+//! `mpsc` channel ships the bound address back to the test thread.
 
 use fdapquery_client::FlightExecutorClient;
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
+use futures::TryStreamExt;
+use std::sync::Arc;
 use std::sync::mpsc;
 
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
@@ -59,7 +60,7 @@ fn unique_shuffle_dir(tag: &str) -> String {
 fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) {
     use arrow_flight::flight_service_server::FlightServiceServer;
     use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
-    use fdapquery_physical_plan::ExecutorContext;
+    use fdapquery_physical_plan::{RuntimeEnv, SessionConfig, ShuffleManager, TaskContext};
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::transport::Server;
@@ -83,13 +84,18 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
             // The executor identity in the context must match the executor
             // id and the port the scheduler dispatches against — otherwise
             // shuffle reads see locations with `executor_id != ctx.executor_id`
-            // and panic with the Phase-2 stub message.
-            let ctx = ExecutorContext::new(
+            // and the cross-executor fetch path (currently unimplemented)
+            // would fire.
+            let env = Arc::new(RuntimeEnv::new(Arc::new(ShuffleManager::new(
+                shuffle_dir_for_thread,
+            ))));
+            let ctx = Arc::new(TaskContext::new(
                 executor_id_owned,
                 "127.0.0.1",
-                addr.port() as i32,
-                shuffle_dir_for_thread,
-            );
+                addr.port(),
+                SessionConfig::new(),
+                env,
+            ));
             let producer = FdapQueryFlightProducer::new(ctx);
 
             tx.send(addr).expect("ship addr back to test thread");
@@ -111,8 +117,8 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
 /// scheduler + FlightExecutorClient + flight-server + shuffle files +
 /// final-stage aggregate. Assert the resulting row count and total sum
 /// match what the in-process `ExecutionContext` would produce.
-#[test]
-fn distributed_aggregate_query_end_to_end_via_flight() {
+#[tokio::test]
+async fn distributed_aggregate_query_end_to_end_via_flight() {
     let (addr, shuffle_dir) = spawn_in_process_server("exec-test");
 
     // Build the FlightExecutorClient pointed at the in-process server.
@@ -122,8 +128,9 @@ fn distributed_aggregate_query_end_to_end_via_flight() {
         "127.0.0.1",
         addr.port() as i32,
     )];
-    let flight_client = FlightExecutorClient::new(&executors)
-        .expect("FlightExecutorClient::new should connect to the in-process server");
+    let flight_client = FlightExecutorClient::connect(&executors)
+        .await
+        .expect("FlightExecutorClient::connect should reach the in-process server");
 
     // Build the scheduler stack with a non-default partition count so the
     // shuffle is real. (Default partition_count = executor count = 1, which
@@ -132,11 +139,14 @@ fn distributed_aggregate_query_end_to_end_via_flight() {
     let mut ctx = DistributedContext::new(config, flight_client);
     ctx.register_csv("employee", EMPLOYEE_CSV, true);
 
-    // Run the query. The result is a `Box<dyn Iterator<Item = RecordBatch>>`
-    // (sync) — the scheduler synchronously drove every Flight call.
-    let results: Vec<RecordBatch> = ctx
+    // Run the query. The scheduler awaits every Flight call on the
+    // current tokio runtime; the resulting `SendableRecordBatchStream`
+    // is drained via `try_collect`.
+    let stream = ctx
         .sql("SELECT state, SUM(salary) FROM employee GROUP BY state")
-        .collect();
+        .await
+        .expect("sql plan");
+    let results: Vec<RecordBatch> = stream.try_collect().await.expect("drain stream");
 
     // Sanity check: at least one output batch and total row count matches
     // the number of distinct states in employee.csv.

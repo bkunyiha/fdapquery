@@ -34,11 +34,14 @@
 //!
 //! ## Threading model
 //!
-//! `Client::new` builds its own tokio runtime and uses `block_on` for the gRPC
-//! connect. `block_on` panics inside an existing tokio runtime context, so we
-//! can't use `#[tokio::main]` here. `main()` is plain sync. The server runs in
-//! a `std::thread::spawn`ed background thread that owns its own tokio runtime;
-//! an `mpsc` channel ships the bound address back to the main thread.
+//! `Client::connect`, `FlightExecutorClient::connect`, and the
+//! scheduler's `execute()` are all `async fn` after Phase B, so the
+//! whole pipeline runs on a single tokio runtime. `main()` is
+//! `#[tokio::main]`. The server runs in a `std::thread::spawn`ed
+//! background thread that owns its own tokio runtime (so the client
+//! and server runtimes don't share workers in this single-process
+//! demo); an `mpsc` channel ships the bound address back to the main
+//! thread.
 //!
 //! ## How to run
 //!
@@ -50,6 +53,7 @@
 //! `LocalExecutorClient` (no flight-server) — useful for understanding the
 //! scheduler shape without the gRPC layer.
 
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -58,7 +62,8 @@ use fdapquery_client::FlightExecutorClient;
 use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
 use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
 use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
-use fdapquery_physical_plan::{ExecutorContext, ShuffleManager};
+use fdapquery_physical_plan::{RuntimeEnv, SessionConfig, ShuffleManager, TaskContext};
+use futures::TryStreamExt;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -66,7 +71,8 @@ use tonic::transport::Server;
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 const SQL: &str = "SELECT state, SUM(salary) FROM employee GROUP BY state";
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     println!("=== Distributed Query Execution Example (Flight) ===\n");
@@ -97,24 +103,29 @@ fn main() {
     }
     println!();
 
-    // Build the real Flight client (it connects on construction; panics if
-    // the in-process server isn't ready yet — but the mpsc handshake above
-    // guarantees the server has bound its socket before we get here).
-    let flight_client = FlightExecutorClient::new(&executors)
-        .expect("FlightExecutorClient::new should connect to the in-process server");
+    // Build the real Flight client (it connects on construction; fails
+    // if the in-process server isn't ready yet — but the mpsc handshake
+    // above guarantees the server has bound its socket before we get
+    // here).
+    let flight_client = FlightExecutorClient::connect(&executors)
+        .await
+        .expect("FlightExecutorClient::connect should reach the in-process server");
 
     // Build the context and register the test data.
     let mut ctx = DistributedContext::new(config, flight_client);
     ctx.register_csv("employee", EMPLOYEE_CSV, true);
 
-    // Execute the query. The scheduler drives every Flight call
-    // synchronously; the result iterator buffers the decoded RecordBatches
-    // from the server's streaming `do_get` response.
+    // Execute the query. Every Flight call is awaited on the same
+    // tokio runtime; the result stream is decoded as it arrives.
     println!(
         "Executing query (stage 0 → 3 shuffle-writer tasks via do_action, stage 1 → 1 final task via do_get):"
     );
     let start = Instant::now();
-    let results: Vec<RecordBatch> = ctx.sql(SQL).collect();
+    let stream = ctx.sql(SQL).await.expect("distributed_flight_example: sql");
+    let results: Vec<RecordBatch> = stream
+        .try_collect()
+        .await
+        .expect("distributed_flight_example: drain stream");
     let elapsed = start.elapsed().as_millis();
     println!("\nExecution completed in {elapsed}ms\n");
 
@@ -156,12 +167,16 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
             // the scheduler dispatches against — otherwise shuffle reads
             // see locations with `executor_id != ctx.executor_id` and try
             // the cross-executor fetch path (currently unimplemented).
-            let ctx = ExecutorContext::new(
+            let runtime = Arc::new(RuntimeEnv::new(Arc::new(ShuffleManager::new(
+                shuffle_dir_for_thread,
+            ))));
+            let ctx = Arc::new(TaskContext::new(
                 executor_id_owned,
                 "127.0.0.1",
-                addr.port() as i32,
-                shuffle_dir_for_thread,
-            );
+                addr.port(),
+                SessionConfig::new(),
+                runtime,
+            ));
             let producer = FdapQueryFlightProducer::new(ctx);
 
             tx.send(addr).expect("ship addr back to main thread");

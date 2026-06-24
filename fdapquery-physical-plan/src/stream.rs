@@ -92,11 +92,8 @@ mod tests {
     /// the supplied schema.
     #[tokio::test]
     async fn adapter_schema_is_returned_unchanged() {
-        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
-            "a",
-            DataType::Int32,
-            false,
-        )]));
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let inner = futures::stream::empty::<Result<RecordBatch>>();
         let adapter = RecordBatchStreamAdapter::new(Arc::clone(&schema), inner);
         assert_eq!(adapter.schema().fields().len(), 1);
@@ -108,17 +105,18 @@ mod tests {
     #[tokio::test]
     async fn adapter_yields_inner_batches_in_order() {
         use arrow_array::{Int32Array, RecordBatch as ArrowBatch};
-        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
-            "a",
-            DataType::Int32,
-            false,
-        )]));
-        let batch_a =
-            ArrowBatch::try_new(Arc::clone(&schema), vec![Arc::new(Int32Array::from(vec![1]))])
-                .unwrap();
-        let batch_b =
-            ArrowBatch::try_new(Arc::clone(&schema), vec![Arc::new(Int32Array::from(vec![2]))])
-                .unwrap();
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch_a = ArrowBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let batch_b = ArrowBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![2]))],
+        )
+        .unwrap();
         let inner = futures::stream::iter(vec![Ok(batch_a), Ok(batch_b)]);
         let adapter = RecordBatchStreamAdapter::new(Arc::clone(&schema), inner);
         let collected: Vec<_> = adapter.collect().await;

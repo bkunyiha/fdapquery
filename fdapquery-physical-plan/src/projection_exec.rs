@@ -77,7 +77,10 @@ impl ExecutionPlan for ProjectionExec {
             record_batch::create(&schema, columns)
         });
         let arrow_schema = Arc::new(self.schema.to_arrow());
-        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, projected)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            arrow_schema,
+            projected,
+        )))
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

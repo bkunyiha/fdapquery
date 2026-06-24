@@ -93,7 +93,10 @@ impl ExecutionPlan for ScanExec {
         let iter = self.ds.scan(&self.projection)?;
         let stream = futures::stream::iter(iter);
         let arrow_schema = Arc::new(self.schema.to_arrow());
-        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            arrow_schema,
+            stream,
+        )))
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

@@ -9,11 +9,19 @@ rust-version.workspace = true
 
 [dependencies]
 # External
+# `async-trait` is required to declare `async fn` methods on the
+# `ExecutorClient` trait — `dyn ExecutorClient` needs a stable vtable
+# shape, and `async fn` in trait isn't dyn-safe without the macro
+# (matches DataFusion's `BallistaClient` shape).
+# `futures` provides the empty stream + `RecordBatchStreamAdapter`
+# constructors used by the test mocks.
 # `tracing` matches DataFusion's logging idiom.
 # `uuid` mints fresh `job_uuid` strings via `Uuid::new_v4()`.
 # No `arrow-flight` or `protobuf` dep — the Flight transport lives behind the
 # `ExecutorClient` trait (in `scheduler.rs`), whose implementation lives in
 # `flight-server` / `client`.
+async-trait    = { workspace = true }
+futures        = { workspace = true }
 tracing        = { workspace = true }
 uuid           = { workspace = true }
 
@@ -36,3 +44,8 @@ fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
 fdapquery-optimizer      = { path = "../fdapquery-optimizer" }
 fdapquery-query-planner  = { path = "../fdapquery-query-planner" }
 fdapquery-sql            = { path = "../fdapquery-sql" }
+
+[dev-dependencies]
+# Tokio runtime for `#[tokio::test]` — the scheduler-against-mock test
+# drives the async `execute()` future on the test runtime.
+tokio          = { workspace = true }

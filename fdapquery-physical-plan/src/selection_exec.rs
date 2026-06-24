@@ -73,7 +73,10 @@ impl ExecutionPlan for SelectionExec {
                 .collect::<Result<Vec<_>>>()?;
             record_batch::create(&schema, columns)
         });
-        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, filtered)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            arrow_schema,
+            filtered,
+        )))
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

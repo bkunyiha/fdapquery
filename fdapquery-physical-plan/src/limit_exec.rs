@@ -93,7 +93,10 @@ impl ExecutionPlan for LimitExec {
                 }
             }
         };
-        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            arrow_schema,
+            stream,
+        )))
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -156,8 +159,8 @@ mod tests {
     use crate::projection_exec::ProjectionExec;
     use crate::scan_exec::ScanExec;
     use crate::selection_exec::SelectionExec;
-    use futures::TryStreamExt;
     use fdapquery_datasource::{CsvDataSource, DataSource};
+    use futures::TryStreamExt;
     use std::sync::Arc;
 
     fn employee_ds() -> Arc<dyn DataSource> {

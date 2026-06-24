@@ -19,9 +19,10 @@
 //!   boots a `tonic::transport::Server` with the producer.
 //!
 //! The bin in `src/bin/flight_server.rs` constructs one
-//! [`fdapquery_physical_plan::ExecutorContext`] at startup (carrying the executor id,
-//! host, port, and an `Arc<ShuffleManager>`) and hands it to the producer
-//! for the lifetime of the process.
+//! `Arc<fdapquery_physical_plan::TaskContext>` at startup (carrying the
+//! executor id, host, port, the `SessionConfig`, and the `RuntimeEnv`
+//! that owns the `ShuffleManager`) and hands it to the producer for
+//! the lifetime of the process.
 
 pub mod fdap_query_flight_producer;
 pub mod flight_server;

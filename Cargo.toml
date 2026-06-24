@@ -110,6 +110,13 @@ pin-project-lite = "0.2"
 # crate DataFusion uses for the same pattern.
 async-stream = "0.3"
 
+# `async-trait` enables `async fn` methods on the `ExecutorClient` trait so
+# `dyn ExecutorClient` remains dyn-safe (the macro desugars
+# `async fn foo() -> T` into `fn foo() -> Pin<Box<dyn Future<Output = T>>>`,
+# which has a stable vtable). DataFusion / Ballista use the same crate for
+# `BallistaClient`.
+async-trait  = "0.1"
+
 # UUID generation — used by `distributed::Scheduler` to mint a fresh
 # `job_uuid` per query.
 uuid          = { version = "1", features = ["v4"] }

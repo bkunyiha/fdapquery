@@ -235,7 +235,10 @@ impl ExecutionPlan for HashAggregateExec {
             yield batch;
         };
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            arrow_schema,
+            stream,
+        )))
     }
 }
 

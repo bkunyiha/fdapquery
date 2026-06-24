@@ -28,13 +28,15 @@ use fdapquery_datasource::{DataSource, ParquetDataSource};
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_datatypes::record_batch::to_csv;
 use fdapquery_execution::ExecutionContext;
+use futures::TryStreamExt;
 
 /// The eight TPC-H tables.
 const TPCH_TABLES: &[&str] = &[
     "customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier",
 ];
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     env_logger::init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -65,10 +67,14 @@ fn main() -> ExitCode {
     }
 
     // Execute and time via `Instant::now()` + `elapsed()`.
-    let df = ctx.sql(&sql);
+    let df = ctx.sql(&sql).expect("tpch_runner: sql plan");
     let start = Instant::now();
-    let results: Box<dyn Iterator<Item = RecordBatch>> = ctx.execute_data_frame(&df);
-    for batch in results {
+    let stream = ctx.execute_data_frame(&df).expect("tpch_runner: execute");
+    let batches: Vec<RecordBatch> = stream
+        .try_collect()
+        .await
+        .expect("tpch_runner: drain stream");
+    for batch in batches {
         // Same shape as `nyc_taxi`: print schema then CSV row data.
         println!("{:?}", batch.schema());
         print!(

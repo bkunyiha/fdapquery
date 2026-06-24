@@ -1,7 +1,7 @@
 //! A query is divided into stages at shuffle boundaries; each stage runs
 //! independently on different executors, with data shuffled between stages.
 
-use fdapquery_physical_plan::PhysicalPlan;
+use fdapquery_physical_plan::ExecutionPlan;
 use std::sync::Arc;
 
 /// One stage in a distributed query execution plan.
@@ -9,17 +9,17 @@ use std::sync::Arc;
 /// Optional fields are set via builder methods ([`Self::with_dependencies`],
 /// [`Self::with_partition_count`], [`Self::as_final_stage`]).
 ///
-/// ## `Arc<dyn PhysicalPlan>` for the plan field
+/// ## `Arc<dyn ExecutionPlan>` for the plan field
 /// Matches DataFusion's `Arc<dyn ExecutionPlan>` shape: cheap to clone (refcount
 /// bump), Arc-share with `Task::plan` and the scheduler without conversion. No
-/// `Clone` / `Debug` derives — `dyn PhysicalPlan` is not generally clonable
+/// `Clone` / `Debug` derives — `dyn ExecutionPlan` is not generally clonable
 /// (cloning the trait object would require a `clone_box`-style hook the trait
 /// doesn't have).
 pub struct QueryStage {
     /// Unique identifier for this stage within the job.
     pub stage_id: i32,
     /// The physical plan to execute for this stage.
-    pub plan: Arc<dyn PhysicalPlan>,
+    pub plan: Arc<dyn ExecutionPlan>,
     /// IDs of stages that must complete before this stage can start.
     pub dependencies: Vec<i32>,
     /// Number of partitions to create if this stage produces shuffle output.
@@ -30,7 +30,7 @@ pub struct QueryStage {
 
 impl QueryStage {
     /// Construct with defaults: no dependencies, 1 partition, not final.
-    pub fn new(stage_id: i32, plan: Arc<dyn PhysicalPlan>) -> Self {
+    pub fn new(stage_id: i32, plan: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             stage_id,
             plan,
@@ -61,7 +61,7 @@ impl QueryStage {
     /// Builder: replace the plan, keeping everything else. Used by
     /// `DistributedPlanner::update_shuffle_locations` to inject post-stage-0
     /// shuffle locations into the stage-1 plan.
-    pub fn with_plan(mut self, plan: Arc<dyn PhysicalPlan>) -> Self {
+    pub fn with_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
         self.plan = plan;
         self
     }

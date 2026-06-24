@@ -1,28 +1,19 @@
 //!
-//! Synchronous Flight client. Wraps an `arrow_flight::FlightServiceClient`
-//! over a tonic `Channel`, plus a dedicated tokio runtime that drives the
-//! async tonic calls. Sync on the outside (`Client::new`, future
-//! `Client::do_action` / `Client::do_get`), async on the inside.
+//! Async Flight client. Wraps an `arrow_flight::FlightServiceClient` over a
+//! tonic `Channel`. Every method is `async fn`; callers drive the futures
+//! on the active tokio runtime via `.await`. Mirrors DataFusion's
+//! `BallistaClient` shape: a thin wrapper over the generated tonic client
+//! with no internal runtime ownership.
 //!
-//! ## Async ↔ sync layering
+//! ## Async-native — no per-Client runtime
 //!
 //! tonic is async-only — `FlightServiceClient::do_action(...)`,
-//! `do_get(...)`, etc. all return futures. But the synchronous
-//! `fdapquery_distributed::ExecutorClient` trait (used by `Scheduler::execute_stage`
-//! to dispatch tasks) needs synchronous `execute_task(...)` /
-//! `execute_final_task(...)` methods. So `Client` owns a tokio runtime and
-//! every method internally `block_on`s its async work. This is the inverse
-//! of `flight-server`'s `spawn_blocking` pattern (async caller → sync
-//! callee).
-//!
-//! ## Runtime ownership — one per Client (Phase 1 simplification)
-//!
-//! Each `Client` builds its own multi-thread tokio runtime with a single
-//! worker thread. For 3 executors that's 3 runtimes — wasteful but
-//! observably bounded (each idle runtime costs ~one parked thread). A
-//! Phase-2 optimisation would share one runtime across all `Client`s in a
-//! `FlightExecutorClient`; for the teaching port we accept the small
-//! overhead in exchange for trivially clear ownership.
+//! `do_get(...)`, etc. all return futures. The
+//! `fdapquery_distributed::ExecutorClient` trait is also `async` (the
+//! scheduler awaits each `execute_task` call on the caller's tokio
+//! runtime), so the entire dispatch path is async end-to-end. `Client`
+//! holds only the `Channel` and an `Endpoint` — no `Runtime` —
+//! eliminating the `block_on` bridge the Phase A client carried.
 
 use crate::endpoint::Endpoint;
 use anyhow::{Result, anyhow};
@@ -32,18 +23,15 @@ use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::{Action, Ticket};
 use fdapquery_datatypes::RecordBatch;
 use futures::StreamExt;
-use tokio::runtime::Runtime;
 use tonic::Request;
 use tonic::transport::Channel;
 
-/// A synchronous Flight client connected to one Flight server.
+/// An async Flight client connected to one Flight server.
 ///
-/// Construct with [`Client::new`]; subsequent `do_action` / `do_get` methods
-/// drive the gRPC calls through the owned tokio runtime.
+/// Construct with [`Client::connect`] from within a tokio runtime;
+/// subsequent `do_action` / `do_get` methods are `async fn` that the
+/// caller awaits on the active runtime.
 pub struct Client {
-    /// Owned tokio runtime. Calls into the Flight server `block_on` futures
-    /// against this runtime. See module-level note on ownership.
-    runtime: Runtime,
     /// The tonic transport channel for this server. `Channel` is `Clone` and
     /// shares the underlying HTTP/2 connection across clones — we keep one
     /// copy here and clone it into per-method `FlightServiceClient`
@@ -55,38 +43,20 @@ pub struct Client {
 }
 
 impl Client {
-    /// Construct a client by connecting to `endpoint`.
+    /// Construct a client by connecting to `endpoint`. Async — call from
+    /// within a tokio runtime and `.await`.
     ///
-    /// Builds a single-worker tokio runtime, then drives `Channel::connect`
-    /// on it. Returns an error if either the runtime can't be built (rare —
-    /// would indicate a fatal system-level failure) or the connection
-    /// can't be established (more common — server not up, wrong port,
-    /// transient network).
-    ///
-    /// **Not safe to call from inside an existing tokio runtime** —
-    /// `runtime.block_on` panics if a runtime is already active on this
-    /// thread. Callers from within an async context should construct the
-    /// `Client` on a separate thread (`std::thread::spawn(|| Client::new(...))`)
-    /// or pre-build a `Channel` and use a (future) `Client::from_channel`
-    /// constructor.
-    pub fn new(endpoint: Endpoint) -> Result<Self> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .thread_name(format!("client-{}-{}", endpoint.host, endpoint.port))
-            .build()?;
+    /// Returns an error if the connection can't be established — server
+    /// not up, wrong port, transient network. No internal runtime
+    /// ownership, no `block_on` — the caller's runtime drives the
+    /// `Channel::connect` future directly.
+    pub async fn connect(endpoint: Endpoint) -> Result<Self> {
         let url = endpoint.url();
-        let channel = runtime.block_on(async move {
-            Channel::from_shared(url)?
-                .connect()
-                .await
-                .map_err(anyhow::Error::from)
-        })?;
-        Ok(Self {
-            runtime,
-            channel,
-            endpoint,
-        })
+        let channel = Channel::from_shared(url)?
+            .connect()
+            .await
+            .map_err(anyhow::Error::from)?;
+        Ok(Self { channel, endpoint })
     }
 
     /// The endpoint this client is connected to. Useful for tracing and
@@ -111,22 +81,24 @@ impl Client {
     /// via `prost::Message::encode_to_vec(&task_info)`. The returned
     /// `Vec<u8>` is the response payload — typically a `pb::TaskResult`
     /// the caller decodes via `prost::Message::decode(&bytes)`.
-    pub fn do_action(&self, action_type: impl Into<String>, body: Vec<u8>) -> Result<Vec<u8>> {
+    pub async fn do_action(
+        &self,
+        action_type: impl Into<String>,
+        body: Vec<u8>,
+    ) -> Result<Vec<u8>> {
         let action = Action {
             r#type: action_type.into(),
             body: body.into(),
         };
         let channel = self.channel.clone();
-        self.runtime.block_on(async move {
-            let mut client = FlightServiceClient::new(channel);
-            let response = client.do_action(Request::new(action)).await?;
-            let mut stream = response.into_inner();
-            let first = stream
-                .message()
-                .await?
-                .ok_or_else(|| anyhow!("do_action response stream was empty"))?;
-            Ok(first.body.to_vec())
-        })
+        let mut client = FlightServiceClient::new(channel);
+        let response = client.do_action(Request::new(action)).await?;
+        let mut stream = response.into_inner();
+        let first = stream
+            .message()
+            .await?
+            .ok_or_else(|| anyhow!("do_action response stream was empty"))?;
+        Ok(first.body.to_vec())
     }
 
     /// Send a `do_get` request to the connected Flight server, decode the
@@ -144,33 +116,31 @@ impl Client {
     /// `FlightRecordBatchStream::new_from_flight_data` pipes
     /// `FlightData → RecordBatch`, mapping any `tonic::Status` errors from
     /// the wire into `FlightError::Tonic`.
-    pub fn do_get(&self, ticket_body: Vec<u8>) -> Result<Vec<RecordBatch>> {
+    pub async fn do_get(&self, ticket_body: Vec<u8>) -> Result<Vec<RecordBatch>> {
         let ticket = Ticket {
             ticket: ticket_body.into(),
         };
         let channel = self.channel.clone();
-        self.runtime.block_on(async move {
-            let mut client = FlightServiceClient::new(channel);
-            let response = client.do_get(Request::new(ticket)).await?;
-            // Map the inbound Streaming<FlightData>'s `Status` errors into
-            // `FlightError::Tonic` so `FlightRecordBatchStream` can consume it.
-            let flight_data_stream = response
-                .into_inner()
-                .map(|r| r.map_err(|status| FlightError::Tonic(Box::new(status))));
-            let mut record_batch_stream =
-                FlightRecordBatchStream::new_from_flight_data(flight_data_stream);
-            let mut batches: Vec<RecordBatch> = Vec::new();
-            while let Some(batch_result) = record_batch_stream.next().await {
-                batches.push(batch_result?);
-            }
-            Ok(batches)
-        })
+        let mut client = FlightServiceClient::new(channel);
+        let response = client.do_get(Request::new(ticket)).await?;
+        // Map the inbound Streaming<FlightData>'s `Status` errors into
+        // `FlightError::Tonic` so `FlightRecordBatchStream` can consume it.
+        let flight_data_stream = response
+            .into_inner()
+            .map(|r| r.map_err(|status| FlightError::Tonic(Box::new(status))));
+        let mut record_batch_stream =
+            FlightRecordBatchStream::new_from_flight_data(flight_data_stream);
+        let mut batches: Vec<RecordBatch> = Vec::new();
+        while let Some(batch_result) = record_batch_stream.next().await {
+            batches.push(batch_result?);
+        }
+        Ok(batches)
     }
 }
 
 impl std::fmt::Debug for Client {
-    /// Custom `Debug` because `Runtime` doesn't implement `Debug` and
-    /// `Channel`'s Debug output isn't useful. Print just the endpoint.
+    /// Custom `Debug` because `Channel`'s Debug output isn't useful.
+    /// Print just the endpoint.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Client")
             .field("endpoint", &self.endpoint)
@@ -182,18 +152,19 @@ impl std::fmt::Debug for Client {
 mod tests {
     use super::*;
 
-    /// We can't easily test successful connection without a real Flight server
-    /// running — that's covered by the flight-server integration test. What
-    /// we *can* test here is that `new` fails (rather than panics) when the
-    /// endpoint is unreachable.
+    /// We can't easily test successful connection without a real Flight
+    /// server running — that's covered by the flight-server integration
+    /// test. What we *can* test here is that `connect` fails (rather than
+    /// panics) when the endpoint is unreachable.
     ///
-    /// Port 1 is privileged and almost certainly closed — `Channel::connect`
-    /// returns a transport error. We verify the error propagates rather than
-    /// panicking so callers can recover cleanly.
-    #[test]
-    fn connect_to_closed_port_returns_error() {
+    /// Port 1 is privileged and almost certainly closed —
+    /// `Channel::connect` returns a transport error. We verify the
+    /// error propagates rather than panicking so callers can recover
+    /// cleanly.
+    #[tokio::test]
+    async fn connect_to_closed_port_returns_error() {
         let ep = Endpoint::new("127.0.0.1", 1);
-        let result = Client::new(ep);
+        let result = Client::connect(ep).await;
         assert!(result.is_err(), "connecting to port 1 should fail");
     }
 }

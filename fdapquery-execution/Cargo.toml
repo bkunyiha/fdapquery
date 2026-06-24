@@ -9,6 +9,10 @@ rust-version.workspace = true
 
 [dependencies]
 arrow                 = { workspace = true }
+# `futures` brings the `Stream` trait and `try_collect`/`try_next` combinators
+# the rayon-bound `ParallelContext::execute_parallel_aggregate` needs to drain
+# its per-bucket async streams via `futures::executor::block_on`.
+futures               = { workspace = true }
 rayon                 = { workspace = true }
 fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
 fdapquery-logical-plan   = { path = "../fdapquery-logical-plan" }
@@ -23,3 +27,6 @@ fdapquery-datasource     = { path = "../fdapquery-datasource" }
 # `boolean expressions`, `inner join`, `left join`) construct deterministic
 # in-memory batches via `Fuzzer::create_record_batch(schema, columns)`.
 fdapquery-fuzzer         = { path = "../fdapquery-fuzzer" }
+# Tokio runtime for `#[tokio::test]` — every context test drives an async
+# stream to completion via `try_collect().await`.
+tokio                 = { workspace = true }

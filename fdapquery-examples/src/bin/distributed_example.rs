@@ -37,18 +37,24 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
+use async_trait::async_trait;
+use fdapquery_datatypes::{
+    ArrowFieldVector, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
+};
 use fdapquery_distributed::{
     DistributedConfig, DistributedContext, ExecutorClient, ExecutorConfig,
 };
 use fdapquery_physical_plan::{
-    ExecutorContext, ShuffleLocation, ShuffleManager, ShuffleWriterExec, Task,
+    RuntimeEnv, SendableRecordBatchStream, SessionConfig, ShuffleLocation, ShuffleManager,
+    ShuffleWriterExec, Task, TaskContext,
 };
+use futures::TryStreamExt;
 
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 const SQL: &str = "SELECT state, SUM(salary) FROM employee GROUP BY state";
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     println!("=== Distributed Query Execution Example (Local) ===\n");
@@ -85,7 +91,11 @@ fn main() {
     // Execute the query.
     println!("Executing query (stage 0 → 3 shuffle-writer tasks, stage 1 → 1 final task):");
     let start = Instant::now();
-    let results: Vec<RecordBatch> = ctx.sql(SQL).collect();
+    let stream = ctx.sql(SQL).await.expect("distributed_example: sql");
+    let results: Vec<RecordBatch> = stream
+        .try_collect()
+        .await
+        .expect("distributed_example: drain stream");
     let elapsed = start.elapsed().as_millis();
     println!("\nExecution completed in {elapsed}ms\n");
 
@@ -98,69 +108,73 @@ fn main() {
     println!("\n=== Example Complete ===");
 }
 
-/// An `ExecutorClient` that runs every task in the current process against a
-/// single shared `ExecutorContext`. The `ExecutorConfig` descriptor passed by
-/// the scheduler is logged but otherwise ignored — every task runs in-process
-/// against the same shuffle manager.
+/// An `ExecutorClient` that runs every task in the current process
+/// against a single shared `Arc<TaskContext>`. The `ExecutorConfig`
+/// descriptor passed by the scheduler is logged but otherwise ignored —
+/// every task runs in-process against the same shuffle manager.
 ///
-/// Works end-to-end for aggregate queries because `PhysicalPlan::execute(&ctx)`
-/// flows the context through `ShuffleReaderExec`.
+/// Works end-to-end for aggregate queries because
+/// `ExecutionPlan::execute` takes `Arc<TaskContext>` as a trait-method
+/// parameter, so the context flows through `ShuffleReaderExec`.
 struct LocalExecutorClient {
-    /// Single shared executor context. All tasks see the same `executor_id`
-    /// (`"local-executor"`) and the same `Arc<ShuffleManager>`, so every
-    /// `ShuffleLocation` written in stage 0 is tagged with this id and every
-    /// stage-1 read finds the matching `executor_id == ctx.executor_id` and
-    /// reads via `ctx.shuffle_manager` (the local-path branch of
+    /// Single shared task context. All tasks see the same `executor_id`
+    /// (`"local-executor"`) and the same `Arc<ShuffleManager>` via
+    /// `ctx.runtime.shuffle_manager`, so every `ShuffleLocation` written
+    /// in stage 0 is tagged with this id and every stage-1 read finds the
+    /// matching `executor_id == ctx.executor_id` and reads via
+    /// `ctx.runtime.shuffle_manager` (the local-path branch of
     /// `ShuffleReaderExec::execute`).
-    ctx: Arc<ExecutorContext>,
+    ctx: Arc<TaskContext>,
 }
 
 impl LocalExecutorClient {
     fn new(shuffle_dir: &str) -> Self {
+        let runtime = Arc::new(RuntimeEnv::new(Arc::new(ShuffleManager::new(shuffle_dir))));
         Self {
-            ctx: Arc::new(ExecutorContext::new(
+            ctx: Arc::new(TaskContext::new(
                 "local-executor",
                 "localhost",
                 0,
-                shuffle_dir,
+                SessionConfig::new(),
+                runtime,
             )),
         }
     }
 }
 
+#[async_trait]
 impl ExecutorClient for LocalExecutorClient {
-    fn execute_task(&self, executor: &ExecutorConfig, task: Task) -> Vec<ShuffleLocation> {
+    async fn execute_task(
+        &self,
+        executor: &ExecutorConfig,
+        task: Task,
+    ) -> Result<Vec<ShuffleLocation>> {
         println!(
             "  [{}] execute_task stage={} task={} partition={}",
             executor.id, task.stage_id, task.task_id, task.partition_id,
         );
 
-        // Stage 0 tasks ship a `ShuffleWriterExec`. We downcast to call the
-        // sibling `write_shuffle(&ctx)` directly — the writer's trait
-        // `execute()` deliberately panics because its return shape
-        // (`Iterator<RecordBatch>`) doesn't fit "produce shuffle locations."
+        // Stage 0 tasks ship a `ShuffleWriterExec`. We downcast to call
+        // the sibling `write_shuffle(Arc::clone(&ctx))` directly — the
+        // writer's trait `execute()` deliberately fails because its
+        // return shape (`SendableRecordBatchStream` of result rows)
+        // doesn't fit "produce shuffle locations."
         if let Some(writer) = task.plan.as_any().downcast_ref::<ShuffleWriterExec>() {
-            writer
-                .write_shuffle(&self.ctx)
-                .expect("LocalExecutorClient: write_shuffle failed")
+            writer.write_shuffle(Arc::clone(&self.ctx))
         } else {
-            // Non-shuffle intermediate stage — drain and return no locations.
-            let stream = task
-                .plan
-                .execute(&self.ctx)
-                .expect("LocalExecutorClient: start task plan");
-            for batch_res in stream {
-                let _ = batch_res.expect("LocalExecutorClient: per-batch read");
-            }
-            Vec::new()
+            // Non-shuffle intermediate stage — drain the async stream and
+            // return no locations.
+            let stream = task.plan.execute(0, Arc::clone(&self.ctx))?;
+            let _drained: Vec<RecordBatch> = stream.try_collect().await?;
+            Ok(Vec::new())
         }
     }
 
-    fn execute_final_task(
+    async fn execute_final_task(
         &self,
         executor: &ExecutorConfig,
         task: Task,
-    ) -> Box<dyn Iterator<Item = RecordBatch>> {
+    ) -> Result<SendableRecordBatchStream> {
         println!(
             "  [{}] execute_final_task stage={} task={} partition={}",
             executor.id, task.stage_id, task.task_id, task.partition_id,
@@ -168,32 +182,37 @@ impl ExecutorClient for LocalExecutorClient {
 
         // The final-stage plan is `HashAggregateExec(Final)` wrapping a
         // `ShuffleReaderExec` whose `shuffle_locations` were populated by
-        // `DistributedPlanner::update_shuffle_locations`. `execute(&ctx)`
-        // flows the context through the aggregate to the reader, which
-        // reads via `ctx.shuffle_manager.read_partition(...)`.
-        let stream = task
-            .plan
-            .execute(&self.ctx)
-            .expect("LocalExecutorClient: start final task plan");
-        Box::new(stream.map(|r| r.expect("LocalExecutorClient: final-task per-batch read")))
+        // `DistributedPlanner::update_shuffle_locations`.
+        // `execute(0, ctx)` flows the context through the aggregate to
+        // the reader, which reads via
+        // `ctx.runtime.shuffle_manager.read_partition(...)`.
+        task.plan.execute(0, Arc::clone(&self.ctx))
     }
 
-    fn fetch_shuffle(
+    async fn fetch_shuffle(
         &self,
         _executor: &ExecutorConfig,
         location: &ShuffleLocation,
-    ) -> Box<dyn Iterator<Item = RecordBatch>> {
+    ) -> Result<SendableRecordBatchStream> {
         // Single-process demo: `fetch_shuffle` is reached only if the
         // `ShuffleReaderExec` sees a location with `executor_id !=
         // ctx.executor_id`. With our shared `ctx` (id = "local-executor")
         // and locations all tagged with the same id by `write_shuffle`,
         // this branch should not fire — but if it does, we read locally.
-        let stream = self
+        // `ShuffleManager::read_partition` still returns a sync
+        // `Iterator<Result<RecordBatch>>`; wrap it in an adapter so the
+        // trait return type lines up.
+        let iter = self
             .ctx
+            .runtime
             .shuffle_manager
             .read_partition(&location.job_uuid, location.stage_id, location.partition_id)
-            .expect("LocalExecutorClient: read_partition setup");
-        Box::new(stream.map(|r| r.expect("LocalExecutorClient: shuffle per-batch read")))
+            .map_err(|e| FdapQueryError::Internal(format!("read_partition: {e}")))?;
+        let arrow_schema = Arc::new(fdapquery_datatypes::Schema::new(vec![]).to_arrow());
+        let stream = futures::stream::iter(iter);
+        Ok(Box::pin(
+            fdapquery_physical_plan::RecordBatchStreamAdapter::new(arrow_schema, stream),
+        ))
     }
 }
 

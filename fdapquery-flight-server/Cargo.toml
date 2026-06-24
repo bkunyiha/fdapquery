@@ -13,12 +13,14 @@ arrow            = { workspace = true }
 arrow-flight     = { workspace = true }
 tonic            = { workspace = true }
 tokio            = { workspace = true }
-# `futures` for the `Stream` trait that arrow-flight's `FlightService` associated
-# types require, plus `futures::stream::iter` used to wrap the single-result
-# response in `do_action`. `tokio-stream` for `ReceiverStream` (used by the
-# sync->async bridge in `do_get`).
+# `futures` for the `Stream` trait that arrow-flight's `FlightService`
+# associated types require, plus `futures::stream::iter` (single-result
+# response in `do_action`), `StreamExt::map`, and `TryStreamExt::map_err`
+# for the `do_get` async pipeline. Post-Phase B no `tokio-stream` /
+# `ReceiverStream` — operators are async-native so `do_get` pipes the
+# `SendableRecordBatchStream` directly into the Flight encoder without a
+# `spawn_blocking` bridge.
 futures          = { workspace = true }
-tokio-stream     = "0.1"
 # `prost` for direct `Message::decode` / `encode_to_vec` calls on `pb::TaskInfo`
 # and `pb::TaskResult` inside `do_action`. arrow-flight already depends on
 # prost transitively; declaring it here is the public-API surface our code
@@ -41,6 +43,14 @@ fdapquery-execution      = { path = "../fdapquery-execution" }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow             = { workspace = true }
+
+[dev-dependencies]
+# `tokio-stream::wrappers::TcpListenerStream` wraps the bound
+# `TcpListener` for `tonic::transport::Server::serve_with_incoming` in
+# the integration tests' in-process server spawn. Dev-only — the
+# library's `serve(addr, ctx)` binds the listener internally and
+# doesn't need this wrapper.
+tokio-stream = "0.1"
 
 [[bin]]
 name = "fdapquery-flight-server"

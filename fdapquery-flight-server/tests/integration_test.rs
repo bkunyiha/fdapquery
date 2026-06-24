@@ -29,7 +29,8 @@ use fdapquery_datatypes::RecordBatch;
 use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
 use fdapquery_logical_plan::{LogicalPlan, Scan};
 use fdapquery_physical_plan::{
-    ColumnExpression, ExecutorContext, PhysicalPlan, ScanExec, ShuffleWriterExec, Task,
+    ColumnExpression, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
+    ShuffleWriterExec, Task, TaskContext,
 };
 use fdapquery_protobuf::{pb, serialize_logical_plan, serialize_task};
 use futures::StreamExt;
@@ -49,12 +50,28 @@ fn temp_dir(tag: &str) -> String {
     format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
 }
 
+/// Build a per-test `Arc<TaskContext>` from a tag and a random port, with
+/// a fresh `RuntimeEnv` rooted at `temp_dir(tag)`.
+fn build_test_ctx(tag: &str) -> (Arc<TaskContext>, Arc<ShuffleManager>) {
+    let base = temp_dir(tag);
+    let manager = Arc::new(ShuffleManager::new(&base));
+    let runtime = Arc::new(RuntimeEnv::new(Arc::clone(&manager)));
+    let ctx = Arc::new(TaskContext::new(
+        "integration-exec",
+        "127.0.0.1",
+        50099,
+        SessionConfig::new(),
+        runtime,
+    ));
+    (ctx, manager)
+}
+
 /// Spawn an `FdapQueryFlightProducer`-backed tonic server bound to a random TCP
 /// port on localhost. Returns the bound `addr` (so the client knows where to
 /// connect) and the `JoinHandle` for the server task (so the test can drop
 /// it at the end).
 async fn spawn_flight_server(
-    ctx: ExecutorContext,
+    ctx: Arc<TaskContext>,
 ) -> (
     std::net::SocketAddr,
     tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
@@ -94,8 +111,8 @@ fn build_employee_scan_plan() -> LogicalPlan {
 fn build_shuffle_writer_task() -> Task {
     let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
     let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
-    let scan: Arc<dyn PhysicalPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
-    let writer: Arc<dyn PhysicalPlan> = Arc::new(ShuffleWriterExec::new(
+    let scan: Arc<dyn ExecutionPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
+    let writer: Arc<dyn ExecutionPlan> = Arc::new(ShuffleWriterExec::new(
         scan,
         vec![Arc::new(ColumnExpression::new(0))],
         "test-job-integration",
@@ -112,9 +129,7 @@ fn build_shuffle_writer_task() -> Task {
 /// partition file.
 #[tokio::test]
 async fn integration_do_action_execute_task() {
-    let base = temp_dir("integration-action");
-    let ctx = ExecutorContext::new("integration-exec", "127.0.0.1", 50099, &base);
-    let shuffle_manager = Arc::clone(&ctx.shuffle_manager);
+    let (ctx, shuffle_manager) = build_test_ctx("integration-action");
     let (addr, _server) = spawn_flight_server(ctx).await;
     let mut client = connect_client(addr).await;
 
@@ -167,8 +182,7 @@ async fn integration_do_action_execute_task() {
 async fn integration_do_get_streams_record_batches() {
     use arrow_flight::decode::FlightRecordBatchStream;
 
-    let base = temp_dir("integration-get");
-    let ctx = ExecutorContext::new("integration-exec", "127.0.0.1", 50099, &base);
+    let (ctx, _shuffle_manager) = build_test_ctx("integration-get");
     let (addr, _server) = spawn_flight_server(ctx).await;
     let mut client = connect_client(addr).await;
 
@@ -222,8 +236,7 @@ async fn integration_do_get_streams_record_batches() {
 /// internal error or a silent success.
 #[tokio::test]
 async fn integration_unknown_action_returns_invalid_argument() {
-    let base = temp_dir("integration-unknown");
-    let ctx = ExecutorContext::new("integration-exec", "127.0.0.1", 50099, &base);
+    let (ctx, _shuffle_manager) = build_test_ctx("integration-unknown");
     let (addr, _server) = spawn_flight_server(ctx).await;
     let mut client = connect_client(addr).await;
 

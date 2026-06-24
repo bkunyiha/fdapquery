@@ -14,11 +14,13 @@ use std::time::Instant;
 
 use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
 use fdapquery_execution::{ExecutionContext, ParallelContext};
+use futures::TryStreamExt;
 
 /// In-repo employee fixture used by the existing execution-module tests.
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     let sql = "SELECT state, SUM(CAST(salary AS double)) FROM employee GROUP BY state";
@@ -30,9 +32,14 @@ fn main() {
     println!("--- Sequential Execution ---");
     let mut seq_ctx = ExecutionContext::new(HashMap::new());
     seq_ctx.register_csv("employee", EMPLOYEE_CSV);
-    let seq_df = seq_ctx.sql(sql);
+    let seq_df = seq_ctx.sql(sql).expect("seq sql plan");
     let seq_start = Instant::now();
-    let seq_results: Vec<RecordBatch> = seq_ctx.execute_data_frame(&seq_df).collect();
+    let seq_results: Vec<RecordBatch> = seq_ctx
+        .execute_data_frame(&seq_df)
+        .expect("seq execute")
+        .try_collect()
+        .await
+        .expect("seq drain");
     let seq_time = seq_start.elapsed().as_millis();
     println!("Sequential execution completed in {seq_time}ms");
     print_results(&seq_results);
@@ -42,9 +49,14 @@ fn main() {
     println!("--- Parallel Execution (4 workers) ---");
     let mut par_ctx = ParallelContext::with_parallelism(4, HashMap::new());
     par_ctx.register_csv("employee", EMPLOYEE_CSV);
-    let par_df = par_ctx.sql(sql);
+    let par_df = par_ctx.sql(sql).expect("par sql plan");
     let par_start = Instant::now();
-    let par_results: Vec<RecordBatch> = par_ctx.execute_data_frame(&par_df).collect();
+    let par_results: Vec<RecordBatch> = par_ctx
+        .execute_data_frame(&par_df)
+        .expect("par execute")
+        .try_collect()
+        .await
+        .expect("par drain");
     let par_time = par_start.elapsed().as_millis();
     println!("Parallel execution completed in {par_time}ms");
     print_results(&par_results);

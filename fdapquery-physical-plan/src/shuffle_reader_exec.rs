@@ -123,7 +123,10 @@ impl ExecutionPlan for ShuffleReaderExec {
         }
         let flattened = futures::stream::iter(per_location_streams).flatten();
         let arrow_schema = Arc::new(self.shuffle_schema.to_arrow());
-        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, flattened)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            arrow_schema,
+            flattened,
+        )))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -311,4 +314,3 @@ mod tests {
         );
     }
 }
-

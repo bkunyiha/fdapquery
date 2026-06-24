@@ -6,16 +6,19 @@
 //!
 //! | Method                       | State |
 //! |------------------------------|-------|
-//! | `do_action("execute_task")`  | **real** — drives intermediate-stage task execution; downcasts to `ShuffleWriterExec`, calls `write_shuffle(&ctx)`, returns `pb::TaskResult` with shuffle locations |
-//! | `do_get`                     | **real** — streams `RecordBatch`es. Dispatches on the decoded `pb::Action`: `task` set → distributed final-stage path (runs `task.plan.execute(&ctx)`); `query` set → interactive path (runs the logical plan via `ExecutionContext`). Both branches share the same sync→async bridge (`spawn_blocking` → bounded mpsc → `FlightDataEncoder`) |
+//! | `do_action("execute_task")`  | **real** — drives intermediate-stage task execution; downcasts to `ShuffleWriterExec`, calls `write_shuffle(Arc<TaskContext>)`, returns `pb::TaskResult` with shuffle locations |
+//! | `do_get`                     | **real** — streams `RecordBatch`es directly off the async `SendableRecordBatchStream` returned by `task.plan.execute(0, ctx)` (distributed final-stage path) or `ExecutionContext::execute(&logical_plan)` (interactive path). No `spawn_blocking` bridge — operators are async-native after Phase B. The async stream is piped into `FlightDataEncoderBuilder` and mapped to `tonic::Status` for the response item type. |
 //! | `handshake`, `list_flights`, `get_flight_info`, `poll_flight_info`, `get_schema`, `do_put`, `do_exchange`, `list_actions` | stub — `Status::unimplemented` |
 //!
-//! ## Executor context
-//! Per-executor state — `executor_id`, `executor_host`, `executor_port`, and
-//! the `ShuffleManager` — is bundled into a single [`ExecutorContext`]
-//! (`physical-plan/src/executor_context.rs`) held as one field on the
-//! producer. The bin constructs one `ExecutorContext` at startup and hands
-//! it to [`FdapQueryFlightProducer::new`].
+//! ## Task context
+//! Per-executor state — `executor_id`, `executor_host`, `executor_port`,
+//! the `SessionConfig`, and the `RuntimeEnv` (which owns the
+//! `ShuffleManager`) — is bundled into a single [`TaskContext`]
+//! (`physical-plan/src/task_context.rs`) held as one `Arc<TaskContext>`
+//! field on the producer. The bin constructs one `TaskContext` at
+//! startup and hands it (wrapped in an `Arc`) to
+//! [`FdapQueryFlightProducer::new`]. Operators receive
+//! `Arc::clone(&ctx)` on every `execute(0, ctx)` call.
 
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -24,14 +27,13 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
-use fdapquery_datatypes::RecordBatch;
 use fdapquery_execution::execution_context::ExecutionContext;
-use fdapquery_physical_plan::{ExecutorContext, ShuffleWriterExec};
+use fdapquery_physical_plan::{ShuffleWriterExec, TaskContext};
 use fdapquery_protobuf::{deserialize_logical_plan, deserialize_task, pb};
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::pin::Pin;
-use tokio_stream::wrappers::ReceiverStream;
+use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, info};
 
@@ -39,17 +41,23 @@ use tracing::{debug, info};
 ///
 /// Held as the service implementation behind
 /// `arrow_flight::flight_service_server::FlightServiceServer::new(producer)`.
-/// The single field — [`ExecutorContext`] — carries the per-executor identity
-/// and shuffle storage used by both `do_action("execute_task")` and `do_get`.
+/// The single field — `Arc<TaskContext>` — carries the per-executor
+/// identity, session config, and runtime env (with the shuffle manager)
+/// used by both `do_action("execute_task")` and `do_get`. Stored as an
+/// `Arc` so the per-RPC `execute(partition, Arc::clone(&ctx))` calls and
+/// per-task `write_shuffle(Arc::clone(&ctx))` calls are cheap refcount
+/// bumps, matching DataFusion's per-task context idiom.
 pub struct FdapQueryFlightProducer {
-    ctx: ExecutorContext,
+    ctx: Arc<TaskContext>,
 }
 
 impl FdapQueryFlightProducer {
-    /// Construct from a fully-built executor context. The bin in
-    /// `src/bin/flight_server.rs` (or an integration test) builds
-    /// the context from CLI / env / defaults at startup.
-    pub fn new(ctx: ExecutorContext) -> Self {
+    /// Construct from a fully-built task context. The bin in
+    /// `src/bin/flight_server.rs` (or an integration test) builds the
+    /// context — `executor_id`/`executor_host`/`executor_port` plus a
+    /// `SessionConfig` and `RuntimeEnv` (which owns the `ShuffleManager`)
+    /// — from CLI / env / defaults at startup.
+    pub fn new(ctx: Arc<TaskContext>) -> Self {
         Self { ctx }
     }
 }
@@ -134,26 +142,28 @@ impl FlightService for FdapQueryFlightProducer {
     /// and falls back to `query`:
     ///
     /// - **`action.task` set** — distributed final-stage path. Deserialise
-    ///   to a `fdapquery_physical_plan::Task`, run `task.plan.execute(&self.ctx)`.
-    ///   Works for any plan tree containing a `ShuffleReaderExec` because
-    ///   the `PhysicalPlan::execute` trait method takes `&ExecutorContext`
-    ///   and every operator threads it through. This is what
-    ///   `FlightExecutorClient::execute_final_task` in module 14 calls.
+    ///   to a `fdapquery_physical_plan::Task`, run
+    ///   `task.plan.execute(0, Arc::clone(&self.ctx))`. Works for any
+    ///   plan tree containing a `ShuffleReaderExec` because the
+    ///   `ExecutionPlan::execute` trait method takes
+    ///   `Arc<TaskContext>` and every operator threads it through. This
+    ///   is what `FlightExecutorClient::execute_final_task` in module 14
+    ///   calls.
     /// - **`action.query` set** — interactive path. Deserialise to a
     ///   `LogicalPlan`, run via a fresh `ExecutionContext`. The
     ///   `Context::sql` API in this crate uses this path.
     /// - **Neither set** — `Status::invalid_argument`.
     ///
-    /// ### Sync→async bridge (both paths)
-    /// `tokio::task::spawn_blocking` pumps the synchronous iterator into a
-    /// bounded `tokio::sync::mpsc::channel(4)`. `ReceiverStream` wraps the
-    /// receiver. `FlightDataEncoderBuilder` schema-encodes the first batch
-    /// and data-encodes the rest as `FlightData` messages. `FlightError`
-    /// is mapped to `tonic::Status::internal` for the response item type.
-    ///
-    /// Three properties: backpressure (bounded channel), tokio thread
-    /// preservation (heavy work off the runtime), clean shutdown (receiver
-    /// drop closes the channel; next `blocking_send` returns `Err`).
+    /// ### Async-native — no `spawn_blocking` bridge
+    /// After Phase B every operator's `execute(0, ctx)` returns a
+    /// `SendableRecordBatchStream`, so the producer pipes that stream
+    /// directly into `FlightDataEncoderBuilder` and maps the per-frame
+    /// `FlightError` to `tonic::Status::internal` for the response item
+    /// type. No bounded mpsc channel, no `blocking_send`, no
+    /// `spawn_blocking` — the previous sync→async bridge collapses to a
+    /// single combinator chain. Backpressure is preserved by the stream
+    /// itself (the encoder polls the source); cancellation propagates
+    /// when the tonic transport drops the response stream.
     /// ---------------------------------
     /// Retrieve a single stream associated with a particular descriptor
     /// associated with the referenced ticket. A Flight can be composed of one or
@@ -171,87 +181,61 @@ impl FlightService for FdapQueryFlightProducer {
 
         // 2 — dispatch on which payload is set. `task` (distributed final
         // task) takes precedence over `query` (interactive logical plan).
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<RecordBatch, FlightError>>(4);
-
-        if let Some(task_info) = action.task {
-            // ── Distributed final-stage path ──
-            // Deserialise to a `fdapquery_physical_plan::Task` (carries
-            // `Arc<dyn PhysicalPlan>`), spawn_blocking, run
-            // `task.plan.execute(&self.ctx)`. Works for any plan tree
-            // containing a `ShuffleReaderExec` because the
-            // `PhysicalPlan::execute` trait method takes `&ExecutorContext`
-            // and every operator threads it through.
-            let task = deserialize_task(&task_info);
-            info!(
-                "do_get executing final task: job={} stage={} task={} partition={}",
-                task.job_uuid, task.stage_id, task.task_id, task.partition_id
-            );
-            let ctx = self.ctx.clone();
-            tokio::task::spawn_blocking(move || {
-                // Execute the task's plan and send the result batches to the client.
+        // Each branch produces the same shape — `SendableRecordBatchStream`
+        // — so steps 3/4 can be uniform.
+        let batches_stream: fdapquery_physical_plan::SendableRecordBatchStream =
+            if let Some(task_info) = action.task {
+                // ── Distributed final-stage path ──
+                // Deserialise to a `fdapquery_physical_plan::Task` (carries
+                // `Arc<dyn ExecutionPlan>`) and call
+                // `task.plan.execute(0, Arc::clone(&ctx))`. Works for any
+                // plan tree containing a `ShuffleReaderExec` because the
+                // `ExecutionPlan::execute` trait method takes
+                // `Arc<TaskContext>` and every operator threads it through.
+                let task = deserialize_task(&task_info);
+                info!(
+                    "do_get executing final task: job={} stage={} task={} partition={}",
+                    task.job_uuid, task.stage_id, task.task_id, task.partition_id
+                );
                 // flight-server do_get
-                //   -> task.plan.execute(&ctx)
-                //      -> HashAggregateExec::execute(ctx)
-                //         -> ShuffleReaderExec::execute(ctx)
-                match task.plan.execute(&ctx) {
-                    Ok(stream) => {
-                        for batch_res in stream {
-                            let batch = match batch_res {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    let _ = tx.blocking_send(Err(FlightError::ExternalError(
-                                        Box::new(std::io::Error::other(format!(
-                                            "task execution error: {e}"
-                                        ))),
-                                    )));
-                                    break;
-                                }
-                            };
-                            if tx.blocking_send(Ok(batch)).is_err() {
-                                debug!("do_get receiver dropped; halting executor");
-                                break;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.blocking_send(Err(FlightError::ExternalError(Box::new(
-                            std::io::Error::other(format!("task plan setup error: {e}")),
-                        ))));
-                    }
-                }
-            });
-        } else if let Some(plan_node) = action.query {
-            // Direct Flight logical-plan path, not the distributed scheduler path.
-            // `fdapquery_client::Context::execute` sends `Action.query = Some(LogicalPlanNode)`
-            // when one Flight server should execute the whole logical plan itself.
-            // Distributed final stages use `Action.task = Some(TaskInfo)` above.
-            let logical_plan = deserialize_logical_plan(&plan_node);
-            info!("do_get executing logical plan: {}", logical_plan.pretty());
-            tokio::task::spawn_blocking(move || {
+                //   -> task.plan.execute(0, ctx)
+                //      -> HashAggregateExec::execute(0, ctx)
+                //         -> ShuffleReaderExec::execute(0, ctx)
+                task.plan
+                    .execute(0, Arc::clone(&self.ctx))
+                    .map_err(|e| Status::internal(format!("task plan setup error: {e}")))?
+            } else if let Some(plan_node) = action.query {
+                // Direct Flight logical-plan path, not the distributed
+                // scheduler path. `fdapquery_client::Context::execute` sends
+                // `Action.query = Some(LogicalPlanNode)` when one Flight
+                // server should execute the whole logical plan itself.
+                // Distributed final stages use `Action.task = Some(TaskInfo)`
+                // above.
+                let logical_plan = deserialize_logical_plan(&plan_node);
+                info!("do_get executing logical plan: {}", logical_plan.pretty());
                 let exec_ctx = ExecutionContext::new(HashMap::new());
-                // ExecutionContext::execute returns an infallible per-batch
-                // iterator (errors are surfaced via `.expect` inside the
-                // context); the public Result-shaped surface lives on
-                // `PhysicalPlan::execute` and `SqlPlanner::create_data_frame`.
-                for batch in exec_ctx.execute(&logical_plan) {
-                    if tx.blocking_send(Ok(batch)).is_err() {
-                        debug!("do_get receiver dropped; halting executor");
-                        break;
-                    }
-                }
-            });
-        } else {
-            return Err(Status::invalid_argument(
-                "Action must have either `query` (logical plan) or `task` (final task)",
-            ));
-        }
+                exec_ctx
+                    .execute(&logical_plan)
+                    .map_err(|e| Status::internal(format!("execution context error: {e}")))?
+            } else {
+                return Err(Status::invalid_argument(
+                    "Action must have either `query` (logical plan) or `task` (final task)",
+                ));
+            };
 
-        // 3 — wrap receiver as a Stream and pipe through FlightDataEncoder.
+        // 3 — pipe the async batch stream into FlightDataEncoderBuilder.
         // The encoder derives the Arrow schema from the first batch, emits a
         // schema FlightData message, then one or more data FlightData
-        // messages per batch.
-        let batches_stream = ReceiverStream::new(rx);
-        let flight_stream = FlightDataEncoderBuilder::new().build(batches_stream);
+        // messages per batch. Per-batch errors are surfaced as
+        // `FlightError::ExternalError` so the encoder can pass them through.
+        let mapped = batches_stream.map(|res| {
+            res.map_err(|e| {
+                FlightError::ExternalError(Box::new(std::io::Error::other(format!(
+                    "task execution error: {e}"
+                ))))
+            })
+        });
+        let flight_stream = FlightDataEncoderBuilder::new().build(mapped);
 
         // 4 — map FlightError → tonic::Status for the response item type.
         let response_stream =
@@ -299,10 +283,13 @@ impl FlightService for FdapQueryFlightProducer {
     ///    `arrow_flight::Result { body: bytes }`, return a one-element stream.
     ///
     /// ### Synchronous, not `spawn_blocking`
-    /// The disk I/O inside `write_shuffle` runs on the tokio runtime thread.
-    /// For small inputs that's fine; for production-shaped workloads the
-    /// right move would be `tokio::task::spawn_blocking` to offload the
-    /// CPU/disk work — which is what `do_get` uses for its streaming case.
+    /// `ShuffleWriterExec::write_shuffle` is sync but drains its async
+    /// input stream internally via `futures::executor::block_on`. The disk
+    /// I/O then runs on the tokio runtime thread. For small inputs that's
+    /// fine; for production-shaped workloads the right move would be
+    /// `tokio::task::spawn_blocking` to offload the CPU/disk work. The
+    /// `else` branch (non-shuffle drain) is fully async because the plan's
+    /// `execute(0, ctx)` returns a `SendableRecordBatchStream`.
     async fn do_action(
         &self,
         request: Request<Action>,
@@ -330,9 +317,9 @@ impl FlightService for FdapQueryFlightProducer {
                 // 3 — dispatch on plan type
                 let locations =
                     if let Some(writer) = task.plan.as_any().downcast_ref::<ShuffleWriterExec>() {
-                        writer.write_shuffle(&self.ctx).map_err(|e| {
-                            Status::internal(format!("write_shuffle failed: {e}"))
-                        })?
+                        writer
+                            .write_shuffle(Arc::clone(&self.ctx))
+                            .map_err(|e| Status::internal(format!("write_shuffle failed: {e}")))?
                     } else {
                         // Non-shuffle tasks only make sense here if the plan is a sink
                         // operator (write table/file, materialize cache, build stats, etc.).
@@ -345,14 +332,18 @@ impl FlightService for FdapQueryFlightProducer {
                         // - Cache population A query/subplan is executed to fill a cache; the caller may not need the rows immediately.
                         // - Index/statistics building The engine scans data and computes/writes index pages, zone maps, histograms, etc.
                         // - Validation/check operations A query may scan and verify constraints/data integrity, returning only success/failure or a count elsewhere.
-                        let stream = task.plan.execute(&self.ctx).map_err(|e| {
-                            Status::internal(format!("task plan setup error: {e}"))
-                        })?;
-                        for batch_res in stream {
-                            batch_res.map_err(|e| {
+                        let stream = task
+                            .plan
+                            .execute(0, Arc::clone(&self.ctx))
+                            .map_err(|e| Status::internal(format!("task plan setup error: {e}")))?;
+                        // Drain the async stream on the current tokio runtime
+                        // (we're already inside `async fn do_action`). Per-batch
+                        // errors propagate as `Status::internal`.
+                        let _drained: Vec<_> = stream.try_collect().await.map_err(
+                            |e: fdapquery_datatypes::FdapQueryError| {
                                 Status::internal(format!("task plan execution error: {e}"))
-                            })?;
-                        }
+                            },
+                        )?;
                         Vec::new()
                     };
                 debug!("Task produced {} shuffle location(s)", locations.len());
@@ -399,7 +390,8 @@ mod tests {
     use arrow_flight::Action;
     use fdapquery_datasource::{CsvDataSource, DataSource};
     use fdapquery_physical_plan::{
-        ColumnExpression, PhysicalPlan, ScanExec, ShuffleWriterExec, Task,
+        ColumnExpression, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
+        ShuffleWriterExec, Task,
     };
     use fdapquery_protobuf::serialize_task;
     use futures::StreamExt;
@@ -415,11 +407,27 @@ mod tests {
         format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
     }
 
+    /// Build an `Arc<TaskContext>` for a flight-server test: a per-test
+    /// `RuntimeEnv` rooted at the supplied shuffle directory, plus the
+    /// network-identity fields the wire-encoded `ShuffleLocation`s
+    /// expose.
+    fn build_test_ctx(executor_id: &str, port: u16, shuffle_dir: &str) -> Arc<TaskContext> {
+        let runtime = Arc::new(RuntimeEnv::new(Arc::new(ShuffleManager::new(shuffle_dir))));
+        Arc::new(TaskContext::new(
+            executor_id,
+            "127.0.0.1",
+            port,
+            SessionConfig::new(),
+            runtime,
+        ))
+    }
+
     fn build_task() -> Task {
         let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
         let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
-        let scan: Arc<dyn PhysicalPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
-        let writer: Arc<dyn PhysicalPlan> = Arc::new(ShuffleWriterExec::new(
+        let scan: Arc<dyn ExecutionPlan> =
+            Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
+        let writer: Arc<dyn ExecutionPlan> = Arc::new(ShuffleWriterExec::new(
             scan,
             vec![Arc::new(ColumnExpression::new(0))],
             "test-job-do-action",
@@ -443,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn execute_task_runs_shuffle_writer_and_returns_locations() {
         let base = temp_dir("do-action-writer");
-        let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
+        let ctx = build_test_ctx("exec-test", 50099, &base);
         let producer = FdapQueryFlightProducer::new(ctx);
 
         let task = build_task();
@@ -488,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_action_type_returns_invalid_argument() {
         let base = temp_dir("do-action-unknown");
-        let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
+        let ctx = build_test_ctx("exec-test", 50099, &base);
         let producer = FdapQueryFlightProducer::new(ctx);
 
         let action = Action {
@@ -519,7 +527,7 @@ mod tests {
         use futures::StreamExt;
 
         let base = temp_dir("do-get-happy");
-        let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
+        let ctx = build_test_ctx("exec-test", 50099, &base);
         let producer = FdapQueryFlightProducer::new(ctx);
 
         // Build a LogicalPlan: scan employee.csv with all columns.
@@ -560,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn do_get_malformed_ticket_returns_invalid_argument() {
         let base = temp_dir("do-get-malformed");
-        let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
+        let ctx = build_test_ctx("exec-test", 50099, &base);
         let producer = FdapQueryFlightProducer::new(ctx);
 
         let ticket = arrow_flight::Ticket {
@@ -583,7 +591,7 @@ mod tests {
     #[tokio::test]
     async fn do_get_missing_query_returns_invalid_argument() {
         let base = temp_dir("do-get-no-query");
-        let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
+        let ctx = build_test_ctx("exec-test", 50099, &base);
         let producer = FdapQueryFlightProducer::new(ctx);
 
         // Valid Action protobuf bytes but with no query/task field.
@@ -613,7 +621,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_task_body_returns_invalid_argument() {
         let base = temp_dir("do-action-malformed");
-        let ctx = ExecutorContext::new("exec-test", "127.0.0.1", 50099, &base);
+        let ctx = build_test_ctx("exec-test", 50099, &base);
         let producer = FdapQueryFlightProducer::new(ctx);
 
         // execute_task action whose body is not a valid TaskInfo protobuf.

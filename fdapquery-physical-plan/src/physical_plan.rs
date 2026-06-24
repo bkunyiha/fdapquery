@@ -94,11 +94,8 @@ pub trait ExecutionPlan: fmt::Display + Send + Sync {
     /// `await` points freely. The runtime accesses
     /// `ctx.runtime.shuffle_manager` for shuffle I/O,
     /// `ctx.session_config.csv_batch_size()` for tunable sizes, etc.
-    fn execute(
-        &self,
-        partition: usize,
-        ctx: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream>;
+    fn execute(&self, partition: usize, ctx: Arc<TaskContext>)
+    -> Result<SendableRecordBatchStream>;
 
     /// The children (inputs) of this plan, used to walk the operator tree.
     ///

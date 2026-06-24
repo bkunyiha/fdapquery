@@ -253,11 +253,11 @@ impl SqlPlanner {
             SqlExpr::Double(v) => LogicalExpr::LiteralDouble(*v),
             // Parse the literal with `chrono::NaiveDate::parse_from_str` using
             // ISO-8601 format. Invalid input surfaces as `Plan(_)`.
-            SqlExpr::Date(v) => LogicalExpr::LiteralDate(
-                chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").map_err(|e| {
-                    FdapQueryError::Plan(format!("invalid date literal '{v}': {e}"))
-                })?,
-            ),
+            SqlExpr::Date(v) => {
+                LogicalExpr::LiteralDate(chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").map_err(
+                    |e| FdapQueryError::Plan(format!("invalid date literal '{v}': {e}")),
+                )?)
+            }
             SqlExpr::Interval(v) => self.parse_interval(v)?,
             SqlExpr::BinaryExpr { l, op, r } => {
                 let l = self.create_logical_expr(l)?;
@@ -306,9 +306,7 @@ impl SqlPlanner {
                     }
                 }
             }
-            SqlExpr::Alias { expr, alias } => {
-                self.create_logical_expr(expr)?.alias(alias.clone())
-            }
+            SqlExpr::Alias { expr, alias } => self.create_logical_expr(expr)?.alias(alias.clone()),
             SqlExpr::Cast { expr, data_type } => cast(
                 self.create_logical_expr(expr)?,
                 self.parse_data_type(data_type)?,

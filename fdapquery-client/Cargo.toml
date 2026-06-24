@@ -15,11 +15,15 @@ arrow            = { workspace = true }
 arrow-flight     = { workspace = true }
 tonic            = { workspace = true }
 tokio            = { workspace = true }
-# `futures` for the `Stream` trait (decoding `FlightData` from the server's
-# `do_get` response). `tokio-stream` for stream adapters used when consuming
-# the `Streaming<FlightData>` returned by tonic.
+# `async-trait` enables `async fn` methods on the `ExecutorClient`
+# trait that `FlightExecutorClient` implements (matches the workspace's
+# `BallistaClient`-shape choice; see workspace Cargo.toml).
+async-trait      = { workspace = true }
+# `futures` for the `Stream` trait (decoding `FlightData` from the
+# server's `do_get` response) plus `futures::stream::iter` /
+# `RecordBatchStreamAdapter` glue used when wrapping the materialised
+# response batches back into a `SendableRecordBatchStream`.
 futures          = { workspace = true }
-tokio-stream     = "0.1"
 # `prost` for direct `Message::encode_to_vec` / `decode` on `pb::Action`,
 # `pb::TaskInfo`, `pb::TaskResult` — same direct usage as `flight-server`.
 prost            = { workspace = true }
@@ -53,3 +57,8 @@ anyhow       = { workspace = true }
 # dev-only — at runtime the client crate has no knowledge of
 # `flight-server`; the protocol contract is the protobuf bytes.
 fdapquery-flight-server = { path = "../fdapquery-flight-server" }
+# `tokio-stream::wrappers::TcpListenerStream` wraps the bound
+# `TcpListener` for `tonic::transport::Server::serve_with_incoming` in
+# the in-process server spawn. Dev-only — production callers use
+# `flight_server::serve(addr, ctx)` which binds the listener internally.
+tokio-stream = "0.1"

@@ -84,7 +84,11 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
                 .filter(|name| column_names.contains(name))
                 .collect();
             pushdown.sort();
-            LogicalPlan::Scan(Scan::new(s.path.clone(), Arc::clone(&s.data_source), pushdown)?)
+            LogicalPlan::Scan(Scan::new(
+                s.path.clone(),
+                Arc::clone(&s.data_source),
+                pushdown,
+            )?)
         }
     };
     Ok(rewritten)

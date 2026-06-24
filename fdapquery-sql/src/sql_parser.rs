@@ -56,9 +56,7 @@ impl SqlParser {
             .tokens
             .consume_token_type(&TokenType::Symbol(Symbol::LeftParen))
         {
-            return Err(FdapQueryError::SqlParse(
-                "expected '(' after CAST".into(),
-            ));
+            return Err(FdapQueryError::SqlParse("expected '(' after CAST".into()));
         }
         let expr = self.parse_expr()?.ok_or_else(|| {
             FdapQueryError::SqlParse("expected expression in CAST, found EOF".into())
@@ -209,9 +207,9 @@ impl SqlParser {
     /// Parse the next token, requiring it to be an identifier. Returns the
     /// identifier's text.
     fn parse_identifier(&mut self) -> Result<String> {
-        let expr = self.parse_expr()?.ok_or_else(|| {
-            FdapQueryError::SqlParse("expected identifier, found EOF".into())
-        })?;
+        let expr = self
+            .parse_expr()?
+            .ok_or_else(|| FdapQueryError::SqlParse("expected identifier, found EOF".into()))?;
         match expr {
             SqlExpr::Identifier(id) => Ok(id),
             other => Err(FdapQueryError::SqlParse(format!(
@@ -272,14 +270,11 @@ impl PrattParser for SqlParser {
             // Literals
             TokenType::Literal(Literal::Identifier) => SqlExpr::Identifier(token.text.clone()),
             TokenType::Literal(Literal::String) => SqlExpr::String(token.text.clone()),
-            TokenType::Literal(Literal::Long) => SqlExpr::Long(token.text.parse::<i64>().map_err(
-                |e| {
-                    FdapQueryError::SqlParse(format!(
-                        "invalid long literal '{}': {e}",
-                        token.text
-                    ))
-                },
-            )?),
+            TokenType::Literal(Literal::Long) => {
+                SqlExpr::Long(token.text.parse::<i64>().map_err(|e| {
+                    FdapQueryError::SqlParse(format!("invalid long literal '{}': {e}", token.text))
+                })?)
+            }
             TokenType::Literal(Literal::Double) => {
                 SqlExpr::Double(token.text.parse::<f64>().map_err(|e| {
                     FdapQueryError::SqlParse(format!(

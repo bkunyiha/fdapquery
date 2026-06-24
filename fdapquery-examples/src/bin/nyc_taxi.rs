@@ -30,12 +30,14 @@ use fdapquery_datatypes::record_batch::to_csv;
 use fdapquery_execution::ExecutionContext;
 use fdapquery_logical_plan::{cast, col, format, max};
 use fdapquery_optimizer::Optimizer;
+use futures::TryStreamExt;
 
 /// Hardcoded NYC yellow-taxi 2019-01 path; see the module-doc for how to
 /// obtain the file.
 const NYC_TAXI_CSV: &str = "/mnt/nyctaxi/csv/year=2019/yellow_tripdata_2019-01.csv";
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     let ctx = ExecutionContext::new(HashMap::new());
@@ -59,8 +61,9 @@ fn main() {
         .expect("nyc_taxi: optimize");
     println!("Optimized Plan:\t{}", format(&optimized_plan));
 
-    let results: Box<dyn Iterator<Item = RecordBatch>> = ctx.execute(df.logical_plan());
-    for batch in results {
+    let stream = ctx.execute(df.logical_plan()).expect("nyc_taxi: execute");
+    let batches: Vec<RecordBatch> = stream.try_collect().await.expect("nyc_taxi: drain stream");
+    for batch in batches {
         // Print each batch's schema (arrow-rs `Schema`'s `Debug` form) and
         // its CSV rendering.
         println!("{:?}", batch.schema());

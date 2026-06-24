@@ -6,7 +6,7 @@
 //!
 //! Any other plan shape becomes a single final stage.
 //!
-//! ## Shape — `Arc<dyn PhysicalPlan>` throughout (DataFusion-aligned)
+//! ## Shape — `Arc<dyn ExecutionPlan>` throughout (DataFusion-aligned)
 //! `planAggregate` reads `aggregate.input` and constructs a new
 //! `HashAggregateExec` that shares the input via reference. `agg.input.clone()`
 //! is a cheap Arc refcount bump; group-by / aggregate / schema fields are
@@ -15,7 +15,7 @@
 
 use crate::{DistributedConfig, QueryStage};
 use fdapquery_physical_plan::{
-    AggregateMode, HashAggregateExec, PhysicalPlan, ShuffleLocation, ShuffleReaderExec,
+    AggregateMode, ExecutionPlan, HashAggregateExec, ShuffleLocation, ShuffleReaderExec,
     ShuffleWriterExec,
 };
 use std::sync::Arc;
@@ -31,7 +31,7 @@ impl DistributedPlanner {
     }
 
     /// Plan a physical plan for distributed execution.
-    pub fn plan(&self, plan: Arc<dyn PhysicalPlan>, job_uuid: &str) -> Vec<QueryStage> {
+    pub fn plan(&self, plan: Arc<dyn ExecutionPlan>, job_uuid: &str) -> Vec<QueryStage> {
         if let Some(aggregate) = plan.as_any().downcast_ref::<HashAggregateExec>() {
             self.plan_aggregate(aggregate, job_uuid)
         } else {
@@ -89,7 +89,7 @@ impl DistributedPlanner {
     /// Inject the actual shuffle locations into a stage's plan after its
     /// dependency stages complete.
     ///
-    /// Generic tree walk via [`PhysicalPlan::with_new_children`] —
+    /// Generic tree walk via [`ExecutionPlan::with_new_children`] —
     /// DataFusion-aligned. Recurses through every node, replaces any
     /// `ShuffleReaderExec` it finds with one carrying the actual locations,
     /// rebuilds every other node with its (possibly transformed) children.
@@ -114,13 +114,13 @@ impl DistributedPlanner {
 
 /// Replace every `ShuffleReaderExec` in the plan tree with one carrying the supplied locations.
 /// Generic walk: recurses on every child via
-/// `PhysicalPlan::with_new_children`. DataFusion-style — any plan shape that
+/// `ExecutionPlan::with_new_children`. DataFusion-style — any plan shape that
 /// contains a `ShuffleReaderExec` gets its locations updated, not just the
 /// `HashAggregate(ShuffleReader)` shape `plan_aggregate` produces today.
 fn substitute_shuffle_reader(
-    plan: Arc<dyn PhysicalPlan>,
+    plan: Arc<dyn ExecutionPlan>,
     locations: &[ShuffleLocation],
-) -> Arc<dyn PhysicalPlan> {
+) -> Arc<dyn ExecutionPlan> {
     // Leaf substitution: hit a ShuffleReaderExec, replace it.
     if let Some(reader) = plan.as_any().downcast_ref::<ShuffleReaderExec>() {
         return Arc::new(ShuffleReaderExec::new(
@@ -137,7 +137,7 @@ fn substitute_shuffle_reader(
     // Otherwise: recurse into children, then rebuild this node with the
     // (possibly transformed) children. If no descendant is a ShuffleReader,
     // every with_new_children call rebuilds with the same logical contents.
-    let new_children: Vec<Arc<dyn PhysicalPlan>> = plan
+    let new_children: Vec<Arc<dyn ExecutionPlan>> = plan
         .children()
         .into_iter()
         .map(|c| substitute_shuffle_reader(Arc::clone(c), locations))
@@ -178,7 +178,9 @@ mod tests {
         ));
 
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
-        let physical_plan = QueryPlanner::new().create_physical_plan(&optimized).unwrap();
+        let physical_plan = QueryPlanner::new()
+            .create_physical_plan(&optimized)
+            .unwrap();
 
         let planner = DistributedPlanner::new(three_executor_config());
         let stages = planner.plan(physical_plan, "test-job-123");

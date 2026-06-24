@@ -46,14 +46,12 @@ pub struct Context {
 
 impl Context {
     /// Construct a context, connecting to the Flight server at `endpoint`.
-    ///
-    /// Same "not from inside a tokio runtime" caveat as [`Client::new`] —
-    /// the connect step `block_on`s on a fresh runtime. Callers from inside
-    /// an async context should construct the `Context` on a separate thread.
-    pub fn new(endpoint: Endpoint) -> Result<Self> {
+    /// Async — call from within a tokio runtime and `.await`. Mirrors
+    /// [`Client::connect`]; no internal runtime ownership.
+    pub async fn connect(endpoint: Endpoint) -> Result<Self> {
         Ok(Self {
             tables: HashMap::new(),
-            client: Client::new(endpoint)?,
+            client: Client::connect(endpoint).await?,
         })
     }
 
@@ -77,12 +75,13 @@ impl Context {
         self.tables.insert(table_name.to_string(), df);
     }
 
-    /// Parse + execute a SQL query via the Flight server.
+    /// Parse + execute a SQL query via the Flight server. Async — call
+    /// from within a tokio runtime and `.await`.
     ///
     /// Identical parse pipeline to `DistributedContext::sql`: Pratt-parse
     /// the SQL, lower to `DataFrame` via `SqlPlanner`, take its logical
     /// plan. The execution step then delegates to [`Self::execute`].
-    pub fn sql(&self, sql: &str) -> Result<Vec<RecordBatch>> {
+    pub async fn sql(&self, sql: &str) -> Result<Vec<RecordBatch>> {
         let tokens = SqlTokenizer::new(sql)
             .tokenize()
             .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
@@ -96,10 +95,11 @@ impl Context {
         let df = SqlPlanner::new()
             .create_data_frame(&select, &self.tables)
             .map_err(|e| anyhow::anyhow!("plan: {e}"))?;
-        self.execute(df.logical_plan())
+        self.execute(df.logical_plan()).await
     }
 
-    /// Execute a logical plan via the Flight server.
+    /// Execute a logical plan via the Flight server. Async — call from
+    /// within a tokio runtime and `.await`.
     ///
     /// The wire shape:
     /// 1. Serialise the [`LogicalPlan`] to a [`pb::LogicalPlanNode`] via
@@ -111,7 +111,7 @@ impl Context {
     ///    call, decodes the `Streaming<FlightData>` response back into
     ///    `RecordBatch`es via `FlightRecordBatchStream`, and returns the
     ///    collected vector.
-    pub fn execute(&self, plan: &LogicalPlan) -> Result<Vec<RecordBatch>> {
+    pub async fn execute(&self, plan: &LogicalPlan) -> Result<Vec<RecordBatch>> {
         let plan_node: pb::LogicalPlanNode = serialize_logical_plan(plan);
         let action = pb::Action {
             query: Some(plan_node),
@@ -119,7 +119,7 @@ impl Context {
             settings: vec![],
         };
         let body: Vec<u8> = prost::Message::encode_to_vec(&action);
-        self.client.do_get(body)
+        self.client.do_get(body).await
     }
 
     /// How many tables are currently registered. Useful for tests and
@@ -141,12 +141,12 @@ mod tests {
     /// Verifies the constructor surfaces a connection error rather than
     /// panicking when the server isn't reachable. Same shape as
     /// `Client::tests::connect_to_closed_port_returns_error`.
-    #[test]
-    fn new_with_unreachable_endpoint_returns_error() {
-        let result = Context::new(Endpoint::new("127.0.0.1", 1));
+    #[tokio::test]
+    async fn connect_with_unreachable_endpoint_returns_error() {
+        let result = Context::connect(Endpoint::new("127.0.0.1", 1)).await;
         assert!(
             result.is_err(),
-            "Context::new should propagate connect failure as Err"
+            "Context::connect should propagate connect failure as Err"
         );
     }
 }

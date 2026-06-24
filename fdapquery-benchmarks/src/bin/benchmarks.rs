@@ -35,6 +35,7 @@ use std::time::Instant;
 use fdapquery_datasource::{DataSource, InMemoryDataSource};
 use fdapquery_datatypes::{RecordBatch, SchemaConverter};
 use fdapquery_execution::ExecutionContext;
+use futures::TryStreamExt;
 use rayon::prelude::*;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
@@ -55,7 +56,8 @@ const FINAL_SQL: &str = "SELECT passenger_count, \
     FROM tripdata \
     GROUP BY passenger_count";
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     // ---- Memory stats: BEFORE ----
@@ -70,14 +72,14 @@ fn main() {
     let mut settings = HashMap::new();
     settings.insert("rquery.csv.batchSize".to_string(), "1024".to_string());
 
-    sql_aggregate(&path, PARTIAL_SQL, FINAL_SQL, &result_file, settings);
+    sql_aggregate(&path, PARTIAL_SQL, FINAL_SQL, &result_file, settings).await;
 
     // ---- Memory stats: AFTER ----
     print_memory_stats("after");
 }
 
 /// The two-stage aggregate.
-fn sql_aggregate(
+async fn sql_aggregate(
     path: &str,
     sql_partial: &str,
     sql_final: &str,
@@ -121,8 +123,15 @@ fn sql_aggregate(
     let mut ctx = ExecutionContext::new(settings);
     ctx.register_data_source("tripdata", in_memory);
 
-    let df = ctx.sql(sql_final);
-    for batch in ctx.execute_data_frame(&df) {
+    let df = ctx.sql(sql_final).expect("benchmarks: final sql plan");
+    let stream = ctx
+        .execute_data_frame(&df)
+        .expect("benchmarks: final execute");
+    let batches: Vec<RecordBatch> = stream
+        .try_collect()
+        .await
+        .expect("benchmarks: drain final stream");
+    for batch in batches {
         // Verbose `Debug` dump of each batch; for CSV row output instead,
         // swap for `to_csv(&batch)` (same convention as `nyc_taxi`).
         println!("{batch:?}");
@@ -140,12 +149,19 @@ fn sql_aggregate(
     writeln!(w, "1,{duration}").expect("write row");
 }
 
-/// Per-file partial-query worker.
+/// Per-file partial-query worker. Each rayon worker drives its async
+/// stream to completion via `futures::executor::block_on` — rayon
+/// threads don't have a tokio runtime. Same bridge as
+/// `ParallelContext::execute_parallel_aggregate` and
+/// `ShuffleWriterExec::write_shuffle`.
 fn execute_query(path: &str, sql: &str, settings: &HashMap<String, String>) -> Vec<RecordBatch> {
     let mut ctx = ExecutionContext::new(settings.clone());
     ctx.register_csv("tripdata", path);
-    let df = ctx.sql(sql);
-    ctx.execute_data_frame(&df).collect()
+    let df = ctx.sql(sql).expect("benchmarks: per-file sql plan");
+    let stream = ctx
+        .execute_data_frame(&df)
+        .expect("benchmarks: per-file execute");
+    futures::executor::block_on(stream.try_collect()).expect("benchmarks: drain per-file stream")
 }
 
 /// List every `.csv` file in `path`, returning the bare file names (no

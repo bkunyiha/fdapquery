@@ -303,7 +303,10 @@ impl ExecutionPlan for HashJoinExec {
             }
         };
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            arrow_schema,
+            stream,
+        )))
     }
 }
 

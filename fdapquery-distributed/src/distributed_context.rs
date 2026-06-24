@@ -9,10 +9,10 @@
 
 use crate::{DistributedConfig, DistributedPlanner, ExecutorClient, Scheduler};
 use fdapquery_datasource::CsvDataSource;
-use fdapquery_datatypes::RecordBatch;
+use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
-use fdapquery_physical_plan::PhysicalPlan;
+use fdapquery_physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use fdapquery_query_planner::QueryPlanner;
 // `PrattParser` trait must be in scope for `SqlParser::parse()`.
 use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
@@ -54,32 +54,31 @@ impl<C: ExecutorClient> DistributedContext<C> {
         self.tables.insert(table_name.to_string(), df);
     }
 
-    /// Parse + plan + execute a SQL query distributed.
-    pub fn sql(&self, sql: &str) -> Box<dyn Iterator<Item = RecordBatch>> {
-        let tokens = SqlTokenizer::new(sql)
-            .tokenize()
-            .expect("DistributedContext::sql: tokenize");
-        let parsed = SqlParser::new(tokens)
-            .parse(0)
-            .expect("DistributedContext::sql: parse");
+    /// Parse + plan + execute a SQL query distributed. Returns a
+    /// `SendableRecordBatchStream` — the caller drains it on the active
+    /// tokio runtime via `try_collect().await` / `try_next().await`.
+    pub async fn sql(&self, sql: &str) -> Result<SendableRecordBatchStream> {
+        let tokens = SqlTokenizer::new(sql).tokenize()?;
+        let parsed = SqlParser::new(tokens).parse(0)?;
         let select = match parsed {
             Some(SqlExpr::Select(select)) => *select,
-            other => panic!("Expected a SELECT statement, found {other:?}"),
+            other => {
+                return Err(FdapQueryError::Plan(format!(
+                    "expected SELECT, found {other:?}"
+                )));
+            }
         };
-        let df = SqlPlanner::new()
-            .create_data_frame(&select, &self.tables)
-            .expect("DistributedContext::sql: plan");
-        self.execute(df.logical_plan())
+        let df = SqlPlanner::new().create_data_frame(&select, &self.tables)?;
+        self.execute(df.logical_plan()).await
     }
 
     /// Optimize, lower to a physical plan, then dispatch via the scheduler.
-    pub fn execute(&self, plan: &LogicalPlan) -> Box<dyn Iterator<Item = RecordBatch>> {
-        let optimized: LogicalPlan = Optimizer::new()
-            .optimize(plan)
-            .expect("DistributedContext::execute: optimize");
-        let physical: Arc<dyn PhysicalPlan> = QueryPlanner::new()
-            .create_physical_plan(&optimized)
-            .expect("DistributedContext::execute: create_physical_plan");
-        self.scheduler.execute(physical)
+    /// Returns a `SendableRecordBatchStream` whose construction was awaited
+    /// inside this function — driving the stream is the caller's job.
+    pub async fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
+        let optimized: LogicalPlan = Optimizer::new().optimize(plan)?;
+        let physical: Arc<dyn ExecutionPlan> =
+            QueryPlanner::new().create_physical_plan(&optimized)?;
+        self.scheduler.execute(physical).await
     }
 }

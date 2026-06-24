@@ -28,6 +28,14 @@ arrow-flight    = { workspace = true }
 tonic           = { workspace = true }
 tokio           = { workspace = true }
 tokio-stream    = "0.1"
+# `async-trait` so `distributed_example` can `#[async_trait]
+# impl ExecutorClient for LocalExecutorClient`.
+async-trait     = { workspace = true }
+# `futures` for `TryStreamExt::try_collect` (drain the
+# `SendableRecordBatchStream` results) and
+# `futures::executor::block_on` (rayon-worker async->sync bridge in
+# `parallel_query`).
+futures         = { workspace = true }
 # Data parallelism: `parallel_query` fans out 12 monthly CSV queries via
 # `(1..=12).into_par_iter()`.
 rayon           = { workspace = true }

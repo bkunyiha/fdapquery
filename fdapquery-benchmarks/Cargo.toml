@@ -11,6 +11,13 @@ rust-version.workspace = true
 fdapquery-execution    = { path = "../fdapquery-execution" }
 fdapquery-datasource   = { path = "../fdapquery-datasource" }    # ParquetDataSource (tpch_runner), InMemoryDataSource (benchmarks)
 fdapquery-datatypes    = { path = "../fdapquery-datatypes" }     # RecordBatch, SchemaConverter, to_csv
+# `tokio` for `#[tokio::main]` — the binaries drain the engine's
+# `SendableRecordBatchStream` results on the tokio runtime.
+tokio        = { workspace = true }
+# `futures` for `TryStreamExt::try_collect` plus
+# `futures::executor::block_on` (rayon-worker async->sync bridge in
+# `benchmarks::execute_query`).
+futures      = { workspace = true }
 # Data parallelism: `benchmarks` fans out one query per input CSV via
 # `into_par_iter().flat_map(...)`.
 rayon        = { workspace = true }

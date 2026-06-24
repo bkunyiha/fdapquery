@@ -28,7 +28,7 @@ use fdapquery_physical_plan::{
     HashJoinExec, LimitExec, LiteralDateExpression, LiteralDoubleExpression,
     LiteralIntervalDaysExpression, LiteralLongExpression, LiteralStringExpression, LtEqExpression,
     LtExpression, MaxExpression, MinExpression, MultiplyExpression, NeqExpression, OrExpression,
-    PhysicalPlan, ProjectionExec, ScanExec, SelectionExec, SubtractExpression, SumExpression,
+    ExecutionPlan, ProjectionExec, ScanExec, SelectionExec, SubtractExpression, SumExpression,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -52,10 +52,11 @@ impl QueryPlanner {
 
     /// Create a physical plan from a logical plan.
     ///
-    /// Returns `Arc<dyn PhysicalPlan>` (not `Box`) — matches DataFusion's
-    /// `ExecutionPlan` shape, lets the planner Arc-share subtrees, and lets
-    /// `DistributedPlanner` rewrite plans via `with_new_children`.
-    pub fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn PhysicalPlan>> {
+    /// Returns `Arc<dyn ExecutionPlan>` (not `Box`) — matches
+    /// DataFusion's `ExecutionPlan` shape, lets the planner Arc-share
+    /// subtrees, and lets `DistributedPlanner` rewrite plans via
+    /// `with_new_children`.
+    pub fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(match plan {
             LogicalPlan::Scan(s) => Arc::new(ScanExec::new(
                 Arc::clone(&s.data_source),
@@ -115,36 +116,34 @@ impl QueryPlanner {
                 let right_schema = j.right.schema()?;
 
                 // Resolve join-key column names to indices in each input schema.
-                let left_keys: Vec<usize> = j
-                    .on
-                    .iter()
-                    .map(|(left_col, _)| {
-                        left_schema
-                            .fields
-                            .iter()
-                            .position(|f| &f.name == left_col)
-                            .ok_or_else(|| {
-                                FdapQueryError::SchemaError(format!(
-                                    "no column named '{left_col}' in left input"
-                                ))
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let right_keys: Vec<usize> = j
-                    .on
-                    .iter()
-                    .map(|(_, right_col)| {
-                        right_schema
-                            .fields
-                            .iter()
-                            .position(|f| &f.name == right_col)
-                            .ok_or_else(|| {
-                                FdapQueryError::SchemaError(format!(
-                                    "no column named '{right_col}' in right input"
-                                ))
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                let left_keys: Vec<usize> =
+                    j.on.iter()
+                        .map(|(left_col, _)| {
+                            left_schema
+                                .fields
+                                .iter()
+                                .position(|f| &f.name == left_col)
+                                .ok_or_else(|| {
+                                    FdapQueryError::SchemaError(format!(
+                                        "no column named '{left_col}' in left input"
+                                    ))
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                let right_keys: Vec<usize> =
+                    j.on.iter()
+                        .map(|(_, right_col)| {
+                            right_schema
+                                .fields
+                                .iter()
+                                .position(|f| &f.name == right_col)
+                                .ok_or_else(|| {
+                                    FdapQueryError::SchemaError(format!(
+                                        "no column named '{right_col}' in right input"
+                                    ))
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
 
                 // Right columns to exclude: duplicate join keys with the same name
                 // on both sides (so the joined row doesn't carry the key twice).
@@ -316,7 +315,9 @@ impl QueryPlanner {
                 ));
             }
             LogicalExpr::Not(_) => {
-                return Err(FdapQueryError::NotImplemented("NOT is not supported".into()));
+                return Err(FdapQueryError::NotImplemented(
+                    "NOT is not supported".into(),
+                ));
             }
             LogicalExpr::Modulus { .. } => {
                 return Err(FdapQueryError::NotImplemented(
@@ -378,7 +379,7 @@ mod tests {
         // Root is a HashAggregateExec; the optimizer's sorted pushdown puts
         // max_fare at index 0 and passenger_count at index 1, so the group key is
         // #1 and the MAX argument is #0. (`format` is the free fn — `pretty()` is
-        // gated `where Self: Sized` and isn't callable on `Arc<dyn PhysicalPlan>`.)
+        // gated `where Self: Sized` and isn't callable on `Arc<dyn ExecutionPlan>`.)
         let pretty = fdapquery_physical_plan::format(physical.as_ref());
         assert!(
             pretty.starts_with(

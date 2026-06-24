@@ -2,23 +2,34 @@
 //! transport — and [`Scheduler`], which orchestrates stage-by-stage execution
 //! of a distributed query plan.
 //!
-//! ## Shape — sequential by design
+//! ## Shape — sequential dispatch, async streams
 //! Stages run in dependency order; tasks within a stage are dispatched
-//! one-at-a-time round-robin across executors. No async, no Tokio, no rayon.
-//! The scheduler is intentionally simple — a teaching artifact, not a
-//! production scheduler. Concurrency lives one layer up at the Flight
-//! boundary (`flight-server` / `client`).
+//! one-at-a-time round-robin across executors. The scheduler itself is a
+//! sequential orchestrator (no rayon, no fan-out) — the *concurrency* lives
+//! at the Flight boundary, where the executor exposes
+//! `SendableRecordBatchStream`s and `ExecutorClient` implementations are
+//! `async fn`s on a tokio runtime.
 //!
 //! ## `ExecutorClient` is the seam to Flight
 //! The trait has three methods (`execute_task`, `execute_final_task`,
-//! `fetch_shuffle`); this crate ships the trait but not a real implementation.
-//! A test-only `MockExecutorClient` proves the scheduler is exercisable
+//! `fetch_shuffle`); this crate ships the trait but not a real
+//! implementation. `execute_task` returns a `Vec<ShuffleLocation>` (a
+//! handle to where the executor wrote its shuffle output); the streaming
+//! methods (`execute_final_task`, `fetch_shuffle`) return
+//! `SendableRecordBatchStream` so they can be drained on the caller's
+//! tokio runtime via `try_collect().await` / `try_next().await`. All
+//! three are `async fn` (declared via `#[async_trait]` because dynamic
+//! dispatch over `dyn ExecutorClient` requires a stable vtable shape). A
+//! test-only `MockExecutorClient` proves the scheduler is exercisable
 //! without Flight. The real implementation lives in `flight-server` /
 //! `client`.
 
 use crate::{DistributedConfig, DistributedPlanner, ExecutorConfig, QueryStage};
-use fdapquery_datatypes::RecordBatch;
-use fdapquery_physical_plan::{PhysicalPlan, ShuffleLocation, Task};
+use async_trait::async_trait;
+use fdapquery_datatypes::Result;
+use fdapquery_physical_plan::{
+    ExecutionPlan, SendableRecordBatchStream, ShuffleLocation, Task,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -36,26 +47,37 @@ use uuid::Uuid;
 /// produce **result batches** (streamed back to the caller). The two return
 /// types reflect the genuinely different output shapes; collapsing into a
 /// tagged enum was considered and rejected during scoping.
+#[async_trait]
 pub trait ExecutorClient: Send + Sync {
-    /// Execute an intermediate task on a remote executor. Returns the shuffle
-    /// locations the task produced.
-    fn execute_task(&self, executor: &ExecutorConfig, task: Task) -> Vec<ShuffleLocation>;
-
-    /// Execute the final task and stream the result batches back to the caller.
-    fn execute_final_task(
+    /// Execute an intermediate task on a remote executor. Returns the
+    /// shuffle locations the task produced. Mirrors DataFusion's
+    /// `BallistaClient::execute_action` for `ExecuteQuery` actions.
+    async fn execute_task(
         &self,
         executor: &ExecutorConfig,
         task: Task,
-    ) -> Box<dyn Iterator<Item = RecordBatch>>;
+    ) -> Result<Vec<ShuffleLocation>>;
 
-    /// Fetch one partition of shuffle data from a remote executor. Not used by
-    /// the scheduler directly — `ShuffleReaderExec::execute()` (deferred to
-    /// module 13) calls this for cross-executor reads.
-    fn fetch_shuffle(
+    /// Execute the final task and stream the result batches back to the
+    /// caller. The returned `SendableRecordBatchStream` is driven on the
+    /// caller's tokio runtime via `try_collect().await` /
+    /// `try_next().await`. Mirrors DataFusion's
+    /// `BallistaClient::execute_action` for final-stage `ExecutePartition`.
+    async fn execute_final_task(
+        &self,
+        executor: &ExecutorConfig,
+        task: Task,
+    ) -> Result<SendableRecordBatchStream>;
+
+    /// Fetch one partition of shuffle data from a remote executor. Not used
+    /// by the scheduler directly — `ShuffleReaderExec::execute()` calls
+    /// this for cross-executor reads. Mirrors
+    /// `BallistaClient::fetch_partition`.
+    async fn fetch_shuffle(
         &self,
         executor: &ExecutorConfig,
         location: &ShuffleLocation,
-    ) -> Box<dyn Iterator<Item = RecordBatch>>;
+    ) -> Result<SendableRecordBatchStream>;
 }
 
 /// Coordinates distributed query execution across executors.
@@ -77,8 +99,15 @@ impl<C: ExecutorClient> Scheduler<C> {
         }
     }
 
-    /// Execute a physical plan and stream the result batches.
-    pub fn execute(&self, plan: Arc<dyn PhysicalPlan>) -> Box<dyn Iterator<Item = RecordBatch>> {
+    /// Execute a physical plan and stream the result batches. The returned
+    /// `SendableRecordBatchStream` is driven on the caller's tokio runtime.
+    ///
+    /// Dispatch itself is sequential and `async fn`: the scheduler awaits
+    /// each intermediate stage's shuffle locations before constructing the
+    /// next stage's tasks, then awaits the final stage's stream
+    /// construction. Stream consumption (driving the returned
+    /// `SendableRecordBatchStream`) is the caller's job.
+    pub async fn execute(&self, plan: Arc<dyn ExecutionPlan>) -> Result<SendableRecordBatchStream> {
         let job_uuid = Uuid::new_v4().to_string();
         info!("Starting job {}", job_uuid);
 
@@ -100,10 +129,10 @@ impl<C: ExecutorClient> Scheduler<C> {
             // All dependency stages must have completed.
             for dep_stage_id in &stage.dependencies {
                 if !locations_by_stage.contains_key(dep_stage_id) {
-                    panic!(
+                    return Err(fdapquery_datatypes::FdapQueryError::Internal(format!(
                         "Stage {} depends on stage {} which hasn't completed",
                         stage.stage_id, dep_stage_id
-                    );
+                    )));
                 }
             }
 
@@ -124,10 +153,11 @@ impl<C: ExecutorClient> Scheduler<C> {
             };
 
             if updated_stage.is_final_stage {
-                return self.execute_final_stage(&job_uuid, updated_stage);
+                return self.execute_final_stage(&job_uuid, updated_stage).await;
             } else {
                 let current_stage_id = updated_stage.stage_id;
-                let locations: Vec<ShuffleLocation> = self.execute_stage(&job_uuid, updated_stage);
+                let locations: Vec<ShuffleLocation> =
+                    self.execute_stage(&job_uuid, updated_stage).await?;
                 debug!(
                     "Stage {} produced {} shuffle locations",
                     current_stage_id,
@@ -139,14 +169,21 @@ impl<C: ExecutorClient> Scheduler<C> {
 
         // Plan had no final stage — this should be unreachable for a well-formed
         // plan; reaching here indicates a planner bug.
-        panic!("Distributed plan had no final stage")
+        Err(fdapquery_datatypes::FdapQueryError::Internal(
+            "Distributed plan had no final stage".to_string(),
+        ))
     }
 
     /// Execute an intermediate stage.
     /// Dispatches one task per partition, round-robin across executors,
-    /// and accumulates the shuffle locations.
-    fn execute_stage(&self, job_uuid: &str, stage: QueryStage) -> Vec<ShuffleLocation> {
-        // stage.plan is already `Arc<dyn PhysicalPlan>`; each task gets a cheap
+    /// and accumulates the shuffle locations. Each `execute_task` call
+    /// is awaited sequentially — fan-out lives at the Flight layer.
+    async fn execute_stage(
+        &self,
+        job_uuid: &str,
+        stage: QueryStage,
+    ) -> Result<Vec<ShuffleLocation>> {
+        // stage.plan is already `Arc<dyn ExecutionPlan>`; each task gets a cheap
         // Arc::clone (refcount bump).
         let mut all_locations = Vec::new();
         for partition_id in 0..stage.partition_count {
@@ -164,26 +201,29 @@ impl<C: ExecutorClient> Scheduler<C> {
                 "Assigning task {} to executor {}",
                 task.task_id, executor.id
             );
-            let locations: Vec<ShuffleLocation> = self.executor_client.execute_task(executor, task);
+            let locations: Vec<ShuffleLocation> =
+                self.executor_client.execute_task(executor, task).await?;
             all_locations.extend(locations);
         }
-        all_locations
+        Ok(all_locations)
     }
 
     /// Execute the final stage on the first executor and return its result stream.
-    fn execute_final_stage(
+    async fn execute_final_stage(
         &self,
         job_uuid: &str,
         stage: QueryStage,
-    ) -> Box<dyn Iterator<Item = RecordBatch>> {
+    ) -> Result<SendableRecordBatchStream> {
         let task = Task::new(job_uuid, stage.stage_id, 0, 0, stage.plan);
-        let executor = self
-            .config
-            .executors
-            .first()
-            .expect("DistributedConfig has no executors");
+        let executor = self.config.executors.first().ok_or_else(|| {
+            fdapquery_datatypes::FdapQueryError::Internal(
+                "DistributedConfig has no executors".to_string(),
+            )
+        })?;
         info!("Executing final stage on executor {}", executor.id);
-        self.executor_client.execute_final_task(executor, task)
+        self.executor_client
+            .execute_final_task(executor, task)
+            .await
     }
 }
 
@@ -198,9 +238,12 @@ mod tests {
     use super::*;
     use crate::ExecutorConfig;
     use fdapquery_datasource::CsvDataSource;
+    use fdapquery_datatypes::{RecordBatch, Schema};
     use fdapquery_logical_plan::{Aggregate, LogicalPlan, Scan, col, sum};
     use fdapquery_optimizer::Optimizer;
+    use fdapquery_physical_plan::RecordBatchStreamAdapter;
     use fdapquery_query_planner::QueryPlanner;
+    use futures::TryStreamExt;
     use std::sync::{Arc, Mutex};
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
@@ -218,7 +261,7 @@ mod tests {
     ///
     /// We capture only the executor and the task's (stage_id, task_id,
     /// partition_id) tuple — we do NOT keep the Task itself because the inner
-    /// `Arc<dyn PhysicalPlan>` is not safe to read across threads after the
+    /// `Arc<dyn ExecutionPlan>` is not safe to read across threads after the
     /// scheduler returns. The tuple is enough to verify dispatch behaviour.
     #[derive(Default)]
     struct MockExecutorClient {
@@ -251,49 +294,62 @@ mod tests {
         }
     }
 
+    /// Build an empty `SendableRecordBatchStream` over an empty schema —
+    /// the test only checks dispatch, not data flowing back.
+    fn empty_stream() -> SendableRecordBatchStream {
+        let schema = Arc::new(Schema::new(vec![]).to_arrow());
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::empty::<Result<RecordBatch>>(),
+        ))
+    }
+
+    #[async_trait]
     impl ExecutorClient for MockExecutorClient {
-        fn execute_task(&self, executor: &ExecutorConfig, task: Task) -> Vec<ShuffleLocation> {
+        async fn execute_task(
+            &self,
+            executor: &ExecutorConfig,
+            task: Task,
+        ) -> Result<Vec<ShuffleLocation>> {
             let handle = TaskHandle::from(&task);
             self.executed_tasks
                 .lock()
                 .unwrap()
                 .push((executor.clone(), handle));
             // Return one synthetic shuffle location per task.
-            vec![ShuffleLocation::new(
+            Ok(vec![ShuffleLocation::new(
                 &task.job_uuid,
                 task.stage_id,
                 task.partition_id,
                 &executor.id,
                 &executor.host,
                 executor.port,
-            )]
+            )])
         }
 
-        fn execute_final_task(
+        async fn execute_final_task(
             &self,
             executor: &ExecutorConfig,
             task: Task,
-        ) -> Box<dyn Iterator<Item = RecordBatch>> {
+        ) -> Result<SendableRecordBatchStream> {
             self.final_tasks
                 .lock()
                 .unwrap()
                 .push((executor.clone(), TaskHandle::from(&task)));
-            // Empty result stream — the test only checks that the final task
-            // was dispatched, not the data flowing back.
-            Box::new(std::iter::empty())
+            Ok(empty_stream())
         }
 
-        fn fetch_shuffle(
+        async fn fetch_shuffle(
             &self,
             _executor: &ExecutorConfig,
             _location: &ShuffleLocation,
-        ) -> Box<dyn Iterator<Item = RecordBatch>> {
-            Box::new(std::iter::empty())
+        ) -> Result<SendableRecordBatchStream> {
+            Ok(empty_stream())
         }
     }
 
-    #[test]
-    fn scheduler_assigns_tasks_to_executors_round_robin() {
+    #[tokio::test]
+    async fn scheduler_assigns_tasks_to_executors_round_robin() {
         let config = three_executor_config();
         let planner = DistributedPlanner::new(config.clone());
         let mock = Arc::new(MockExecutorClient::default());
@@ -311,11 +367,14 @@ mod tests {
         ));
 
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
-        let physical_plan = QueryPlanner::new().create_physical_plan(&optimized).unwrap();
+        let physical_plan = QueryPlanner::new()
+            .create_physical_plan(&optimized)
+            .unwrap();
 
-        // Drive execution. The final-task mock returns an empty iterator; we
+        // Drive execution. The final-task mock returns an empty stream; we
         // collect to drain.
-        let _result: Vec<RecordBatch> = scheduler.execute(physical_plan).collect();
+        let stream = scheduler.execute(physical_plan).await.unwrap();
+        let _result: Vec<RecordBatch> = stream.try_collect().await.unwrap();
 
         // Stage 0 should have produced tasks. With 3 executors and 3 partitions,
         // round-robin means one task per executor.
@@ -340,23 +399,28 @@ mod tests {
 
     // `Arc<MockExecutorClient>` impl is needed so we can both pass to `Scheduler`
     // and retain a handle on the outside for assertions.
+    #[async_trait]
     impl ExecutorClient for Arc<MockExecutorClient> {
-        fn execute_task(&self, executor: &ExecutorConfig, task: Task) -> Vec<ShuffleLocation> {
-            (**self).execute_task(executor, task)
-        }
-        fn execute_final_task(
+        async fn execute_task(
             &self,
             executor: &ExecutorConfig,
             task: Task,
-        ) -> Box<dyn Iterator<Item = RecordBatch>> {
-            (**self).execute_final_task(executor, task)
+        ) -> Result<Vec<ShuffleLocation>> {
+            (**self).execute_task(executor, task).await
         }
-        fn fetch_shuffle(
+        async fn execute_final_task(
+            &self,
+            executor: &ExecutorConfig,
+            task: Task,
+        ) -> Result<SendableRecordBatchStream> {
+            (**self).execute_final_task(executor, task).await
+        }
+        async fn fetch_shuffle(
             &self,
             executor: &ExecutorConfig,
             location: &ShuffleLocation,
-        ) -> Box<dyn Iterator<Item = RecordBatch>> {
-            (**self).fetch_shuffle(executor, location)
+        ) -> Result<SendableRecordBatchStream> {
+            (**self).fetch_shuffle(executor, location).await
         }
     }
 }

@@ -37,15 +37,15 @@ use fdapquery_physical_plan::{
     GtEqExpression, GtExpression, HashAggregateExec, LiteralDateExpression,
     LiteralDoubleExpression, LiteralLongExpression, LiteralStringExpression, LtEqExpression,
     LtExpression, MaxExpression, MinExpression, MultiplyExpression, NeqExpression, OrExpression,
-    PhysicalPlan, ProjectionExec, ScanExec, SelectionExec, ShuffleLocation, ShuffleReaderExec,
+    ExecutionPlan, ProjectionExec, ScanExec, SelectionExec, ShuffleLocation, ShuffleReaderExec,
     ShuffleWriterExec, SubtractExpression, SumExpression, Task,
 };
 
 use arrow_schema::DataType;
 use std::sync::Arc;
 
-/// `pb::PhysicalPlanNode` → `Arc<dyn PhysicalPlan>`.
-pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn PhysicalPlan> {
+/// `pb::PhysicalPlanNode` → `Arc<dyn ExecutionPlan>`.
+pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn ExecutionPlan> {
     use pb::physical_plan_node::PlanType;
     match node.plan_type.as_ref() {
         Some(PlanType::Scan(scan)) => {
@@ -233,7 +233,7 @@ pub fn deserialize_shuffle_location(loc: &pb::ShuffleLocation) -> ShuffleLocatio
 
 /// `pb::TaskInfo` → `Task`.
 ///
-/// `Task::plan` is `Arc<dyn PhysicalPlan>`, matching what
+/// `Task::plan` is `Arc<dyn ExecutionPlan>`, matching what
 /// [`deserialize_physical_plan`] now returns — no conversion needed.
 pub fn deserialize_task(task: &pb::TaskInfo) -> Task {
     Task::new(
