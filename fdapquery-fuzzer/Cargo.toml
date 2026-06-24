@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
-fdapquery-logical-plan = { path = "../fdapquery-logical-plan" }
+fdapquery-expr = { path = "../fdapquery-expr" }
 fdapquery-sql          = { path = "../fdapquery-sql" }
 rand         = { workspace = true }
 arrow-schema = { workspace = true }   # for `DataType` in `create_values` dispatch

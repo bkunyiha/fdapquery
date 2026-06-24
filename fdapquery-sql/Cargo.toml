@@ -12,7 +12,7 @@ arrow-schema = { workspace = true }
 chrono       = { workspace = true }      # NaiveDate::parse for SqlExpr::Date literal lowering
 
 fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
-fdapquery-logical-plan = { path = "../fdapquery-logical-plan" }
+fdapquery-expr = { path = "../fdapquery-expr" }
 
 # The hand-rolled Pratt parser is the pedagogical core of this module — do
 # not replace it with `sqlparser-rs` or another third-party parser.

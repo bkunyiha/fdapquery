@@ -23,7 +23,7 @@ work (introducing `FdapQueryError` in a new `fdapquery-common` crate
 and propagating `Result<T>` through every panic site) starts next.
 
 The DataFusion-mirror structural changes — folding `fdapquery-datatypes`
-into `fdapquery-common`, renaming `fdapquery-logical-plan` to
+into `fdapquery-common`, renaming `fdapquery-expr` to
 `fdapquery-expr`, splitting the umbrella `fdapquery` crate out — happen
 in later sessions, each as its own commit you can review independently.
 
@@ -34,7 +34,7 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-Prerequisite: `protoc` (Protobuf compiler) for the `fdapquery-protobuf`
+Prerequisite: `protoc` (Protobuf compiler) for the `fdapquery-proto`
 crate's `build.rs`:
 
 - macOS: `brew install protobuf`

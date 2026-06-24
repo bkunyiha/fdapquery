@@ -39,7 +39,7 @@ uuid           = { workspace = true }
 # `ExecutionContext`.
 fdapquery-datasource     = { path = "../fdapquery-datasource" }
 fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
-fdapquery-logical-plan   = { path = "../fdapquery-logical-plan" }
+fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
 fdapquery-optimizer      = { path = "../fdapquery-optimizer" }
 fdapquery-query-planner  = { path = "../fdapquery-query-planner" }

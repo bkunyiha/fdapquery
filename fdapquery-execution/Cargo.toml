@@ -15,7 +15,7 @@ arrow                 = { workspace = true }
 futures               = { workspace = true }
 rayon                 = { workspace = true }
 fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
-fdapquery-logical-plan   = { path = "../fdapquery-logical-plan" }
+fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-sql            = { path = "../fdapquery-sql" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
 fdapquery-query-planner  = { path = "../fdapquery-query-planner" }

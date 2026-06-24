@@ -15,9 +15,7 @@ use crate::expressions::{SqlExpr, SqlSelect};
 use arrow_schema::DataType;
 use fdapquery_datatypes::arrow_types::DOUBLE_TYPE;
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_logical_plan::{
-    AggregateExpr, DataFrame, LogicalExpr, avg, cast, count, max, min, sum,
-};
+use fdapquery_expr::{AggregateExpr, DataFrame, LogicalExpr, avg, cast, count, max, min, sum};
 use std::collections::HashMap;
 
 /// Creates a logical plan from a parsed SQL statement.
@@ -487,7 +485,7 @@ mod tests {
     use crate::sql_parser::SqlParser;
     use crate::sql_tokenizer::SqlTokenizer;
     use fdapquery_datasource::CsvDataSource;
-    use fdapquery_logical_plan::{LogicalPlan, Scan, format};
+    use fdapquery_expr::{LogicalPlan, Scan, format};
     use std::sync::Arc;
 
     /// Tokenize → parse → plan, returning the formatted logical plan. Uses

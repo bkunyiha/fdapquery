@@ -25,7 +25,7 @@ pub trait AggregateExpression: fmt::Display + Send + Sync {
     fn create_accumulator(&self) -> Box<dyn Accumulator>;
 
     /// Type-erased self-reference for runtime downcasting (see
-    /// `PhysicalPlan::as_any`). `fdapquery_protobuf::serialize_physical_aggr_expr` —
+    /// `PhysicalPlan::as_any`). `fdapquery_proto::serialize_physical_aggr_expr` —
     /// the only caller that needs to branch on concrete aggregate type —
     /// uses `aggr.as_any().downcast_ref::<MinExpression>()` etc. Same pattern
     /// DataFusion uses for `AggregateUDFImpl` / `AggregateExpr`.

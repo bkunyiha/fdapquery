@@ -7,7 +7,7 @@
 //! unsupported-expression failures as `FdapQueryError` variants.
 
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_logical_plan::{AggregateExpr, LogicalExpr, LogicalPlan};
+use fdapquery_expr::{AggregateExpr, LogicalExpr, LogicalPlan};
 use std::collections::HashSet;
 
 use crate::projection_push_down_rule::ProjectionPushDownRule;

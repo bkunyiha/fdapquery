@@ -1,5 +1,5 @@
 [package]
-name         = "fdapquery-logical-plan"
+name         = "fdapquery-expr"
 description  = "LogicalPlan, LogicalExpr, DataFrame."
 edition.workspace      = true
 license.workspace      = true

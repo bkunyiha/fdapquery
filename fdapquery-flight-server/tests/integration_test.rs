@@ -26,13 +26,13 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::{Action, Ticket};
 use fdapquery_datasource::{CsvDataSource, DataSource};
 use fdapquery_datatypes::RecordBatch;
+use fdapquery_expr::{LogicalPlan, Scan};
 use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
-use fdapquery_logical_plan::{LogicalPlan, Scan};
 use fdapquery_physical_plan::{
     ColumnExpression, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
     ShuffleWriterExec, Task, TaskContext,
 };
-use fdapquery_protobuf::{pb, serialize_logical_plan, serialize_task};
+use fdapquery_proto::{pb, serialize_logical_plan, serialize_task};
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;

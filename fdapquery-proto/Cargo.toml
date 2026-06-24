@@ -1,5 +1,5 @@
 [package]
-name         = "fdapquery-protobuf"
+name         = "fdapquery-proto"
 description  = "PhysicalPlan / LogicalExpr / Action protobuf serialization."
 edition.workspace      = true
 license.workspace      = true
@@ -15,7 +15,7 @@ chrono        = { workspace = true }       # NaiveDate for LogicalExpr::LiteralD
 arrow-schema  = { workspace = true }       # DataType return-type for from_proto_arrow_type
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
 fdapquery-datasource    = { path = "../fdapquery-datasource" } # CsvDataSource / ParquetDataSource for scan deserialisation
-fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
+fdapquery-expr  = { path = "../fdapquery-expr" }
 fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
 
 [build-dependencies]

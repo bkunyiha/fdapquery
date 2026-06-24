@@ -32,7 +32,7 @@
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
 };
-use fdapquery_logical_plan::{DataFrame, LogicalExpr};
+use fdapquery_expr::{DataFrame, LogicalExpr};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
@@ -334,7 +334,7 @@ mod tests {
     //! panicking — i.e. random plan generation is stable across runs.
     use super::*;
     use fdapquery_datasource::CsvDataSource;
-    use fdapquery_logical_plan::{LogicalPlan, Scan};
+    use fdapquery_expr::{LogicalPlan, Scan};
     use std::sync::Arc;
 
     #[test]

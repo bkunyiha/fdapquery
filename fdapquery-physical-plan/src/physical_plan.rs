@@ -10,7 +10,7 @@
 //!
 //! ## Trait, not enum
 //! Elsewhere in this workspace, an interface with a closed implementor set
-//! is modelled as a Rust `enum` (see `fdapquery_logical_plan::LogicalPlan`,
+//! is modelled as a Rust `enum` (see `fdapquery_expr::LogicalPlan`,
 //! which has six variants). `ExecutionPlan` is the documented exception:
 //! the physical layer is the largest module in the workspace and the
 //! operator set is *open in spirit*. Adding a new operator should mean

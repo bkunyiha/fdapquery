@@ -27,9 +27,7 @@
 use crate::{DistributedConfig, DistributedPlanner, ExecutorConfig, QueryStage};
 use async_trait::async_trait;
 use fdapquery_datatypes::Result;
-use fdapquery_physical_plan::{
-    ExecutionPlan, SendableRecordBatchStream, ShuffleLocation, Task,
-};
+use fdapquery_physical_plan::{ExecutionPlan, SendableRecordBatchStream, ShuffleLocation, Task};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -239,7 +237,7 @@ mod tests {
     use crate::ExecutorConfig;
     use fdapquery_datasource::CsvDataSource;
     use fdapquery_datatypes::{RecordBatch, Schema};
-    use fdapquery_logical_plan::{Aggregate, LogicalPlan, Scan, col, sum};
+    use fdapquery_expr::{Aggregate, LogicalPlan, Scan, col, sum};
     use fdapquery_optimizer::Optimizer;
     use fdapquery_physical_plan::RecordBatchStreamAdapter;
     use fdapquery_query_planner::QueryPlanner;

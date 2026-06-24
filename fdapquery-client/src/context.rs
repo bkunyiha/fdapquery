@@ -22,8 +22,8 @@ use crate::endpoint::Endpoint;
 use anyhow::Result;
 use fdapquery_datasource::CsvDataSource;
 use fdapquery_datatypes::RecordBatch;
-use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
-use fdapquery_protobuf::{pb, serialize_logical_plan};
+use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
+use fdapquery_proto::{pb, serialize_logical_plan};
 use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -103,7 +103,7 @@ impl Context {
     ///
     /// The wire shape:
     /// 1. Serialise the [`LogicalPlan`] to a [`pb::LogicalPlanNode`] via
-    ///    [`fdapquery_protobuf::serialize_logical_plan`].
+    ///    [`fdapquery_proto::serialize_logical_plan`].
     /// 2. Wrap it in a [`pb::Action`] (the protobuf message the
     ///    `flight-server`'s `do_get` handler expects in its `Ticket` body).
     /// 3. Encode via `prost::Message::encode_to_vec`.

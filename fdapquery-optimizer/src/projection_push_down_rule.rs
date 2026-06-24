@@ -5,7 +5,7 @@
 //! six operators and needs no catch-all (per §3.1).
 
 use fdapquery_datatypes::Result;
-use fdapquery_logical_plan::{Aggregate, Join, Limit, LogicalPlan, Projection, Scan, Selection};
+use fdapquery_expr::{Aggregate, Join, Limit, LogicalPlan, Projection, Scan, Selection};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -98,7 +98,7 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
 mod tests {
     use super::*;
     use fdapquery_datasource::CsvDataSource;
-    use fdapquery_logical_plan::{DataFrame, col, count, format, lit_string, max, min};
+    use fdapquery_expr::{DataFrame, col, count, format, lit_string, max, min};
     use std::sync::Arc;
 
     /// `employee` table scanned with no projection yet.

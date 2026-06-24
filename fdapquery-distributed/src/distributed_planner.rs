@@ -151,7 +151,7 @@ mod tests {
     use super::*;
     use crate::ExecutorConfig;
     use fdapquery_datasource::CsvDataSource;
-    use fdapquery_logical_plan::{Aggregate, LogicalPlan, Scan, col, sum};
+    use fdapquery_expr::{Aggregate, LogicalPlan, Scan, col, sum};
     use fdapquery_optimizer::Optimizer;
     use fdapquery_query_planner::QueryPlanner;
     use std::sync::Arc;

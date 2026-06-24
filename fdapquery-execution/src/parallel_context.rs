@@ -45,7 +45,7 @@ use rayon::prelude::*;
 
 use fdapquery_datasource::{CsvDataSource, DataSource};
 use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
-use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
+use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
 use fdapquery_physical_plan::{
     AggregateMode, ExecutionPlan, HashAggregateExec, PlanProperties, RecordBatchStreamAdapter,

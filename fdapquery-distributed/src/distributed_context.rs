@@ -10,7 +10,7 @@
 use crate::{DistributedConfig, DistributedPlanner, ExecutorClient, Scheduler};
 use fdapquery_datasource::CsvDataSource;
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
+use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
 use fdapquery_physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use fdapquery_query_planner::QueryPlanner;

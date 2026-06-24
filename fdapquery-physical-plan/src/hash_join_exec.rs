@@ -1,7 +1,7 @@
 //!
 //! Hash equi-join. Builds a hash table from the **right** (build) side keyed by
 //! the right join columns, then probes it with each **left** (probe) row. Supports
-//! `Inner`, `Left`, and `Right` joins (the three variants of `fdapquery_logical_plan::JoinType`).
+//! `Inner`, `Left`, and `Right` joins (the three variants of `fdapquery_expr::JoinType`).
 //!
 //! ## Implementation notes
 //! - **Join keys / rows are `Vec<ScalarValue>`.** The hash table is keyed by
@@ -26,7 +26,7 @@ use fdapquery_datatypes::{
     ArrowFieldVector, ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result,
     ScalarValue, Schema, record_batch,
 };
-use fdapquery_logical_plan::JoinType;
+use fdapquery_expr::JoinType;
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

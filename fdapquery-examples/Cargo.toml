@@ -11,7 +11,7 @@ rust-version.workspace = true
 fdapquery-execution       = { path = "../fdapquery-execution" }
 fdapquery-datasource      = { path = "../fdapquery-datasource" }    # InMemoryDataSource for parallel_query
 fdapquery-datatypes       = { path = "../fdapquery-datatypes" }     # RecordBatch, ScalarValue, arrow_types
-fdapquery-logical-plan    = { path = "../fdapquery-logical-plan" }  # col, cast, max, format, …
+fdapquery-expr    = { path = "../fdapquery-expr" }  # col, cast, max, format, …
 fdapquery-optimizer       = { path = "../fdapquery-optimizer" }     # Optimizer used by nyc_taxi
 # `distributed_example` and `distributed_flight_example` use the distributed
 # stack. The former impls `ExecutorClient` directly; the latter uses

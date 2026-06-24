@@ -43,8 +43,8 @@ tracing          = { workspace = true }
 #   `FlightExecutorClient` ships across the wire.
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
 fdapquery-datasource    = { path = "../fdapquery-datasource" }
-fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
-fdapquery-protobuf      = { path = "../fdapquery-protobuf" }
+fdapquery-expr  = { path = "../fdapquery-expr" }
+fdapquery-proto      = { path = "../fdapquery-proto" }
 fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
 fdapquery-distributed   = { path = "../fdapquery-distributed" }
 fdapquery-sql           = { path = "../fdapquery-sql" }

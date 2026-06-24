@@ -41,7 +41,7 @@ pub trait MathExpression: BinaryExpression {
     ) -> Result<ScalarValue>;
 
     /// Wire-format operator name (`"add"`, `"subtract"`, `"multiply"`,
-    /// `"divide"`). Used by `fdapquery_protobuf::serialize_physical_expr` to serialise
+    /// `"divide"`). Used by `fdapquery_proto::serialize_physical_expr` to serialise
     /// this expression as a `pb::PhysicalBinaryExprNode` with the matching
     /// `op` string. Same shape as `BooleanExpression::op_name`.
     fn op_name(&self) -> &'static str;

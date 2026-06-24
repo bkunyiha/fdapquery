@@ -50,7 +50,7 @@ use fdapquery_distributed::{ExecutorClient, ExecutorConfig};
 use fdapquery_physical_plan::{
     RecordBatchStreamAdapter, SendableRecordBatchStream, ShuffleLocation, Task,
 };
-use fdapquery_protobuf::{pb, serialize_task};
+use fdapquery_proto::{pb, serialize_task};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};

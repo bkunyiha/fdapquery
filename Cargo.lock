@@ -706,10 +706,10 @@ dependencies = [
  "fdapquery-datasource",
  "fdapquery-datatypes",
  "fdapquery-distributed",
+ "fdapquery-expr",
  "fdapquery-flight-server",
- "fdapquery-logical-plan",
  "fdapquery-physical-plan",
- "fdapquery-protobuf",
+ "fdapquery-proto",
  "fdapquery-sql",
  "futures",
  "prost",
@@ -757,7 +757,7 @@ dependencies = [
  "async-trait",
  "fdapquery-datasource",
  "fdapquery-datatypes",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
  "fdapquery-optimizer",
  "fdapquery-physical-plan",
  "fdapquery-query-planner",
@@ -781,8 +781,8 @@ dependencies = [
  "fdapquery-datatypes",
  "fdapquery-distributed",
  "fdapquery-execution",
+ "fdapquery-expr",
  "fdapquery-flight-server",
- "fdapquery-logical-plan",
  "fdapquery-optimizer",
  "fdapquery-physical-plan",
  "futures",
@@ -800,8 +800,8 @@ dependencies = [
  "arrow",
  "fdapquery-datasource",
  "fdapquery-datatypes",
+ "fdapquery-expr",
  "fdapquery-fuzzer",
- "fdapquery-logical-plan",
  "fdapquery-optimizer",
  "fdapquery-physical-plan",
  "fdapquery-query-planner",
@@ -809,6 +809,16 @@ dependencies = [
  "futures",
  "rayon",
  "tokio",
+]
+
+[[package]]
+name = "fdapquery-expr"
+version = "0.1.0"
+dependencies = [
+ "arrow-schema",
+ "chrono",
+ "fdapquery-datasource",
+ "fdapquery-datatypes",
 ]
 
 [[package]]
@@ -821,9 +831,9 @@ dependencies = [
  "fdapquery-datasource",
  "fdapquery-datatypes",
  "fdapquery-execution",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
  "fdapquery-physical-plan",
- "fdapquery-protobuf",
+ "fdapquery-proto",
  "fdapquery-query-planner",
  "fdapquery-sql",
  "futures",
@@ -842,19 +852,9 @@ dependencies = [
  "arrow-schema",
  "fdapquery-datasource",
  "fdapquery-datatypes",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
  "fdapquery-sql",
  "rand",
-]
-
-[[package]]
-name = "fdapquery-logical-plan"
-version = "0.1.0"
-dependencies = [
- "arrow-schema",
- "chrono",
- "fdapquery-datasource",
- "fdapquery-datatypes",
 ]
 
 [[package]]
@@ -863,7 +863,7 @@ version = "0.1.0"
 dependencies = [
  "fdapquery-datasource",
  "fdapquery-datatypes",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
 ]
 
 [[package]]
@@ -876,21 +876,21 @@ dependencies = [
  "async-stream",
  "fdapquery-datasource",
  "fdapquery-datatypes",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
  "futures",
  "pin-project-lite",
  "tokio",
 ]
 
 [[package]]
-name = "fdapquery-protobuf"
+name = "fdapquery-proto"
 version = "0.1.0"
 dependencies = [
  "arrow-schema",
  "chrono",
  "fdapquery-datasource",
  "fdapquery-datatypes",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
  "fdapquery-physical-plan",
  "prost",
  "tonic",
@@ -904,7 +904,7 @@ dependencies = [
  "chrono",
  "fdapquery-datasource",
  "fdapquery-datatypes",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
  "fdapquery-optimizer",
  "fdapquery-physical-plan",
 ]
@@ -917,7 +917,7 @@ dependencies = [
  "chrono",
  "fdapquery-datasource",
  "fdapquery-datatypes",
- "fdapquery-logical-plan",
+ "fdapquery-expr",
 ]
 
 [[package]]

@@ -29,7 +29,7 @@ use arrow_flight::{
 };
 use fdapquery_execution::execution_context::ExecutionContext;
 use fdapquery_physical_plan::{ShuffleWriterExec, TaskContext};
-use fdapquery_protobuf::{deserialize_logical_plan, deserialize_task, pb};
+use fdapquery_proto::{deserialize_logical_plan, deserialize_task, pb};
 use futures::{Stream, StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -271,7 +271,7 @@ impl FlightService for FdapQueryFlightProducer {
     ///
     /// ### Wire flow
     /// 1. `action.body` (bytes) is decoded as [`pb::TaskInfo`] via `prost::Message::decode`.
-    /// 2. [`fdapquery_protobuf::deserialize_task`] converts it to a `fdapquery_physical_plan::Task`
+    /// 2. [`fdapquery_proto::deserialize_task`] converts it to a `fdapquery_physical_plan::Task`
     ///    (which carries `Arc<dyn PhysicalPlan>`).
     /// 3. Dispatch on the plan's concrete type via `as_any().downcast_ref::<ShuffleWriterExec>()`:
     ///    - `ShuffleWriterExec` → call [`ShuffleWriterExec::write_shuffle`],
@@ -393,7 +393,7 @@ mod tests {
         ColumnExpression, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
         ShuffleWriterExec, Task,
     };
-    use fdapquery_protobuf::serialize_task;
+    use fdapquery_proto::serialize_task;
     use futures::StreamExt;
     use std::sync::Arc;
 
@@ -522,8 +522,8 @@ mod tests {
 
     #[tokio::test]
     async fn do_get_streams_flight_data_for_a_logical_plan() {
-        use fdapquery_logical_plan::{LogicalPlan, Scan};
-        use fdapquery_protobuf::serialize_logical_plan;
+        use fdapquery_expr::{LogicalPlan, Scan};
+        use fdapquery_proto::serialize_logical_plan;
         use futures::StreamExt;
 
         let base = temp_dir("do-get-happy");

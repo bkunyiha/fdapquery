@@ -28,7 +28,7 @@ use fdapquery_datatypes::RecordBatch;
 use fdapquery_datatypes::arrow_types::FLOAT_TYPE;
 use fdapquery_datatypes::record_batch::to_csv;
 use fdapquery_execution::ExecutionContext;
-use fdapquery_logical_plan::{cast, col, format, max};
+use fdapquery_expr::{cast, col, format, max};
 use fdapquery_optimizer::Optimizer;
 use futures::TryStreamExt;
 

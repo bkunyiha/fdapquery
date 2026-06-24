@@ -19,7 +19,7 @@
 
 use crate::pb;
 use fdapquery_datasource::{CsvDataSource, ParquetDataSource};
-use fdapquery_logical_plan::{AggregateExpr, JoinType, LogicalExpr, LogicalPlan};
+use fdapquery_expr::{AggregateExpr, JoinType, LogicalExpr, LogicalPlan};
 
 /// Convert a `LogicalPlan` to its `pb::LogicalPlanNode` form.
 pub fn serialize_logical_plan(plan: &LogicalPlan) -> pb::LogicalPlanNode {
@@ -176,7 +176,7 @@ pub fn serialize_logical_aggregate_expr(ae: &AggregateExpr) -> pb::LogicalExprNo
     }
 }
 
-/// `fdapquery_logical_plan::JoinType` does not implement `Copy` (and the helper only
+/// `fdapquery_expr::JoinType` does not implement `Copy` (and the helper only
 /// reads it, so there's no reason to take ownership).
 fn join_type_to_proto(jt: &JoinType) -> pb::JoinType {
     match jt {
@@ -203,7 +203,7 @@ mod tests {
     use super::serialize_logical_plan;
     use crate::deserialize_logical_plan;
     use fdapquery_datasource::CsvDataSource;
-    use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan, col, format, lit_string};
+    use fdapquery_expr::{DataFrame, LogicalPlan, Scan, col, format, lit_string};
     use std::sync::Arc;
 
     /// In-repo employee fixture from the workspace-shared `testdata/`

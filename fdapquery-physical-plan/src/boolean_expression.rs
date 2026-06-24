@@ -59,7 +59,7 @@ pub trait BooleanExpression: Expression {
     ) -> Result<Option<bool>>;
 
     /// Wire-format operator name (`"eq"`, `"and"`, …). Used by
-    /// `fdapquery_protobuf::serialize_physical_expr` to serialise this expression as a
+    /// `fdapquery_proto::serialize_physical_expr` to serialise this expression as a
     /// `pb::PhysicalBinaryExprNode` with the matching `op` string.
     fn op_name(&self) -> &'static str;
 
@@ -267,7 +267,7 @@ fn or3(l: Option<bool>, r: Option<bool>) -> Option<bool> {
 /// method.
 macro_rules! boolean_op {
     // `$proto_op` is the wire-format operator name used by
-    // `fdapquery_protobuf::serialize_physical_expr` (e.g. "eq", "neq", "and"). It is
+    // `fdapquery_proto::serialize_physical_expr` (e.g. "eq", "neq", "and"). It is
     // distinct from `$sym` (the Display symbol like "=", "!=", "AND").
     ($name:ident, $sym:literal, $proto_op:literal,
      |$l:ident, $r:ident, $t:ident| $body:expr) => {

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use fdapquery_datasource::{CsvDataSource, DataSource};
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan};
+use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
 use fdapquery_physical_plan::{RuntimeEnv, SendableRecordBatchStream, SessionConfig, TaskContext};
 use fdapquery_query_planner::QueryPlanner;
@@ -157,8 +157,8 @@ mod tests {
     use fdapquery_datatypes::arrow_types::{BOOLEAN_TYPE, FLOAT_TYPE, INT32_TYPE, STRING_TYPE};
     use fdapquery_datatypes::record_batch::to_csv;
     use fdapquery_datatypes::{Field, ScalarValue, Schema};
+    use fdapquery_expr::{JoinType, cast, col, format, lit_string, max, min, sum};
     use fdapquery_fuzzer::Fuzzer;
-    use fdapquery_logical_plan::{JoinType, cast, col, format, lit_string, max, min, sum};
     use futures::TryStreamExt;
     use std::collections::HashSet;
 

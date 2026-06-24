@@ -10,7 +10,7 @@ rust-version.workspace = true
 [dependencies]
 chrono        = { workspace = true }   # NaiveDate → days_since_epoch for LiteralDate lowering
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-logical-plan  = { path = "../fdapquery-logical-plan" }
+fdapquery-expr  = { path = "../fdapquery-expr" }
 fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
 
 [dev-dependencies]

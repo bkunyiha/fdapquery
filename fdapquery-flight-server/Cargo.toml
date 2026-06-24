@@ -30,11 +30,11 @@ prost            = { workspace = true }
 # Internal — eight siblings.
 fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
 fdapquery-datasource     = { path = "../fdapquery-datasource" }
-fdapquery-logical-plan   = { path = "../fdapquery-logical-plan" }
+fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
 fdapquery-query-planner  = { path = "../fdapquery-query-planner" }
 fdapquery-sql            = { path = "../fdapquery-sql" }
-fdapquery-protobuf       = { path = "../fdapquery-protobuf" }
+fdapquery-proto       = { path = "../fdapquery-proto" }
 fdapquery-execution      = { path = "../fdapquery-execution" }
 
 # `tracing` for log macros (matches distributed/'s logging choice — both crates

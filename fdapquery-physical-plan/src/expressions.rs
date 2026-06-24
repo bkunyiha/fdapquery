@@ -6,7 +6,7 @@
 //!
 //! A physical expression evaluates against an input [`RecordBatch`] and produces
 //! a whole column of output ([`ColumnVector`]) — it is the runtime counterpart of
-//! a `fdapquery_logical_plan::LogicalExpr`.
+//! a `fdapquery_expr::LogicalExpr`.
 //!
 //! ## Typed values via `ScalarValue`
 //! `Accumulator` and related traits exchange typed values via the

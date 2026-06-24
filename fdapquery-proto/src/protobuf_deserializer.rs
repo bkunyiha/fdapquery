@@ -26,7 +26,7 @@
 use crate::pb;
 use fdapquery_datasource::{CsvDataSource, ParquetDataSource};
 use fdapquery_datatypes::{Field, Schema, arrow_types};
-use fdapquery_logical_plan::{
+use fdapquery_expr::{
     Aggregate, AggregateExpr, Limit, LogicalExpr, LogicalPlan, Projection, Scan, Selection,
 };
 // JoinNode is not deserialised here. If/when that's added, re-import `JoinType`.

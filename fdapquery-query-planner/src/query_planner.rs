@@ -20,15 +20,15 @@
 //!   `NaiveDate::num_days_from_ce()` converted to days-since-Unix-epoch.
 
 use fdapquery_datatypes::{FdapQueryError, Result, Schema};
-use fdapquery_logical_plan::{AggregateExpr, LogicalExpr, LogicalPlan};
+use fdapquery_expr::{AggregateExpr, LogicalExpr, LogicalPlan};
 use fdapquery_physical_plan::{
     AddExpression, AggregateExpression, AndExpression, AvgExpression, CastExpression,
     ColumnExpression, CountExpression, DateAddIntervalExpression, DateSubtractIntervalExpression,
-    DivideExpression, EqExpression, Expression, GtEqExpression, GtExpression, HashAggregateExec,
-    HashJoinExec, LimitExec, LiteralDateExpression, LiteralDoubleExpression,
+    DivideExpression, EqExpression, ExecutionPlan, Expression, GtEqExpression, GtExpression,
+    HashAggregateExec, HashJoinExec, LimitExec, LiteralDateExpression, LiteralDoubleExpression,
     LiteralIntervalDaysExpression, LiteralLongExpression, LiteralStringExpression, LtEqExpression,
     LtExpression, MaxExpression, MinExpression, MultiplyExpression, NeqExpression, OrExpression,
-    ExecutionPlan, ProjectionExec, ScanExec, SelectionExec, SubtractExpression, SumExpression,
+    ProjectionExec, ScanExec, SelectionExec, SubtractExpression, SumExpression,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -349,7 +349,7 @@ mod tests {
     use fdapquery_datasource::InMemoryDataSource;
     use fdapquery_datatypes::arrow_types::{DOUBLE_TYPE, UINT32_TYPE};
     use fdapquery_datatypes::{Field, Schema};
-    use fdapquery_logical_plan::{DataFrame, LogicalPlan, Scan, col, max};
+    use fdapquery_expr::{DataFrame, LogicalPlan, Scan, col, max};
     use fdapquery_optimizer::Optimizer;
     use std::sync::Arc;
 
