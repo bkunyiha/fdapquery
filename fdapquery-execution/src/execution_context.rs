@@ -25,8 +25,8 @@ use fdapquery_datasource::{CsvDataSource, DataSource};
 use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
+use fdapquery_physical_plan::QueryPlanner;
 use fdapquery_physical_plan::{RuntimeEnv, SendableRecordBatchStream, SessionConfig, TaskContext};
-use fdapquery_query_planner::QueryPlanner;
 // `PrattParser` brings the `parse` method into scope for `SqlParser`.
 use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 

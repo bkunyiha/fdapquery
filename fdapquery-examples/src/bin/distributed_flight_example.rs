@@ -58,9 +58,9 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
-use fdapquery_client::FlightExecutorClient;
 use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
 use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
+use fdapquery_flight_client::FlightExecutorClient;
 use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
 use fdapquery_physical_plan::{RuntimeEnv, SessionConfig, ShuffleManager, TaskContext};
 use futures::TryStreamExt;

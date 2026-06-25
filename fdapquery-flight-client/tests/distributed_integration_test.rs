@@ -35,9 +35,9 @@
 //! runtime so the test and server runtimes don't share workers; an
 //! `mpsc` channel ships the bound address back to the test thread.
 
-use fdapquery_client::FlightExecutorClient;
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
+use fdapquery_flight_client::FlightExecutorClient;
 use futures::TryStreamExt;
 use std::sync::Arc;
 use std::sync::mpsc;

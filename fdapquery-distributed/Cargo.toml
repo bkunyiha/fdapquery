@@ -42,7 +42,6 @@ fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
 fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
 fdapquery-optimizer      = { path = "../fdapquery-optimizer" }
-fdapquery-query-planner  = { path = "../fdapquery-query-planner" }
 fdapquery-sql            = { path = "../fdapquery-sql" }
 
 [dev-dependencies]

@@ -1,5 +1,5 @@
 [package]
-name         = "fdapquery-client"
+name         = "fdapquery-flight-client"
 description  = "Flight client wrapper and FlightExecutorClient for the distributed scheduler."
 edition.workspace      = true
 license.workspace      = true

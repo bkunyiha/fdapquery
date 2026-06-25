@@ -64,6 +64,11 @@ pub mod partitioning;
 pub mod physical_plan;
 pub mod plan_properties;
 pub mod projection_exec;
+// `query_planner` (folded in from the dissolved `fdapquery-query-planner`
+// crate in Session 12) translates `LogicalPlan` to `Arc<dyn ExecutionPlan>`.
+// Lives here because that's where DataFusion puts `DefaultPhysicalPlanner`,
+// and every consumer that calls it already depends on this crate.
+pub mod query_planner;
 pub mod scan_exec;
 pub mod selection_exec;
 pub mod shuffle_location;
@@ -100,6 +105,10 @@ pub use math_expression::{
     AddExpression, DivideExpression, MathExpression, MultiplyExpression, SubtractExpression,
 };
 pub use physical_plan::{ExecutionPlan, format};
+// The folded `QueryPlanner` — DataFusion-style re-export so consumers
+// can write `use fdapquery_physical_plan::QueryPlanner;` rather than the
+// submodule path.
+pub use query_planner::QueryPlanner;
 // Phase B foundation: per-task context, partitioning descriptor, and the
 // async record-batch stream surface. These live in `fdapquery-physical-plan`
 // during Phase B because the `ExecutionPlan` trait that references them is

@@ -153,7 +153,7 @@ mod tests {
     use fdapquery_datasource::CsvDataSource;
     use fdapquery_expr::{Aggregate, LogicalPlan, Scan, col, sum};
     use fdapquery_optimizer::Optimizer;
-    use fdapquery_query_planner::QueryPlanner;
+    use fdapquery_physical_plan::QueryPlanner;
     use std::sync::Arc;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";

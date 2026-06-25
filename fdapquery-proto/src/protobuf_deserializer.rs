@@ -241,7 +241,7 @@ fn from_proto_arrow_type(arrow_type: i32) -> DataType {
 }
 
 /// Days-since-Unix-epoch → `chrono::NaiveDate`. Inverse of the helper in
-/// `protobuf_serializer.rs`; same shape as `fdapquery_query_planner::days_since_unix_epoch`.
+/// `protobuf_serializer.rs`; same shape as `fdapquery_physical_plan::days_since_unix_epoch`.
 fn naive_date_from_days(days: i32) -> chrono::NaiveDate {
     let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is a valid date");
     epoch + chrono::Duration::days(days as i64)

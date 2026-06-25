@@ -187,7 +187,7 @@ fn join_type_to_proto(jt: &JoinType) -> pb::JoinType {
 }
 
 /// `chrono::NaiveDate` → days since the Unix epoch (1970-01-01). Same helper
-/// shape as `fdapquery_query_planner::days_since_unix_epoch`; duplicated here to avoid
+/// shape as `fdapquery_physical_plan::days_since_unix_epoch`; duplicated here to avoid
 /// pulling the entire `query-planner` crate into `protobuf`'s deps just for one
 /// trivial date conversion.
 fn days_since_unix_epoch(date: chrono::NaiveDate) -> i32 {

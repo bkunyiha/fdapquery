@@ -26,6 +26,11 @@ pin-project-lite = { workspace = true }
 # stateful operators (HashAggregateExec, HashJoinExec, LimitExec) to express
 # blocking aggregation as a sequential body that .awaits and yields.
 async-stream     = { workspace = true }
+# `chrono::NaiveDate` is used by the folded `query_planner` module's
+# `days_since_unix_epoch` helper to lower a logical `LiteralDate` into the
+# physical `LiteralDateExpression { days_since_epoch: i32 }`. Folded in
+# from the dissolved `fdapquery-query-planner` crate in Session 12.
+chrono           = { workspace = true }
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
 fdapquery-datasource    = { path = "../fdapquery-datasource" }
 fdapquery-expr  = { path = "../fdapquery-expr" }
@@ -39,3 +44,9 @@ arrow-array   = { workspace = true }
 # Tokio runtime for `#[tokio::test]` — every operator's test drives an async
 # stream to completion via `try_collect().await`.
 tokio         = { workspace = true }
+# `query_planner.rs`'s in-file test (`build_aggregate_plan_for_max_passenger_count`)
+# builds a logical plan, optimises it, then plans it — so it needs the
+# optimizer crate. Folded in from the dissolved `fdapquery-query-planner`'s
+# dev-dependencies in Session 12. Optimizer only depends on
+# `fdapquery-expr` (no path to `fdapquery-physical-plan`), so no cycle.
+fdapquery-optimizer = { path = "../fdapquery-optimizer" }

@@ -12,8 +12,8 @@ use fdapquery_datasource::CsvDataSource;
 use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
+use fdapquery_physical_plan::QueryPlanner;
 use fdapquery_physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use fdapquery_query_planner::QueryPlanner;
 // `PrattParser` trait must be in scope for `SqlParser::parse()`.
 use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 use std::collections::HashMap;

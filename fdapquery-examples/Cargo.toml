@@ -19,7 +19,7 @@ fdapquery-optimizer       = { path = "../fdapquery-optimizer" }     # Optimizer 
 # `flight-server`.
 fdapquery-distributed     = { path = "../fdapquery-distributed" }
 fdapquery-physical-plan   = { path = "../fdapquery-physical-plan" }
-fdapquery-client          = { path = "../fdapquery-client" }
+fdapquery-flight-client          = { path = "../fdapquery-flight-client" }
 fdapquery-flight-server   = { path = "../fdapquery-flight-server" }
 # Used by `distributed_flight_example` to spawn the in-process tonic server
 # and bind a random TCP port — same pattern as

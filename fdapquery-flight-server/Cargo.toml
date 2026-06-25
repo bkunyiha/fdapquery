@@ -32,7 +32,6 @@ fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
 fdapquery-datasource     = { path = "../fdapquery-datasource" }
 fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
-fdapquery-query-planner  = { path = "../fdapquery-query-planner" }
 fdapquery-sql            = { path = "../fdapquery-sql" }
 fdapquery-proto       = { path = "../fdapquery-proto" }
 fdapquery-execution      = { path = "../fdapquery-execution" }

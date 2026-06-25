@@ -21,7 +21,10 @@
 
 use fdapquery_datatypes::{FdapQueryError, Result, Schema};
 use fdapquery_expr::{AggregateExpr, LogicalExpr, LogicalPlan};
-use fdapquery_physical_plan::{
+// Items from sibling modules in this crate. (Pre-Session-12 these were
+// imported via `fdapquery_physical_plan::` since `query_planner` lived
+// in a separate crate; after the fold the path is `crate::`.)
+use crate::{
     AddExpression, AggregateExpression, AndExpression, AvgExpression, CastExpression,
     ColumnExpression, CountExpression, DateAddIntervalExpression, DateSubtractIntervalExpression,
     DivideExpression, EqExpression, ExecutionPlan, Expression, GtEqExpression, GtExpression,
@@ -380,7 +383,7 @@ mod tests {
         // max_fare at index 0 and passenger_count at index 1, so the group key is
         // #1 and the MAX argument is #0. (`format` is the free fn — `pretty()` is
         // gated `where Self: Sized` and isn't callable on `Arc<dyn ExecutionPlan>`.)
-        let pretty = fdapquery_physical_plan::format(physical.as_ref());
+        let pretty = crate::format(physical.as_ref());
         assert!(
             pretty.starts_with(
                 "HashAggregateExec: groupExpr=[#1], aggrExpr=[MAX(#0)], mode=Complete"

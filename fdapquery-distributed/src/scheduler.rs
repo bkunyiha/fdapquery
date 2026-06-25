@@ -239,8 +239,8 @@ mod tests {
     use fdapquery_datatypes::{RecordBatch, Schema};
     use fdapquery_expr::{Aggregate, LogicalPlan, Scan, col, sum};
     use fdapquery_optimizer::Optimizer;
+    use fdapquery_physical_plan::QueryPlanner;
     use fdapquery_physical_plan::RecordBatchStreamAdapter;
-    use fdapquery_query_planner::QueryPlanner;
     use futures::TryStreamExt;
     use std::sync::{Arc, Mutex};
 

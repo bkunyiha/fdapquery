@@ -206,7 +206,7 @@ impl FlightService for FdapQueryFlightProducer {
                     .map_err(|e| Status::internal(format!("task plan setup error: {e}")))?
             } else if let Some(plan_node) = action.query {
                 // Direct Flight logical-plan path, not the distributed
-                // scheduler path. `fdapquery_client::Context::execute` sends
+                // scheduler path. `fdapquery_flight_client::Context::execute` sends
                 // `Action.query = Some(LogicalPlanNode)` when one Flight
                 // server should execute the whole logical plan itself.
                 // Distributed final stages use `Action.task = Some(TaskInfo)`
