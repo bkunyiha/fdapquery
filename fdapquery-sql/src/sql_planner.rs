@@ -484,7 +484,7 @@ mod tests {
     use crate::pratt_parser::PrattParser;
     use crate::sql_parser::SqlParser;
     use crate::sql_tokenizer::SqlTokenizer;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use fdapquery_expr::{LogicalPlan, Scan, format};
     use std::sync::Arc;
 

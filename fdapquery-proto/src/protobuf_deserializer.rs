@@ -24,7 +24,7 @@
 //!   rather than guess at semantics.
 
 use crate::pb;
-use fdapquery_datasource::{CsvDataSource, ParquetDataSource};
+use fdapquery_catalog::{CsvDataSource, ParquetDataSource};
 use fdapquery_datatypes::{Field, Schema, arrow_types};
 use fdapquery_expr::{
     Aggregate, AggregateExpr, Limit, LogicalExpr, LogicalPlan, Projection, Scan, Selection,

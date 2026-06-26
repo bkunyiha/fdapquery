@@ -24,7 +24,8 @@
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::{Action, Ticket};
-use fdapquery_datasource::{CsvDataSource, DataSource};
+use fdapquery_catalog::CsvDataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_expr::{LogicalPlan, Scan};
 use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
@@ -104,12 +105,12 @@ async fn connect_client(addr: std::net::SocketAddr) -> FlightServiceClient<Chann
 }
 
 fn build_employee_scan_plan() -> LogicalPlan {
-    let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
+    let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
     LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, ds, vec![]).unwrap())
 }
 
 fn build_shuffle_writer_task() -> Task {
-    let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
+    let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
     let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
     let scan: Arc<dyn ExecutionPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
     let writer: Arc<dyn ExecutionPlan> = Arc::new(ShuffleWriterExec::new(
@@ -224,7 +225,7 @@ async fn integration_do_get_streams_record_batches() {
 
     // All batches share the same schema (the scan's output schema). At minimum,
     // every batch's column count matches the input.
-    let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
+    let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
     let expected_columns = ds.schema().fields.len();
     for b in &batches {
         assert_eq!(b.num_columns(), expected_columns);

@@ -12,10 +12,10 @@
 //!   indices here before passing them in.
 //! - I/O and parse errors panic (`File::open` failure, malformed CSV, etc.).
 
-use crate::data_source::DataSource;
+use crate::table_provider::{BoxRecordBatchStream, TableProvider};
 use arrow::csv::{ReaderBuilder, reader::Format};
 use fdapquery_datatypes::{
-    FdapQueryError, RecordBatch, Result, Schema, schema::from_arrow as schema_from_arrow,
+    FdapQueryError, Result, Schema, schema::from_arrow as schema_from_arrow,
 };
 use std::fs::File;
 use std::sync::Arc;
@@ -78,21 +78,18 @@ impl CsvDataSource {
     }
 }
 
-impl DataSource for CsvDataSource {
+impl TableProvider for CsvDataSource {
     fn schema(&self) -> Schema {
         self.schema.clone().unwrap_or_else(|| self.infer_schema())
     }
 
-    /// Type-erased self-reference for runtime downcasting. See the trait-level
-    /// note on `DataSource::as_any` for the rationale.
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn scan(
-        &self,
-        projection: &[String],
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>> + Send>> {
+    /// Produce the record-batch stream for the given projection. An
+    /// empty `projection` slice means "all columns".
+    fn scan(&self, projection: &[String]) -> Result<BoxRecordBatchStream> {
         let file = File::open(&self.filename)?;
 
         // Determine the schema used by the reader (typed schema, not projected).
@@ -100,7 +97,7 @@ impl DataSource for CsvDataSource {
         let full_arrow_schema = Arc::new(full_schema.to_arrow());
 
         // Build the reader. Note: `with_projection` requires column indices.
-        let mut builder = ReaderBuilder::new(full_arrow_schema.clone())
+        let mut builder = ReaderBuilder::new(full_arrow_schema)
             .with_header(self.has_headers)
             .with_batch_size(self.batch_size)
             .with_delimiter(self.delimiter);
@@ -128,15 +125,19 @@ impl DataSource for CsvDataSource {
 
         // The reader yields `Result<RecordBatch, ArrowError>`. Lift each
         // per-batch error into `FdapQueryError` via the `#[from]` derive
-        // on `FdapQueryError::ArrowError`.
-        Ok(Box::new(reader.map(|res| res.map_err(Into::into))))
+        // on `FdapQueryError::ArrowError`, then wrap the sync iterator
+        // as a pin-boxed Stream.
+        let iter = reader.map(|res| res.map_err(Into::into));
+        Ok(Box::pin(futures::stream::iter(iter)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fdapquery_datatypes::RecordBatch;
     use fdapquery_datatypes::record_batch::row_count;
+    use futures::TryStreamExt;
 
     // Test data fixtures live at testdata/employee.csv etc., relative to the
     // workspace root. Cargo runs tests from the crate directory, so we point
@@ -145,19 +146,25 @@ mod tests {
         format!("../testdata/{}", name)
     }
 
-    #[test]
-    fn read_csv_with_no_projection() {
+    /// Drain a `scan` stream into a Vec of batches.
+    async fn drain_scan(csv: &CsvDataSource, projection: &[String]) -> Vec<RecordBatch> {
+        csv.scan(projection)
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn read_csv_with_no_projection() {
         let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1024);
-        let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().collect::<Result<Vec<_>>>().unwrap();
+        let batches = drain_scan(&csv, &[]).await;
         assert_eq!(batches.len(), 1);
         let b = &batches[0];
         // employee.csv has 4 rows.
         assert_eq!(row_count(b), 4);
         // 6 columns: id, first_name, last_name, state, job_title, salary.
         assert_eq!(b.num_columns(), 6);
-        // Bind the schema to a local so the &str borrows from f.name() outlive
-        // the statement (the SchemaRef returned by b.schema() is otherwise a
-        // temporary that drops at the semicolon).
         let schema = b.schema();
         let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         for expected in [
@@ -172,28 +179,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn read_csv_with_projection() {
+    #[tokio::test]
+    async fn read_csv_with_projection() {
         let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1024);
         let projection = vec![
             "first_name".to_string(),
             "last_name".to_string(),
             "state".to_string(),
         ];
-        let batches: Vec<RecordBatch> = csv
-            .scan(&projection)
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+        let batches = drain_scan(&csv, &projection).await;
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_columns(), 3);
         assert_eq!(row_count(&batches[0]), 4);
     }
 
-    #[test]
-    fn read_csv_with_small_batch_splits_into_multiple_batches() {
+    #[tokio::test]
+    async fn read_csv_with_small_batch_splits_into_multiple_batches() {
         let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1);
-        let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().collect::<Result<Vec<_>>>().unwrap();
+        let batches = drain_scan(&csv, &[]).await;
         // 4 rows, batch size 1 → 4 batches.
         assert_eq!(batches.len(), 4);
         for b in &batches {
@@ -207,8 +210,8 @@ mod tests {
     /// delimiter and does not support multi-space "delimiters", so this smoke
     /// test uses `testdata/employee_no_header.tsv` (which IS actually
     /// tab-separated, hex `0x09`).
-    #[test]
-    fn read_tsv_no_header() {
+    #[tokio::test]
+    async fn read_tsv_no_header() {
         // employee_no_header.tsv is real tab-separated, no header row.
         // Provide an explicit schema since there's no header to infer names from.
         use fdapquery_datatypes::arrow_types::STRING_TYPE;
@@ -222,11 +225,49 @@ mod tests {
             Field::new("field_6", STRING_TYPE),
         ]);
         let csv = CsvDataSource::tsv(fixture("employee_no_header.tsv"), Some(schema), false, 1024);
-        let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().collect::<Result<Vec<_>>>().unwrap();
+        let batches = drain_scan(&csv, &[]).await;
         assert_eq!(batches.len(), 1);
         // employee_no_header.tsv has 3 rows.
         assert_eq!(row_count(&batches[0]), 3);
         // 6 columns, all parsed as strings since the schema was forced to all-Utf8.
         assert_eq!(batches[0].num_columns(), 6);
+    }
+
+    // --- Session 13b: TableProvider trait-surface tests ----
+    // The planning-surface tests (scan returning Arc<dyn ExecutionPlan>)
+    // are deferred to Phase D when the TableSource/TableProvider split
+    // breaks the catalog → physical-plan dep cycle.
+
+    #[tokio::test]
+    async fn csv_scan_via_trait_object_returns_all_rows() {
+        let csv: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
+            fixture("employee.csv"),
+            None,
+            true,
+            1024,
+        ));
+        let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().try_collect().await.unwrap();
+        let total: usize = batches.iter().map(|b| row_count(b)).sum();
+        assert_eq!(total, 4);
+    }
+
+    #[tokio::test]
+    async fn csv_scan_with_unknown_projection_returns_err() {
+        let csv: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
+            fixture("employee.csv"),
+            None,
+            true,
+            1024,
+        ));
+        let err = csv.scan(&["nonexistent".to_string()]);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn as_any_downcasts_to_csv_data_source() {
+        let csv = CsvDataSource::new(fixture("employee.csv"), None, true, 1024);
+        let provider: Arc<dyn TableProvider> = Arc::new(csv);
+        let downcast = provider.as_any().downcast_ref::<CsvDataSource>();
+        assert!(downcast.is_some(), "CsvDataSource downcast failed");
     }
 }

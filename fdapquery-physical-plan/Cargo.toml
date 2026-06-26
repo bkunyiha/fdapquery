@@ -32,8 +32,14 @@ async-stream     = { workspace = true }
 # from the dissolved `fdapquery-query-planner` crate in Session 12.
 chrono           = { workspace = true }
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-datasource    = { path = "../fdapquery-datasource" }
+fdapquery-catalog    = { path = "../fdapquery-catalog" }
 fdapquery-expr  = { path = "../fdapquery-expr" }
+# Phase C / Session 13a: the `Expression` / `AggregateExpression` / `Accumulator`
+# traits and every concrete expression type were split out into
+# `fdapquery-physical-expr`. Operators here consume them via this path-dep.
+# `pub use fdapquery_physical_expr::*` re-exports in `src/lib.rs` keep external
+# consumers' `use fdapquery_physical_plan::Expression;` working.
+fdapquery-physical-expr = { path = "../fdapquery-physical-expr" }
 
 [dev-dependencies]
 # Tests build RecordBatches directly from typed arrow arrays (Int32Array, …)

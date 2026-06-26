@@ -14,7 +14,7 @@ tonic         = { workspace = true }
 chrono        = { workspace = true }       # NaiveDate for LogicalExpr::LiteralDate serdes
 arrow-schema  = { workspace = true }       # DataType return-type for from_proto_arrow_type
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-datasource    = { path = "../fdapquery-datasource" } # CsvDataSource / ParquetDataSource for scan deserialisation
+fdapquery-catalog    = { path = "../fdapquery-catalog" } # CsvDataSource / ParquetDataSource for scan deserialisation
 fdapquery-expr  = { path = "../fdapquery-expr" }
 fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
 

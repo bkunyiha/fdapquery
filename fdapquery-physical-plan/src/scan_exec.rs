@@ -17,38 +17,38 @@ use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
 use crate::task_context::TaskContext;
-use fdapquery_datasource::DataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{FdapQueryError, Result, Schema};
 use std::fmt;
 use std::sync::Arc;
 
-/// Scan a data source with optional push-down projection.
+/// Scan a table provider with optional push-down projection.
 ///
-/// `ds` is held as `Arc<dyn DataSource>` (matching the logical `Scan`
-/// operator), so the same source can be shared across plan nodes. The
-/// output schema is computed once at construction (`Schema::select`
-/// over the projection) and cached — matching DataFusion's
-/// `ExecutionPlan::schema(&self) -> SchemaRef` shape, where schema is
-/// infallible because it's known at plan-build time.
+/// `provider` is held as `Arc<dyn TableProvider>` (matching the logical
+/// `Scan` operator), so the same source can be shared across plan
+/// nodes. The output schema is computed once at construction
+/// (`Schema::select` over the projection) and cached — matching
+/// DataFusion's `ExecutionPlan::schema(&self) -> SchemaRef` shape,
+/// where schema is infallible because it's known at plan-build time.
 ///
 /// `properties` is also computed at construction (single output
 /// partition, unknown distribution) and cached for the same reason.
 pub struct ScanExec {
-    pub ds: Arc<dyn DataSource>,
+    pub provider: Arc<dyn TableProvider>,
     pub projection: Vec<String>,
     pub schema: Schema,
     properties: PlanProperties,
 }
 
 impl ScanExec {
-    /// Build a `ScanExec`, validating the projection against the data
-    /// source's schema. An invalid projection (a column name not
+    /// Build a `ScanExec`, validating the projection against the
+    /// provider's schema. An invalid projection (a column name not
     /// present in the source) surfaces as `Err(SchemaError(_))`.
-    pub fn new(ds: Arc<dyn DataSource>, projection: Vec<String>) -> Result<Self> {
-        let schema = ds.schema().select(&projection)?;
+    pub fn new(provider: Arc<dyn TableProvider>, projection: Vec<String>) -> Result<Self> {
+        let schema = provider.schema().select(&projection)?;
         let properties = PlanProperties::single_partition_unknown();
         Ok(Self {
-            ds,
+            provider,
             projection,
             schema,
             properties,
@@ -81,17 +81,12 @@ impl ExecutionPlan for ScanExec {
                 "ScanExec has 1 output partition; partition {partition} is out of range"
             )));
         }
-        // `DataSource::scan` returns a sync `Iterator<Item = Result<RecordBatch>>`.
-        // Wrap it in `futures::stream::iter` to get a `Stream<Item = ...>`
-        // and pair it with the cached schema via `RecordBatchStreamAdapter`
-        // to satisfy the `RecordBatchStream` contract.
-        //
-        // A leaf scan needs no executor context — the `DataSource` reads
-        // from its own configured location (CSV path / Parquet path).
-        // `_ctx` is present in the signature only so the trait contract is
-        // uniform.
-        let iter = self.ds.scan(&self.projection)?;
-        let stream = futures::stream::iter(iter);
+        // `TableProvider::scan` returns a `BoxRecordBatchStream`
+        // (a pin-boxed async `Stream` over `Result<RecordBatch>`).
+        // Wrap it with the projected schema via `RecordBatchStreamAdapter`
+        // so it satisfies the `RecordBatchStream` contract that
+        // `SendableRecordBatchStream` aliases.
+        let stream = self.provider.scan(&self.projection)?;
         let arrow_schema = Arc::new(self.schema.to_arrow());
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             arrow_schema,
@@ -139,14 +134,14 @@ impl fmt::Display for ScanExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use futures::TryStreamExt;
 
     /// Drive `ScanExec::execute` over the shared employee.csv fixture and
     /// verify the row count matches the file (4 rows).
     #[tokio::test]
     async fn scan_yields_all_rows_via_async_stream() {
-        let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(
+        let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
             "../testdata/employee.csv",
             None,
             true,
@@ -166,7 +161,7 @@ mod tests {
     /// Out-of-range partition is an Internal error, not a panic.
     #[tokio::test]
     async fn scan_rejects_non_zero_partition() {
-        let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(
+        let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
             "../testdata/employee.csv",
             None,
             true,
@@ -183,7 +178,7 @@ mod tests {
     /// `properties()` reports the cached single-partition descriptor.
     #[test]
     fn properties_returns_cached_single_partition() {
-        let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(
+        let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
             "../testdata/employee.csv",
             None,
             true,
@@ -198,7 +193,7 @@ mod tests {
     /// `with_new_children` rejects any non-empty child set.
     #[test]
     fn with_new_children_rejects_non_empty() {
-        let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(
+        let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
             "../testdata/employee.csv",
             None,
             true,

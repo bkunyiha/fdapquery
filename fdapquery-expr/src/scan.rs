@@ -3,7 +3,7 @@
 //! construction and cached.
 
 use crate::logical_plan::LogicalPlan;
-use fdapquery_datasource::DataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct Scan {
     pub path: String,
-    pub data_source: Arc<dyn DataSource>,
+    pub data_source: Arc<dyn TableProvider>,
     pub projection: Vec<String>,
     /// Cached derived schema.
     schema: Schema,
@@ -21,7 +21,7 @@ pub struct Scan {
 impl Scan {
     pub fn new(
         path: impl Into<String>,
-        data_source: Arc<dyn DataSource>,
+        data_source: Arc<dyn TableProvider>,
         projection: Vec<String>,
     ) -> Result<Self> {
         let schema = Self::derive_schema(data_source.as_ref(), &projection)?;
@@ -34,7 +34,7 @@ impl Scan {
     }
 
     /// sub-schema when a projection is given.
-    fn derive_schema(data_source: &dyn DataSource, projection: &[String]) -> Result<Schema> {
+    fn derive_schema(data_source: &dyn TableProvider, projection: &[String]) -> Result<Schema> {
         let schema = data_source.schema();
         if projection.is_empty() {
             Ok(schema)

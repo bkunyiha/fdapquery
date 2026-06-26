@@ -333,7 +333,7 @@ mod tests {
     //! The test loops 50 times and asserts that `create_plan` returns without
     //! panicking — i.e. random plan generation is stable across runs.
     use super::*;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use fdapquery_expr::{LogicalPlan, Scan};
     use std::sync::Arc;
 

@@ -6,8 +6,8 @@
 //! - The reader is row-group-paced internally — one batch per row group.
 //! - I/O and parse errors panic (file-not-found, corrupt file, etc.).
 
-use crate::data_source::DataSource;
-use fdapquery_datatypes::{RecordBatch, Result, Schema, schema::from_arrow as schema_from_arrow};
+use crate::table_provider::{BoxRecordBatchStream, TableProvider};
+use fdapquery_datatypes::{Result, Schema, schema::from_arrow as schema_from_arrow};
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
@@ -32,30 +32,25 @@ impl ParquetDataSource {
     }
 }
 
-impl DataSource for ParquetDataSource {
+impl TableProvider for ParquetDataSource {
     fn schema(&self) -> Schema {
-        // `DataSource::schema()` is still infallible this session (Phase A,
-        // Session 4 scope). `open_builder` now returns `Result`, so we
-        // `.expect("…")` here as scaffolding until a later session converts
-        // `schema()` to `Result<Schema>`.
+        // `TableProvider::schema()` is still infallible this session
+        // (Phase A, Session 4 scope). `open_builder` now returns
+        // `Result`, so we `.expect("…")` here as scaffolding until a
+        // later session converts `schema()` to `Result<Schema>`.
         let builder = self
             .open_builder()
             .expect("ParquetDataSource::schema: open_builder failed");
         // The builder exposes the Arrow-style schema directly; convert it to
-        // the rquery `Schema` via the module-1 from_arrow helper.
+        // the fdapquery `Schema` via the module-1 from_arrow helper.
         schema_from_arrow(builder.schema())
     }
 
-    /// Type-erased self-reference for runtime downcasting. See the trait-level
-    /// note on `DataSource::as_any` for the rationale.
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn scan(
-        &self,
-        projection: &[String],
-    ) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>> + Send>> {
+    fn scan(&self, projection: &[String]) -> Result<BoxRecordBatchStream> {
         let builder = self.open_builder()?;
 
         let builder = if projection.is_empty() {
@@ -73,8 +68,10 @@ impl DataSource for ParquetDataSource {
         let reader = builder.build()?;
 
         // The reader yields `Result<RecordBatch, ArrowError>`. Lift each
-        // per-batch error into `FdapQueryError` via the `#[from]` derive.
-        Ok(Box::new(reader.map(|res| res.map_err(Into::into))))
+        // per-batch error into `FdapQueryError` via the `#[from]` derive,
+        // then wrap the sync iterator as a pin-boxed Stream.
+        let iter = reader.map(|res| res.map_err(Into::into));
+        Ok(Box::pin(futures::stream::iter(iter)))
     }
 }
 
@@ -82,7 +79,8 @@ impl DataSource for ParquetDataSource {
 mod tests {
     use super::*;
     use fdapquery_datatypes::record_batch::row_count;
-    use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, ScalarValue};
+    use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
+    use futures::TryStreamExt;
 
     fn fixture(name: &str) -> String {
         format!("../testdata/{}", name)
@@ -111,13 +109,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn read_parquet_file_id_column() {
+    #[tokio::test]
+    async fn read_parquet_file_id_column() {
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
         let batches: Vec<RecordBatch> = parquet
             .scan(&["id".to_string()])
             .unwrap()
-            .collect::<Result<Vec<_>>>()
+            .try_collect()
+            .await
             .unwrap();
         assert!(!batches.is_empty(), "expected at least one batch");
         let batch = &batches[0];
@@ -134,13 +133,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn read_parquet_string_column_non_null() {
+    #[tokio::test]
+    async fn read_parquet_string_column_non_null() {
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
         let batches: Vec<RecordBatch> = parquet
             .scan(&["string_col".to_string()])
             .unwrap()
-            .collect::<Result<Vec<_>>>()
+            .try_collect()
+            .await
             .unwrap();
         assert!(!batches.is_empty());
         let batch = &batches[0];
@@ -154,5 +154,20 @@ mod tests {
                 i
             );
         }
+    }
+
+    // --- Session 13b: TableProvider trait-surface tests ----
+
+    #[test]
+    fn as_any_downcasts_to_parquet_data_source() {
+        use std::sync::Arc;
+        let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
+        let provider: Arc<dyn TableProvider> = Arc::new(parquet);
+        assert!(
+            provider
+                .as_any()
+                .downcast_ref::<ParquetDataSource>()
+                .is_some()
+        );
     }
 }

@@ -24,7 +24,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
-use fdapquery_datasource::{DataSource, ParquetDataSource};
+use fdapquery_catalog::ParquetDataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_datatypes::record_batch::to_csv;
 use fdapquery_execution::ExecutionContext;
@@ -62,7 +63,7 @@ async fn main() -> ExitCode {
     let mut ctx = ExecutionContext::new(HashMap::new());
     for table in TPCH_TABLES {
         let path = format!("{data_dir}/{table}.parquet");
-        let source: Arc<dyn DataSource> = Arc::new(ParquetDataSource::new(path));
+        let source: Arc<dyn TableProvider> = Arc::new(ParquetDataSource::new(path));
         ctx.register_data_source(table, source);
     }
 

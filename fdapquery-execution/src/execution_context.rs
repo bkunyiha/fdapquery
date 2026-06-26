@@ -21,7 +21,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fdapquery_datasource::{CsvDataSource, DataSource};
+use fdapquery_catalog::CsvDataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
@@ -94,7 +95,7 @@ impl ExecutionContext {
     }
 
     /// Register a data source with the context.
-    pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn DataSource>) {
+    pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn TableProvider>) {
         let scan = Scan::new(table_name, data_source, vec![])
             .expect("ExecutionContext::register_data_source: scan construction");
         self.register(table_name, DataFrame::new(LogicalPlan::Scan(scan)));
@@ -152,7 +153,7 @@ mod tests {
     //! expected division literally (`let q = 1.0_f32 / 11.0_f32`) so the
     //! assertion matches whatever Rust's formatter produces.
     use super::*;
-    use fdapquery_datasource::InMemoryDataSource;
+    use fdapquery_catalog::InMemoryDataSource;
     use fdapquery_datatypes::RecordBatch;
     use fdapquery_datatypes::arrow_types::{BOOLEAN_TYPE, FLOAT_TYPE, INT32_TYPE, STRING_TYPE};
     use fdapquery_datatypes::record_batch::to_csv;

@@ -96,7 +96,7 @@ mod tests {
     use crate::expressions::{col, count, lit_double, lit_long, lit_string, max, min};
     use crate::logical_plan::{LogicalPlan, format};
     use crate::scan::Scan;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use std::sync::Arc;
 
     fn csv() -> DataFrame {

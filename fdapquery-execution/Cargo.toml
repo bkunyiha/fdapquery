@@ -19,7 +19,7 @@ fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-sql            = { path = "../fdapquery-sql" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
 fdapquery-optimizer      = { path = "../fdapquery-optimizer" }
-fdapquery-datasource     = { path = "../fdapquery-datasource" }
+fdapquery-catalog     = { path = "../fdapquery-catalog" }
 
 [dev-dependencies]
 # The Fuzzer-backed ExecutionTest cases (`min max sum float`, `float math`,

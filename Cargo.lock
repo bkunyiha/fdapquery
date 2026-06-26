@@ -723,13 +723,26 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "env_logger",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-execution",
  "futures",
  "log",
  "rayon",
  "sysinfo",
+ "tokio",
+]
+
+[[package]]
+name = "fdapquery-catalog"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "fdapquery-datatypes",
+ "futures",
+ "parquet",
  "tokio",
 ]
 
@@ -741,17 +754,6 @@ dependencies = [
  "parquet",
  "pretty_assertions",
  "thiserror",
-]
-
-[[package]]
-name = "fdapquery-datasource"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "arrow-array",
- "arrow-schema",
- "fdapquery-datatypes",
- "parquet",
 ]
 
 [[package]]
@@ -769,7 +771,7 @@ name = "fdapquery-distributed"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
  "fdapquery-optimizer",
@@ -789,7 +791,7 @@ dependencies = [
  "arrow-flight",
  "async-trait",
  "env_logger",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-distributed",
  "fdapquery-execution",
@@ -811,7 +813,7 @@ name = "fdapquery-execution"
 version = "0.1.0"
 dependencies = [
  "arrow",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
  "fdapquery-fuzzer",
@@ -829,7 +831,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-schema",
  "chrono",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
 ]
 
@@ -841,7 +843,7 @@ dependencies = [
  "arrow",
  "arrow-flight",
  "async-trait",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-distributed",
  "fdapquery-expr",
@@ -864,7 +866,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "arrow-flight",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-execution",
  "fdapquery-expr",
@@ -885,7 +887,7 @@ name = "fdapquery-fuzzer"
 version = "0.1.0"
 dependencies = [
  "arrow-schema",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
  "fdapquery-sql",
@@ -896,9 +898,19 @@ dependencies = [
 name = "fdapquery-optimizer"
 version = "0.1.0"
 dependencies = [
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
+]
+
+[[package]]
+name = "fdapquery-physical-expr"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "chrono",
+ "fdapquery-datatypes",
 ]
 
 [[package]]
@@ -910,10 +922,11 @@ dependencies = [
  "arrow-schema",
  "async-stream",
  "chrono",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
  "fdapquery-optimizer",
+ "fdapquery-physical-expr",
  "futures",
  "pin-project-lite",
  "tokio",
@@ -925,7 +938,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-schema",
  "chrono",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
  "fdapquery-physical-plan",
@@ -940,7 +953,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-schema",
  "chrono",
- "fdapquery-datasource",
+ "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
 ]

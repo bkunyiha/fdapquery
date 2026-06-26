@@ -8,7 +8,7 @@
 //! not code.
 
 use crate::{DistributedConfig, DistributedPlanner, ExecutorClient, Scheduler};
-use fdapquery_datasource::CsvDataSource;
+use fdapquery_catalog::CsvDataSource;
 use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;

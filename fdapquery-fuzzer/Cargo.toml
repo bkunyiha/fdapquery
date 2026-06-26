@@ -17,4 +17,4 @@ arrow-schema = { workspace = true }   # for `DataType` in `create_values` dispat
 [dev-dependencies]
 # Smoke test reads testdata/employee.csv through a `CsvDataSource` to drive
 # `create_plan()`; the data-source crate is only needed at test time.
-fdapquery-datasource   = { path = "../fdapquery-datasource" }
+fdapquery-catalog   = { path = "../fdapquery-catalog" }

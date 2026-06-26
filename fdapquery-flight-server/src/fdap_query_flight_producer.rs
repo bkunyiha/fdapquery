@@ -388,7 +388,8 @@ mod tests {
 
     use super::*;
     use arrow_flight::Action;
-    use fdapquery_datasource::{CsvDataSource, DataSource};
+    use fdapquery_catalog::CsvDataSource;
+    use fdapquery_catalog::TableProvider;
     use fdapquery_physical_plan::{
         ColumnExpression, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
         ShuffleWriterExec, Task,
@@ -423,7 +424,8 @@ mod tests {
     }
 
     fn build_task() -> Task {
-        let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
+        let ds: Arc<dyn TableProvider> =
+            Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
         let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
         let scan: Arc<dyn ExecutionPlan> =
             Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
@@ -531,7 +533,8 @@ mod tests {
         let producer = FdapQueryFlightProducer::new(ctx);
 
         // Build a LogicalPlan: scan employee.csv with all columns.
-        let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
+        let ds: Arc<dyn TableProvider> =
+            Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
         let logical_plan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, ds, vec![]).unwrap());
 
         // Serialise as Action protobuf and wrap in a Ticket.

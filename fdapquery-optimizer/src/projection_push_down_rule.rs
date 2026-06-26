@@ -97,7 +97,7 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use fdapquery_expr::{DataFrame, col, count, format, lit_string, max, min};
     use std::sync::Arc;
 

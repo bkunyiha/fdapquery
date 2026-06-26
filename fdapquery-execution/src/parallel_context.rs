@@ -43,7 +43,8 @@ use std::sync::Arc;
 use futures::TryStreamExt;
 use rayon::prelude::*;
 
-use fdapquery_datasource::{CsvDataSource, DataSource};
+use fdapquery_catalog::CsvDataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
 use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_optimizer::Optimizer;
@@ -135,7 +136,7 @@ impl ParallelContext {
     }
 
     /// Register a data source with the context.
-    pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn DataSource>) {
+    pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn TableProvider>) {
         let scan = Scan::new(table_name, data_source, vec![])
             .expect("ParallelContext::register_data_source: scan construction");
         self.register(table_name, DataFrame::new(LogicalPlan::Scan(scan)));

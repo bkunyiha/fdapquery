@@ -150,7 +150,7 @@ fn substitute_shuffle_reader(
 mod tests {
     use super::*;
     use crate::ExecutorConfig;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use fdapquery_expr::{Aggregate, LogicalPlan, Scan, col, sum};
     use fdapquery_optimizer::Optimizer;
     use fdapquery_physical_plan::QueryPlanner;

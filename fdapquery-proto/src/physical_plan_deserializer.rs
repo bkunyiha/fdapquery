@@ -29,7 +29,8 @@
 //!   direct consequence of the orphan rule, not a stylistic choice.
 
 use crate::pb;
-use fdapquery_datasource::{CsvDataSource, DataSource, ParquetDataSource};
+use fdapquery_catalog::TableProvider;
+use fdapquery_catalog::{CsvDataSource, ParquetDataSource};
 use fdapquery_datatypes::arrow_types;
 use fdapquery_physical_plan::{
     AddExpression, AggregateExpression, AggregateMode, AndExpression, AvgExpression,
@@ -51,7 +52,7 @@ pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn Executi
         Some(PlanType::Scan(scan)) => {
             let schema =
                 crate::deserialize_schema(scan.schema.as_ref().expect("ScanExecNode.schema unset"));
-            let ds: Arc<dyn DataSource> = match scan.file_format.as_str() {
+            let ds: Arc<dyn TableProvider> = match scan.file_format.as_str() {
                 "csv" => Arc::new(CsvDataSource::new(&scan.path, Some(schema), true, 1024)),
                 "parquet" => Arc::new(ParquetDataSource::new(&scan.path)),
                 other => panic!("Unsupported file format: {other:?}"),

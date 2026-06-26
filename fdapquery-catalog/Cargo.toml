@@ -1,5 +1,5 @@
 [package]
-name         = "fdapquery-datasource"
+name         = "fdapquery-catalog"
 description  = "DataSource trait with CSV, Parquet, and in-memory implementations."
 edition.workspace      = true
 license.workspace      = true
@@ -12,4 +12,13 @@ arrow        = { workspace = true }
 arrow-array  = { workspace = true }
 arrow-schema = { workspace = true }
 parquet      = { workspace = true }
+# `futures::stream` (Session 13b) — `TableProvider::scan` returns a
+# `Pin<Box<dyn Stream<Item = Result<RecordBatch>>>>`, modernizing the
+# pre-13b sync `Iterator` return shape.
+futures      = { workspace = true }
 fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
+
+[dev-dependencies]
+# Tokio runtime for the per-provider `#[tokio::test]` test bodies that
+# drain the `TableProvider::scan` stream via `try_collect().await`.
+tokio = { workspace = true }

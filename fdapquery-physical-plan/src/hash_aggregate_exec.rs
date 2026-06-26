@@ -21,13 +21,13 @@
 //! in a scalar output column, so a `Partial` AVG output panics until the
 //! distributed module supplies the intermediate-state schema.
 
-use crate::aggregate_expression::AggregateExpression;
-use crate::aggregate_mode::AggregateMode;
-use crate::expressions::{Accumulator, AccumulatorValue, Expression};
+use crate::AggregateExpression;
+use crate::AggregateMode;
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
 use crate::task_context::TaskContext;
+use crate::{Accumulator, AccumulatorValue, Expression};
 use async_stream::try_stream;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, Result, ScalarValue, Schema, record_batch,
@@ -324,13 +324,14 @@ mod tests {
     //! integration test builds the physical plan by hand (the `query-planner`
     //! that normally assembles it is covered in module 7).
     use super::*;
-    use crate::column_expression::ColumnExpression;
-    use crate::count_expression::CountExpression;
-    use crate::max_expression::MaxExpression;
-    use crate::min_expression::MinExpression;
+    use crate::ColumnExpression;
+    use crate::CountExpression;
+    use crate::MaxExpression;
+    use crate::MinExpression;
+    use crate::SumExpression;
     use crate::scan_exec::ScanExec;
-    use crate::sum_expression::SumExpression;
-    use fdapquery_datasource::{CsvDataSource, DataSource};
+    use fdapquery_catalog::CsvDataSource;
+    use fdapquery_catalog::TableProvider;
     use fdapquery_datatypes::Field;
     use fdapquery_datatypes::arrow_types::{INT32_TYPE, INT64_TYPE, STRING_TYPE};
     use futures::TryStreamExt;
@@ -368,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn group_by_state_min_max_count() {
-        let ds: Arc<dyn DataSource> = Arc::new(CsvDataSource::new(
+        let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
             "../testdata/employee.csv",
             None,
             true,

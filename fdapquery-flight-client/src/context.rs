@@ -20,7 +20,7 @@
 use crate::client::Client;
 use crate::endpoint::Endpoint;
 use anyhow::Result;
-use fdapquery_datasource::CsvDataSource;
+use fdapquery_catalog::CsvDataSource;
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
 use fdapquery_proto::{pb, serialize_logical_plan};

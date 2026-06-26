@@ -37,7 +37,7 @@ uuid           = { workspace = true }
 # `execution` is intentionally NOT a dependency — `DistributedContext`
 # re-implements the registry / SQL parse pipeline rather than reusing
 # `ExecutionContext`.
-fdapquery-datasource     = { path = "../fdapquery-datasource" }
+fdapquery-catalog     = { path = "../fdapquery-catalog" }
 fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
 fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }

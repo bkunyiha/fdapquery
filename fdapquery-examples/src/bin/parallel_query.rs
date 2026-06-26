@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use fdapquery_datasource::InMemoryDataSource;
+use fdapquery_catalog::InMemoryDataSource;
 use fdapquery_datatypes::record_batch::to_csv;
 use fdapquery_datatypes::{RecordBatch, SchemaConverter};
 use fdapquery_execution::ExecutionContext;
@@ -74,7 +74,7 @@ async fn main() {
     // through `SchemaConverter::from_arrow`.
     // -----------------------------------------------------------------------
     let final_schema = SchemaConverter::from_arrow(&first.schema());
-    let in_memory: Arc<dyn fdapquery_datasource::DataSource> =
+    let in_memory: Arc<dyn fdapquery_catalog::TableProvider> =
         Arc::new(InMemoryDataSource::new(final_schema, results));
 
     let mut ctx = ExecutionContext::new(HashMap::new());

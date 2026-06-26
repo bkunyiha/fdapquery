@@ -8,7 +8,7 @@
 //! downcast is needed, and it keeps the operator working against any
 //! `ColumnVector` implementation.
 
-use crate::expressions::Expression;
+use crate::Expression;
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};

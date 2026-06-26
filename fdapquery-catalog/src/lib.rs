@@ -16,14 +16,17 @@
 // Per-file modules.
 // ==============================================================
 pub mod csv_data_source;
-pub mod data_source;
 pub mod in_memory_data_source;
 pub mod parquet_data_source;
+// `TableProvider` (Session 13b) — replaces the pre-13b `DataSource`
+// trait. Lives here, not in `fdapquery-physical-plan`, to avoid a
+// catalog → physical-plan → expr → catalog cycle.
+pub mod table_provider;
 
 // ==============================================================
-// Re-exports for convenient downstream `use datasource::*;` ergonomics.
+// Re-exports for convenient downstream `use catalog::*;` ergonomics.
 // ==============================================================
 pub use csv_data_source::CsvDataSource;
-pub use data_source::DataSource;
 pub use in_memory_data_source::InMemoryDataSource;
 pub use parquet_data_source::ParquetDataSource;
+pub use table_provider::{BoxRecordBatchStream, TableProvider};

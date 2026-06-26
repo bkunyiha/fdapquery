@@ -18,7 +18,7 @@
 //!   deserializer's `AggregateExprNode` arm.
 
 use crate::pb;
-use fdapquery_datasource::{CsvDataSource, ParquetDataSource};
+use fdapquery_catalog::{CsvDataSource, ParquetDataSource};
 use fdapquery_expr::{AggregateExpr, JoinType, LogicalExpr, LogicalPlan};
 
 /// Convert a `LogicalPlan` to its `pb::LogicalPlanNode` form.
@@ -202,7 +202,7 @@ mod tests {
     //! round-tripped plan re-formats to the same text.
     use super::serialize_logical_plan;
     use crate::deserialize_logical_plan;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use fdapquery_expr::{DataFrame, LogicalPlan, Scan, col, format, lit_string};
     use std::sync::Arc;
 

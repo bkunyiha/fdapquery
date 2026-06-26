@@ -97,7 +97,7 @@ mod tests {
     use crate::projection::Projection;
     use crate::scan::Scan;
     use crate::selection::Selection;
-    use fdapquery_datasource::CsvDataSource;
+    use fdapquery_catalog::CsvDataSource;
     use fdapquery_datatypes::arrow_types::INT32_TYPE;
     use std::sync::Arc;
 

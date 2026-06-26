@@ -1,0 +1,24 @@
+[package]
+name         = "fdapquery-physical-expr"
+description  = "Physical expression trait, accumulator trait, and the concrete expression / aggregate types."
+edition.workspace      = true
+license.workspace      = true
+version.workspace      = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+# `arrow_schema::DataType` is used by binary_expression.rs,
+# boolean_expression.rs, cast_expression.rs, math_expression.rs.
+arrow-schema  = { workspace = true }
+# `chrono::NaiveDate` is used by date_expression.rs only.
+chrono        = { workspace = true }
+# `Result`, `FdapQueryError`, `ScalarValue`, `ColumnVector`, `arrow_types::*`
+# — used by every expression file.
+fdapquery-datatypes = { path = "../fdapquery-datatypes" }
+
+[dev-dependencies]
+# Test modules in boolean_expression.rs and cast_expression.rs build
+# typed arrow arrays (Int8Array, StringArray, etc.) directly. Matches
+# the dev-dep `fdapquery-physical-plan` carries for the same reason.
+arrow-array = { workspace = true }

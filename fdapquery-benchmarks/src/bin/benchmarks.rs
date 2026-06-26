@@ -32,7 +32,8 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
-use fdapquery_datasource::{DataSource, InMemoryDataSource};
+use fdapquery_catalog::InMemoryDataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{RecordBatch, SchemaConverter};
 use fdapquery_execution::ExecutionContext;
 use futures::TryStreamExt;
@@ -118,7 +119,8 @@ async fn sql_aggregate(
     // the final aggregate over them.
     // -----------------------------------------------------------------------
     let final_schema = SchemaConverter::from_arrow(&first.schema());
-    let in_memory: Arc<dyn DataSource> = Arc::new(InMemoryDataSource::new(final_schema, results));
+    let in_memory: Arc<dyn TableProvider> =
+        Arc::new(InMemoryDataSource::new(final_schema, results));
 
     let mut ctx = ExecutionContext::new(settings);
     ctx.register_data_source("tripdata", in_memory);

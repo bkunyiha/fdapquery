@@ -42,7 +42,7 @@ tracing          = { workspace = true }
 # - physical-plan: provides `Task` and `ShuffleLocation` — the types
 #   `FlightExecutorClient` ships across the wire.
 fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-datasource    = { path = "../fdapquery-datasource" }
+fdapquery-catalog    = { path = "../fdapquery-catalog" }
 fdapquery-expr  = { path = "../fdapquery-expr" }
 fdapquery-proto      = { path = "../fdapquery-proto" }
 fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }

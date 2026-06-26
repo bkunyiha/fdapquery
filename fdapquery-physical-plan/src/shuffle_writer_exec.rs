@@ -30,7 +30,7 @@
 //! Empty partitions get **no file** and **no `ShuffleLocation`**. This
 //! matches `ShuffleManager::write_partition`'s no-op-on-empty contract.
 
-use crate::expressions::Expression;
+use crate::Expression;
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::row_key::RowKey;
@@ -277,11 +277,12 @@ mod tests {
     //! nanoseconds so parallel `cargo test` runs don't collide on disk.
 
     use super::*;
-    use crate::column_expression::ColumnExpression;
+    use crate::ColumnExpression;
     use crate::scan_exec::ScanExec;
     use crate::shuffle_manager::ShuffleManager;
     use crate::task_context::{RuntimeEnv, SessionConfig};
-    use fdapquery_datasource::{CsvDataSource, DataSource};
+    use fdapquery_catalog::CsvDataSource;
+    use fdapquery_catalog::TableProvider;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 
@@ -293,11 +294,11 @@ mod tests {
         format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
     }
 
-    fn employee_ds() -> Arc<dyn DataSource> {
+    fn employee_ds() -> Arc<dyn TableProvider> {
         Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024))
     }
 
-    fn employee_columns(ds: &Arc<dyn DataSource>) -> Vec<String> {
+    fn employee_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
         ds.schema().fields.iter().map(|f| f.name.clone()).collect()
     }
 

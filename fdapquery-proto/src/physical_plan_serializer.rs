@@ -40,7 +40,7 @@
 //!   Cleaning up that duplicate type is a separate follow-up.
 
 use crate::pb;
-use fdapquery_datasource::DataSource;
+use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{Field, Schema};
 use fdapquery_physical_plan::{
     AggregateExpression, AggregateMode, ExecutionPlan, Expression, ShuffleLocation, Task,
@@ -54,7 +54,7 @@ pub fn serialize_physical_plan(plan: &dyn ExecutionPlan) -> pb::PhysicalPlanNode
     let any = plan.as_any();
 
     if let Some(scan) = any.downcast_ref::<fdapquery_physical_plan::ScanExec>() {
-        let (path, file_format) = data_source_path_and_format(scan.ds.as_ref());
+        let (path, file_format) = data_source_path_and_format(scan.provider.as_ref());
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::Scan(pb::ScanExecNode {
                 path,
@@ -68,7 +68,7 @@ pub fn serialize_physical_plan(plan: &dyn ExecutionPlan) -> pb::PhysicalPlanNode
                 // 2-column file when the file actually has 6 columns —
                 // surfaced as "incorrect number of fields for line 1" in
                 // client/tests/distributed_integration_test.rs.
-                schema: Some((&scan.ds.schema()).into()),
+                schema: Some((&scan.provider.schema()).into()),
                 projection: scan.projection.clone(),
                 file_format,
             })),
@@ -278,14 +278,14 @@ impl From<&ShuffleLocation> for pb::ShuffleLocation {
 // Private helpers.
 // ---------------------------------------------------------------------------
 
-/// Extract `(path, file_format)` from a `&dyn DataSource`, branching on CSV
+/// Extract `(path, file_format)` from a `&dyn TableProvider`, branching on CSV
 /// vs. Parquet via `DataSource::as_any` + `downcast_ref` — the same idiom
 /// DataFusion uses for `TableProvider`.
-fn data_source_path_and_format(ds: &dyn DataSource) -> (String, String) {
+fn data_source_path_and_format(ds: &dyn TableProvider) -> (String, String) {
     let any = ds.as_any();
-    if let Some(csv) = any.downcast_ref::<fdapquery_datasource::CsvDataSource>() {
+    if let Some(csv) = any.downcast_ref::<fdapquery_catalog::CsvDataSource>() {
         (csv.filename.clone(), "csv".to_string())
-    } else if let Some(parquet) = any.downcast_ref::<fdapquery_datasource::ParquetDataSource>() {
+    } else if let Some(parquet) = any.downcast_ref::<fdapquery_catalog::ParquetDataSource>() {
         (parquet.filename.clone(), "parquet".to_string())
     } else {
         panic!("Unsupported data-source type for protobuf serialisation")

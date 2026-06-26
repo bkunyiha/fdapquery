@@ -349,7 +349,7 @@ mod tests {
     //! root is a `HashAggregateExec` over a single `ScanExec` leaf, with the
     //! expected resolved column indices in its `Display`.
     use super::*;
-    use fdapquery_datasource::InMemoryDataSource;
+    use fdapquery_catalog::InMemoryDataSource;
     use fdapquery_datatypes::arrow_types::{DOUBLE_TYPE, UINT32_TYPE};
     use fdapquery_datatypes::{Field, Schema};
     use fdapquery_expr::{DataFrame, LogicalPlan, Scan, col, max};

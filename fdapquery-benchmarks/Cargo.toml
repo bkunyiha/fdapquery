@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 fdapquery-execution    = { path = "../fdapquery-execution" }
-fdapquery-datasource   = { path = "../fdapquery-datasource" }    # ParquetDataSource (tpch_runner), InMemoryDataSource (benchmarks)
+fdapquery-catalog   = { path = "../fdapquery-catalog" }    # ParquetDataSource (tpch_runner), InMemoryDataSource (benchmarks)
 fdapquery-datatypes    = { path = "../fdapquery-datatypes" }     # RecordBatch, SchemaConverter, to_csv
 # `tokio` for `#[tokio::main]` — the binaries drain the engine's
 # `SendableRecordBatchStream` results on the tokio runtime.

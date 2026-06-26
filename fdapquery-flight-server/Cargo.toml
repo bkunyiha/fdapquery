@@ -29,7 +29,7 @@ prost            = { workspace = true }
 
 # Internal — eight siblings.
 fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
-fdapquery-datasource     = { path = "../fdapquery-datasource" }
+fdapquery-catalog     = { path = "../fdapquery-catalog" }
 fdapquery-expr   = { path = "../fdapquery-expr" }
 fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
 fdapquery-sql            = { path = "../fdapquery-sql" }

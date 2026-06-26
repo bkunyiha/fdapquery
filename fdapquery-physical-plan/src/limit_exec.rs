@@ -153,17 +153,18 @@ mod tests {
     //! `Projection`/`Selection`/`LimitExec` over the `employee.csv` fixture and
     //! checks row/column counts. Uses `CsvDataSource` directly.
     use super::*;
-    use crate::boolean_expression::GtExpression;
-    use crate::column_expression::ColumnExpression;
-    use crate::expressions::LiteralLongExpression;
+    use crate::ColumnExpression;
+    use crate::GtExpression;
+    use crate::LiteralLongExpression;
     use crate::projection_exec::ProjectionExec;
     use crate::scan_exec::ScanExec;
     use crate::selection_exec::SelectionExec;
-    use fdapquery_datasource::{CsvDataSource, DataSource};
+    use fdapquery_catalog::CsvDataSource;
+    use fdapquery_catalog::TableProvider;
     use futures::TryStreamExt;
     use std::sync::Arc;
 
-    fn employee_ds() -> Arc<dyn DataSource> {
+    fn employee_ds() -> Arc<dyn TableProvider> {
         Arc::new(CsvDataSource::new(
             "../testdata/employee.csv",
             None,
@@ -174,7 +175,7 @@ mod tests {
 
     /// All column names, in schema order: id, first_name, last_name, state,
     /// job_title, salary.
-    fn all_columns(ds: &Arc<dyn DataSource>) -> Vec<String> {
+    fn all_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
         ds.schema().fields.iter().map(|f| f.name.clone()).collect()
     }
 

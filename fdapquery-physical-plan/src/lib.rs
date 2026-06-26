@@ -44,22 +44,9 @@
 // Per-file modules.
 // ==============================================================
 pub mod action;
-pub mod aggregate_expression;
-pub mod aggregate_mode;
-pub mod avg_expression;
-pub mod binary_expression;
-pub mod boolean_expression;
-pub mod cast_expression;
-pub mod column_expression;
-pub mod count_expression;
-pub mod date_expression;
-pub mod expressions;
 pub mod hash_aggregate_exec;
 pub mod hash_join_exec;
 pub mod limit_exec;
-pub mod math_expression;
-pub mod max_expression;
-pub mod min_expression;
 pub mod partitioning;
 pub mod physical_plan;
 pub mod plan_properties;
@@ -76,10 +63,8 @@ pub mod shuffle_manager;
 pub mod shuffle_reader_exec;
 pub mod shuffle_writer_exec;
 pub mod stream;
-pub mod sum_expression;
 pub mod task;
 pub mod task_context;
-pub mod unary_math_expression;
 
 // Internal helper: a float-aware hashable row key used by `HashJoinExec` for
 // its join keys (and the same shape `HashAggregateExec` uses for group keys).
@@ -90,19 +75,24 @@ mod row_key;
 // Re-exports for convenient downstream `use physical_plan::*;` ergonomics.
 // Only the phase-1 types are exported so far; later phases add to this list.
 // ==============================================================
-pub use binary_expression::BinaryExpression;
-pub use boolean_expression::{
-    AndExpression, BooleanExpression, EqExpression, GtEqExpression, GtExpression, LtEqExpression,
-    LtExpression, NeqExpression, OrExpression,
-};
-pub use cast_expression::CastExpression;
-pub use column_expression::ColumnExpression;
-pub use expressions::{
+// Re-export from fdapquery-physical-expr — the expression types were
+// split out in Session 13a but external consumers can still write
+// `use fdapquery_physical_plan::Expression;` via these re-exports
+// (matches DataFusion's pattern of re-exporting from
+// datafusion-physical-expr at datafusion-physical-plan's surface).
+pub use fdapquery_physical_expr::BinaryExpression;
+pub use fdapquery_physical_expr::CastExpression;
+pub use fdapquery_physical_expr::ColumnExpression;
+pub use fdapquery_physical_expr::{
     Accumulator, AccumulatorValue, Expression, LiteralDateExpression, LiteralDoubleExpression,
     LiteralIntervalDaysExpression, LiteralLongExpression, LiteralStringExpression,
 };
-pub use math_expression::{
+pub use fdapquery_physical_expr::{
     AddExpression, DivideExpression, MathExpression, MultiplyExpression, SubtractExpression,
+};
+pub use fdapquery_physical_expr::{
+    AndExpression, BooleanExpression, EqExpression, GtEqExpression, GtExpression, LtEqExpression,
+    LtExpression, NeqExpression, OrExpression,
 };
 pub use physical_plan::{ExecutionPlan, format};
 // The folded `QueryPlanner` — DataFusion-style re-export so consumers
@@ -122,18 +112,19 @@ pub use limit_exec::LimitExec;
 pub use projection_exec::ProjectionExec;
 pub use scan_exec::ScanExec;
 pub use selection_exec::SelectionExec;
-// Phase-3 scalar expressions.
-pub use date_expression::{DateAddIntervalExpression, DateSubtractIntervalExpression};
-pub use unary_math_expression::{Log, Sqrt, UnaryMathExpression};
-// Phase-3 aggregation.
-pub use aggregate_expression::AggregateExpression;
-pub use aggregate_mode::AggregateMode;
-pub use avg_expression::{AvgAccumulator, AvgExpression};
-pub use count_expression::{CountAccumulator, CountExpression};
+// Phase-3 scalar expressions (re-exported from fdapquery-physical-expr).
+pub use fdapquery_physical_expr::{DateAddIntervalExpression, DateSubtractIntervalExpression};
+pub use fdapquery_physical_expr::{Log, Sqrt, UnaryMathExpression};
+// Phase-3 aggregation (expressions re-exported from physical-expr; HashAggregateExec
+// is the operator that consumes them and stays here).
+pub use fdapquery_physical_expr::AggregateExpression;
+pub use fdapquery_physical_expr::AggregateMode;
+pub use fdapquery_physical_expr::{AvgAccumulator, AvgExpression};
+pub use fdapquery_physical_expr::{CountAccumulator, CountExpression};
+pub use fdapquery_physical_expr::{MaxAccumulator, MaxExpression};
+pub use fdapquery_physical_expr::{MinAccumulator, MinExpression};
+pub use fdapquery_physical_expr::{SumAccumulator, SumExpression};
 pub use hash_aggregate_exec::HashAggregateExec;
-pub use max_expression::{MaxAccumulator, MaxExpression};
-pub use min_expression::{MinAccumulator, MinExpression};
-pub use sum_expression::{SumAccumulator, SumExpression};
 // Phase-4 join + shuffle/task scaffolding.
 pub use action::{Action, QueryAction, ShuffleIdAction};
 pub use hash_join_exec::HashJoinExec;

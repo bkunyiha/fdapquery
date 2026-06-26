@@ -13,4 +13,4 @@ fdapquery-expr = { path = "../fdapquery-expr" }
 
 [dev-dependencies]
 # Used only by the optimizer test, which scans a CsvDataSource.
-fdapquery-datasource = { path = "../fdapquery-datasource" }
+fdapquery-catalog = { path = "../fdapquery-catalog" }

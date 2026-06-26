@@ -151,12 +151,13 @@ mod tests {
     //! reader round-trip via the new trait method.
 
     use super::*;
-    use crate::column_expression::ColumnExpression;
+    use crate::ColumnExpression;
     use crate::scan_exec::ScanExec;
     use crate::shuffle_manager::ShuffleManager;
     use crate::shuffle_writer_exec::ShuffleWriterExec;
     use crate::task_context::{RuntimeEnv, SessionConfig, TaskContext};
-    use fdapquery_datasource::{CsvDataSource, DataSource};
+    use fdapquery_catalog::CsvDataSource;
+    use fdapquery_catalog::TableProvider;
     use futures::TryStreamExt;
 
     /// Build a `RuntimeEnv` with a specific shuffle base directory — lets
@@ -175,11 +176,11 @@ mod tests {
         format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
     }
 
-    fn employee_ds() -> Arc<dyn DataSource> {
+    fn employee_ds() -> Arc<dyn TableProvider> {
         Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024))
     }
 
-    fn employee_columns(ds: &Arc<dyn DataSource>) -> Vec<String> {
+    fn employee_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
         ds.schema().fields.iter().map(|f| f.name.clone()).collect()
     }
 

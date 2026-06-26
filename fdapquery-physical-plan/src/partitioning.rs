@@ -2,7 +2,7 @@
 //! `Partitioning` exactly — three variants because each carries
 //! different "how do you assign rows to partitions" semantics.
 
-use crate::expressions::Expression;
+use crate::Expression;
 use std::sync::Arc;
 
 /// Output partitioning of an `ExecutionPlan`.

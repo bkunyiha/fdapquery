@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 fdapquery-execution       = { path = "../fdapquery-execution" }
-fdapquery-datasource      = { path = "../fdapquery-datasource" }    # InMemoryDataSource for parallel_query
+fdapquery-catalog      = { path = "../fdapquery-catalog" }    # InMemoryDataSource for parallel_query
 fdapquery-datatypes       = { path = "../fdapquery-datatypes" }     # RecordBatch, ScalarValue, arrow_types
 fdapquery-expr    = { path = "../fdapquery-expr" }  # col, cast, max, format, …
 fdapquery-optimizer       = { path = "../fdapquery-optimizer" }     # Optimizer used by nyc_taxi
