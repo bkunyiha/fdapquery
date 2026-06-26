@@ -1,0 +1,12 @@
+[package]
+name         = "fdapquery-functions-aggregate"
+description  = "Built-in aggregate expressions (sum, min, max, count, avg). Mirrors datafusion-functions-aggregate's crate boundary."
+edition.workspace      = true
+license.workspace      = true
+version.workspace      = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
+fdapquery-physical-expr = { path = "../fdapquery-physical-expr" }

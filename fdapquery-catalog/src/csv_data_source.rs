@@ -247,7 +247,7 @@ mod tests {
             1024,
         ));
         let batches: Vec<RecordBatch> = csv.scan(&[]).unwrap().try_collect().await.unwrap();
-        let total: usize = batches.iter().map(|b| row_count(b)).sum();
+        let total: usize = batches.iter().map(row_count).sum();
         assert_eq!(total, 4);
     }
 

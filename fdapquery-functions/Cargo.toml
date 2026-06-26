@@ -1,0 +1,12 @@
+[package]
+name         = "fdapquery-functions"
+description  = "Built-in scalar expressions (arithmetic, boolean, cast, date, math). Mirrors datafusion-functions's crate boundary."
+edition.workspace      = true
+license.workspace      = true
+version.workspace      = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
+fdapquery-physical-expr = { path = "../fdapquery-physical-expr" }

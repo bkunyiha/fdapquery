@@ -1,0 +1,21 @@
+[package]
+name         = "fdapquery"
+description  = "Umbrella crate. Re-exports the user-facing surface of the fdapquery query engine. Mirrors DataFusion's `datafusion` umbrella."
+edition.workspace      = true
+license.workspace      = true
+version.workspace      = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+fdapquery-catalog                = { path = "../fdapquery-catalog" }
+fdapquery-common                 = { path = "../fdapquery-common" }
+fdapquery-datatypes              = { path = "../fdapquery-datatypes" }
+fdapquery-execution              = { path = "../fdapquery-execution" }
+fdapquery-expr                   = { path = "../fdapquery-expr" }
+fdapquery-functions              = { path = "../fdapquery-functions" }
+fdapquery-functions-aggregate    = { path = "../fdapquery-functions-aggregate" }
+fdapquery-optimizer              = { path = "../fdapquery-optimizer" }
+fdapquery-physical-expr          = { path = "../fdapquery-physical-expr" }
+fdapquery-physical-plan          = { path = "../fdapquery-physical-plan" }
+fdapquery-sql                    = { path = "../fdapquery-sql" }

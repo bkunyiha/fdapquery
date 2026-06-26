@@ -718,6 +718,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
+name = "fdapquery"
+version = "0.1.0"
+dependencies = [
+ "fdapquery-catalog",
+ "fdapquery-common",
+ "fdapquery-datatypes",
+ "fdapquery-execution",
+ "fdapquery-expr",
+ "fdapquery-functions",
+ "fdapquery-functions-aggregate",
+ "fdapquery-optimizer",
+ "fdapquery-physical-expr",
+ "fdapquery-physical-plan",
+ "fdapquery-sql",
+]
+
+[[package]]
 name = "fdapquery-benchmarks"
 version = "0.1.0"
 dependencies = [
@@ -880,6 +897,22 @@ dependencies = [
  "tonic",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "fdapquery-functions"
+version = "0.1.0"
+dependencies = [
+ "fdapquery-datatypes",
+ "fdapquery-physical-expr",
+]
+
+[[package]]
+name = "fdapquery-functions-aggregate"
+version = "0.1.0"
+dependencies = [
+ "fdapquery-datatypes",
+ "fdapquery-physical-expr",
 ]
 
 [[package]]
