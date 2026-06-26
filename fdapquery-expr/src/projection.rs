@@ -2,7 +2,7 @@
 //! Logical plan representing a projection (evaluating a list of expressions)
 //! against an input.
 
-use crate::logical_expr::LogicalExpr;
+use crate::logical_expr::Expr;
 use crate::logical_plan::LogicalPlan;
 use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
@@ -10,11 +10,11 @@ use std::fmt;
 #[derive(Clone)]
 pub struct Projection {
     pub input: Box<LogicalPlan>, // input is boxed because LogicalPlan is recursive.
-    pub expr: Vec<LogicalExpr>,
+    pub expr: Vec<Expr>,
 }
 
 impl Projection {
-    pub fn new(input: LogicalPlan, expr: Vec<LogicalExpr>) -> Self {
+    pub fn new(input: LogicalPlan, expr: Vec<Expr>) -> Self {
         Self {
             input: Box::new(input),
             expr,

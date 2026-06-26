@@ -7,8 +7,12 @@
 //! - `Schema::select(&[String]) -> Schema` returns a projected schema with
 //!   only the named columns, in the requested order.
 
-use crate::table_provider::{BoxRecordBatchStream, TableProvider};
+use crate::table_provider::{SendableRecordBatchStream, TableProvider};
 use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
+// Session 15d-1 #92 — `SendableRecordBatchStream` requires
+// `RecordBatchStream` (carries `schema()`); wrap the raw iterator via
+// `RecordBatchStreamAdapter` to satisfy the trait bound.
+use fdapquery_execution::stream::RecordBatchStreamAdapter;
 use std::sync::Arc;
 
 pub struct InMemoryDataSource {
@@ -31,7 +35,7 @@ impl TableProvider for InMemoryDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Result<BoxRecordBatchStream> {
+    fn scan(&self, projection: &[String]) -> Result<SendableRecordBatchStream> {
         let batches: Vec<Result<RecordBatch>> = if projection.is_empty() {
             // No projection: hand back wrapped clones of the underlying
             // batches. arrow_array::RecordBatch is Arc-backed so each
@@ -44,9 +48,9 @@ impl TableProvider for InMemoryDataSource {
                 .iter()
                 .map(|name| {
                     self.schema
-                        .fields
+                        .fields()
                         .iter()
-                        .position(|f| &f.name == name)
+                        .position(|f| f.name() == name)
                         .ok_or_else(|| {
                             FdapQueryError::SchemaError(format!(
                                 "InMemoryDataSource::scan: projection column '{name}' not in schema"
@@ -55,8 +59,9 @@ impl TableProvider for InMemoryDataSource {
                 })
                 .collect::<Result<Vec<usize>>>()?;
 
-            let projected_schema = self.schema.select(projection)?;
-            let projected_arrow_schema = Arc::new(projected_schema.to_arrow());
+            // arrow's `Schema::project` accepts indices and returns Result.
+            let projected_schema = self.schema.project(&projection_indices)?;
+            let projected_arrow_schema = Arc::new(projected_schema.clone());
 
             self.data
                 .iter()
@@ -71,7 +76,11 @@ impl TableProvider for InMemoryDataSource {
                 .collect()
         };
 
-        Ok(Box::pin(futures::stream::iter(batches)))
+        let output_arrow_schema = Arc::new(self.schema.clone());
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            output_arrow_schema,
+            futures::stream::iter(batches),
+        )))
     }
 }
 
@@ -80,16 +89,15 @@ mod tests {
     use super::*;
     use arrow_array::{ArrayRef, Int32Array, StringArray};
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
-    use fdapquery_datatypes::arrow_types::{INT32_TYPE, STRING_TYPE};
     use fdapquery_datatypes::record_batch::{column_count, row_count};
     use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, Field, ScalarValue};
     use futures::TryStreamExt;
 
     fn sample_batch() -> RecordBatch {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            ArrowField::new("id", INT32_TYPE, false),
-            ArrowField::new("name", STRING_TYPE, false),
-            ArrowField::new("age", INT32_TYPE, false),
+            ArrowField::new("id", arrow_schema::DataType::Int32, false),
+            ArrowField::new("name", arrow_schema::DataType::Utf8, false),
+            ArrowField::new("age", arrow_schema::DataType::Int32, false),
         ]));
         let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let name: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
@@ -99,9 +107,9 @@ mod tests {
 
     fn sample_schema() -> Schema {
         Schema::new(vec![
-            Field::new("id", INT32_TYPE),
-            Field::new("name", STRING_TYPE),
-            Field::new("age", INT32_TYPE),
+            Field::new("id", arrow_schema::DataType::Int32, true),
+            Field::new("name", arrow_schema::DataType::Utf8, true),
+            Field::new("age", arrow_schema::DataType::Int32, true),
         ])
     }
 

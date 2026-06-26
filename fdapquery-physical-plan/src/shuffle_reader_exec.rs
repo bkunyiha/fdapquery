@@ -14,10 +14,10 @@
 
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
-use crate::shuffle_location::ShuffleLocation;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
-use crate::task_context::TaskContext;
 use fdapquery_datatypes::{FdapQueryError, Result, Schema};
+use fdapquery_execution::ShuffleLocation;
+use fdapquery_execution::TaskContext;
 use futures::StreamExt;
 use std::sync::Arc;
 
@@ -122,7 +122,7 @@ impl ExecutionPlan for ShuffleReaderExec {
             per_location_streams.push(futures::stream::iter(iter));
         }
         let flattened = futures::stream::iter(per_location_streams).flatten();
-        let arrow_schema = Arc::new(self.shuffle_schema.to_arrow());
+        let arrow_schema = Arc::new(self.shuffle_schema.clone());
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             arrow_schema,
             flattened,
@@ -151,13 +151,13 @@ mod tests {
     //! reader round-trip via the new trait method.
 
     use super::*;
-    use crate::ColumnExpression;
+    use crate::Column;
     use crate::scan_exec::ScanExec;
-    use crate::shuffle_manager::ShuffleManager;
     use crate::shuffle_writer_exec::ShuffleWriterExec;
-    use crate::task_context::{RuntimeEnv, SessionConfig, TaskContext};
     use fdapquery_catalog::CsvDataSource;
     use fdapquery_catalog::TableProvider;
+    use fdapquery_execution::ShuffleManager;
+    use fdapquery_execution::{RuntimeEnv, SessionConfig, TaskContext};
     use futures::TryStreamExt;
 
     /// Build a `RuntimeEnv` with a specific shuffle base directory — lets
@@ -181,7 +181,11 @@ mod tests {
     }
 
     fn employee_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
-        ds.schema().fields.iter().map(|f| f.name.clone()).collect()
+        ds.schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
     }
 
     /// Build a `TaskContext` with a specific shuffle base dir and executor
@@ -215,7 +219,7 @@ mod tests {
         let input_row_count: usize = input_batches.iter().map(|b| b.num_rows()).sum();
         let writer = ShuffleWriterExec::new(
             Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap()),
-            vec![Arc::new(ColumnExpression::new(0))],
+            vec![Arc::new(Column::new(0))],
             job_uuid,
             0,
             partition_count,

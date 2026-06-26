@@ -6,11 +6,16 @@
 //! - The reader is row-group-paced internally — one batch per row group.
 //! - I/O and parse errors panic (file-not-found, corrupt file, etc.).
 
-use crate::table_provider::{BoxRecordBatchStream, TableProvider};
-use fdapquery_datatypes::{Result, Schema, schema::from_arrow as schema_from_arrow};
+use crate::table_provider::{SendableRecordBatchStream, TableProvider};
+use fdapquery_datatypes::{Result, Schema};
+// Session 15d-1 #92 — `SendableRecordBatchStream` requires
+// `RecordBatchStream` (carries `schema()`); wrap the raw iterator via
+// `RecordBatchStreamAdapter`.
+use fdapquery_execution::stream::RecordBatchStreamAdapter;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
+use std::sync::Arc;
 
 pub struct ParquetDataSource {
     pub filename: String,
@@ -41,16 +46,15 @@ impl TableProvider for ParquetDataSource {
         let builder = self
             .open_builder()
             .expect("ParquetDataSource::schema: open_builder failed");
-        // The builder exposes the Arrow-style schema directly; convert it to
-        // the fdapquery `Schema` via the module-1 from_arrow helper.
-        schema_from_arrow(builder.schema())
+        // `Schema` IS `arrow_schema::Schema`; no conversion needed.
+        builder.schema().as_ref().clone()
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Result<BoxRecordBatchStream> {
+    fn scan(&self, projection: &[String]) -> Result<SendableRecordBatchStream> {
         let builder = self.open_builder()?;
 
         let builder = if projection.is_empty() {
@@ -71,7 +75,11 @@ impl TableProvider for ParquetDataSource {
         // per-batch error into `FdapQueryError` via the `#[from]` derive,
         // then wrap the sync iterator as a pin-boxed Stream.
         let iter = reader.map(|res| res.map_err(Into::into));
-        Ok(Box::pin(futures::stream::iter(iter)))
+        let output_arrow_schema = Arc::new(self.schema().clone());
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            output_arrow_schema,
+            futures::stream::iter(iter),
+        )))
     }
 }
 
@@ -91,7 +99,7 @@ mod tests {
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
         let schema = parquet.schema();
         // alltypes_plain.parquet has these columns (in this order):
-        let names: Vec<&str> = schema.fields.iter().map(|f| f.name.as_str()).collect();
+        let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
         for expected in [
             "id",
             "bool_col",

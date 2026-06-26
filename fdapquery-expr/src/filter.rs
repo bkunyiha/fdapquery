@@ -1,20 +1,20 @@
 //!
-//! Logical plan representing a selection (a.k.a. filter) against an input.
-//! Selection does not change the schema of its input.
+//! Logical plan representing a filter (a.k.a. filter) against an input.
+//! Filter does not change the schema of its input.
 
-use crate::logical_expr::LogicalExpr;
+use crate::logical_expr::Expr;
 use crate::logical_plan::LogicalPlan;
 use fdapquery_datatypes::{Result, Schema};
 use std::fmt;
 
 #[derive(Clone)]
-pub struct Selection {
+pub struct Filter {
     pub input: Box<LogicalPlan>,
-    pub expr: LogicalExpr,
+    pub expr: Expr,
 }
 
-impl Selection {
-    pub fn new(input: LogicalPlan, expr: LogicalExpr) -> Self {
+impl Filter {
+    pub fn new(input: LogicalPlan, expr: Expr) -> Self {
         Self {
             input: Box::new(input),
             expr,
@@ -32,8 +32,8 @@ impl Selection {
     }
 }
 
-impl fmt::Display for Selection {
+impl fmt::Display for Filter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Selection: {}", self.expr)
+        write!(f, "Filter: {}", self.expr)
     }
 }

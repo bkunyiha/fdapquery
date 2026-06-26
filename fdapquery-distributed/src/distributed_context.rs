@@ -1,18 +1,18 @@
-//! High-level facade matching [`fdapquery_execution::ExecutionContext`]'s API
+//! High-level facade matching [`fdapquery::SessionContext`]'s API
 //! (`register_csv` / `register` / `sql` / `execute`) but routing execution
 //! through [`Scheduler`] instead of running the plan in-process.
 //!
 //! ## No `execution` dep
 //! `DistributedContext` re-implements the table registry / SQL parse pipeline
-//! rather than importing `ExecutionContext`. The two contexts share shape but
+//! rather than importing `SessionContext`. The two contexts share shape but
 //! not code.
 
 use crate::{DistributedConfig, DistributedPlanner, ExecutorClient, Scheduler};
 use fdapquery_catalog::CsvDataSource;
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
+use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
 use fdapquery_optimizer::Optimizer;
-use fdapquery_physical_plan::QueryPlanner;
+use fdapquery_physical_plan::DefaultPhysicalPlanner;
 use fdapquery_physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 // `PrattParser` trait must be in scope for `SqlParser::parse()`.
 use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
@@ -43,9 +43,9 @@ impl<C: ExecutorClient> DistributedContext<C> {
     /// Register a CSV file as a table.
     pub fn register_csv(&mut self, table_name: &str, path: &str, has_header: bool) {
         let ds = CsvDataSource::new(path, None, has_header, CSV_BATCH_SIZE);
-        let scan = Scan::new(path, Arc::new(ds), vec![])
+        let scan = TableScan::new(path, Arc::new(ds), vec![])
             .expect("DistributedContext::register_csv: scan construction");
-        let df = DataFrame::new(LogicalPlan::Scan(scan));
+        let df = DataFrame::new(LogicalPlan::TableScan(scan));
         self.register(table_name, df);
     }
 
@@ -78,7 +78,7 @@ impl<C: ExecutorClient> DistributedContext<C> {
     pub async fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
         let optimized: LogicalPlan = Optimizer::new().optimize(plan)?;
         let physical: Arc<dyn ExecutionPlan> =
-            QueryPlanner::new().create_physical_plan(&optimized)?;
+            DefaultPhysicalPlanner::new().create_physical_plan(&optimized)?;
         self.scheduler.execute(physical).await
     }
 }

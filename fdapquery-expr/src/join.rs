@@ -64,24 +64,32 @@ impl Join {
         let left_schema = self.left.schema()?;
         let right_schema = self.right.schema()?;
 
+        // arrow's `Fields` is `Arc<[Field]>` (immutable); collect into a
+        // fresh `Vec<Field>` via `.iter().map(...).cloned()` before mutating.
         let fields: Vec<Field> = match self.join_type {
             JoinType::Inner | JoinType::Left => {
-                let mut fs = left_schema.fields;
+                let mut fs: Vec<Field> = left_schema
+                    .fields()
+                    .iter()
+                    .map(|f| f.as_ref().clone())
+                    .collect();
                 fs.extend(
                     right_schema
-                        .fields
-                        .into_iter()
-                        .filter(|f| !duplicate_keys.contains(&f.name)),
+                        .fields()
+                        .iter()
+                        .filter(|f| !duplicate_keys.contains(f.name()))
+                        .map(|f| f.as_ref().clone()),
                 );
                 fs
             }
             JoinType::Right => {
                 let mut fs: Vec<Field> = left_schema
-                    .fields
-                    .into_iter()
-                    .filter(|f| !duplicate_keys.contains(&f.name))
+                    .fields()
+                    .iter()
+                    .filter(|f| !duplicate_keys.contains(f.name()))
+                    .map(|f| f.as_ref().clone())
                     .collect();
-                fs.extend(right_schema.fields);
+                fs.extend(right_schema.fields().iter().map(|f| f.as_ref().clone()));
                 fs
             }
         };

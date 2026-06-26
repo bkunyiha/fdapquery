@@ -4,7 +4,7 @@
 //! reading each source value (which may be a number, a string, or raw bytes)
 //! and converting it through a few small helpers.
 
-use crate::expressions::Expression;
+use crate::expressions::PhysicalExpr;
 use arrow_schema::DataType;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
@@ -14,18 +14,18 @@ use std::fmt;
 use std::sync::Arc;
 
 /// Cast the result of `expr` to `data_type`.
-pub struct CastExpression {
-    pub expr: Arc<dyn Expression>,
+pub struct CastExpr {
+    pub expr: Arc<dyn PhysicalExpr>,
     pub data_type: DataType,
 }
 
-impl CastExpression {
-    pub fn new(expr: Arc<dyn Expression>, data_type: DataType) -> Self {
+impl CastExpr {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, data_type: DataType) -> Self {
         Self { expr, data_type }
     }
 }
 
-impl Expression for CastExpression {
+impl PhysicalExpr for CastExpr {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         let value = self.expr.evaluate(input)?;
         let mut builder = ArrowVectorBuilder::new(&self.data_type, record_batch::row_count(input));
@@ -62,7 +62,7 @@ impl Expression for CastExpression {
     }
 }
 
-impl fmt::Display for CastExpression {
+impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // arrow-rs's `DataType` has no `Display`, so use its `Debug` form
         // for the type name.
@@ -189,11 +189,10 @@ mod tests {
     //! Builds the input batch directly (the `fuzzer` crate covered in module 9
     //! is not yet implemented).
     use super::*;
-    use crate::column_expression::ColumnExpression;
+    use crate::column_expression::Column;
     use arrow_array::{ArrayRef, Int8Array, StringArray};
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
     use fdapquery_datatypes::RecordBatch;
-    use fdapquery_datatypes::arrow_types::{FLOAT_TYPE, INT8_TYPE, STRING_TYPE};
     use std::sync::Arc;
 
     fn batch1(name: &str, t: DataType, col: ArrayRef) -> RecordBatch {
@@ -204,9 +203,13 @@ mod tests {
     #[test]
     fn cast_byte_to_string() {
         let a: Vec<i8> = vec![10, 20, 30, i8::MIN, i8::MAX];
-        let batch = batch1("a", INT8_TYPE, Arc::new(Int8Array::from(a.clone())));
+        let batch = batch1(
+            "a",
+            arrow_schema::DataType::Int8,
+            Arc::new(Int8Array::from(a.clone())),
+        );
 
-        let expr = CastExpression::new(Arc::new(ColumnExpression::new(0)), STRING_TYPE);
+        let expr = CastExpr::new(Arc::new(Column::new(0)), arrow_schema::DataType::Utf8);
         let result = expr.evaluate(&batch).unwrap();
 
         assert_eq!(result.size(), a.len());
@@ -223,9 +226,13 @@ mod tests {
         // The exact values don't matter — the test parses the same strings to
         // compute the expected f32, so it stays self-consistent.
         let a = vec!["1.5", "2.25", "10.0"];
-        let batch = batch1("a", STRING_TYPE, Arc::new(StringArray::from(a.clone())));
+        let batch = batch1(
+            "a",
+            arrow_schema::DataType::Utf8,
+            Arc::new(StringArray::from(a.clone())),
+        );
 
-        let expr = CastExpression::new(Arc::new(ColumnExpression::new(0)), FLOAT_TYPE);
+        let expr = CastExpr::new(Arc::new(Column::new(0)), arrow_schema::DataType::Float32);
         let result = expr.evaluate(&batch).unwrap();
 
         assert_eq!(result.size(), a.len());

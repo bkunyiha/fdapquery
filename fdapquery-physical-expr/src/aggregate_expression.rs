@@ -1,10 +1,10 @@
 //!
 //! An aggregate expression names the input it aggregates over and knows how to
-//! create a fresh [`Accumulator`] for it. `HashAggregateExec` holds one accumulator
+//! create a fresh [`Accumulator`] for it. `AggregateExec` holds one accumulator
 //! per aggregate per group key. This file also carries the `scalar_lt` / `scalar_gt`
-//! helpers shared by `MinExpression` / `MaxExpression`.
+//! helpers shared by `MinExpr` / `MaxExpr`.
 
-use crate::expressions::{Accumulator, Expression};
+use crate::expressions::{Accumulator, PhysicalExpr};
 use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
 use std::cmp::Ordering;
 use std::fmt;
@@ -12,14 +12,14 @@ use std::sync::Arc;
 
 /// Physical aggregate expression.
 ///
-/// `: fmt::Display` so `HashAggregateExec`'s `Display` impl can print its
+/// `: fmt::Display` so `AggregateExec`'s `Display` impl can print its
 /// aggregates (e.g. `"MIN(#0)"`). `Send + Sync` lets
-/// `Arc<dyn AggregateExpression>` be shared with rayon workers in
+/// `Arc<dyn AggregateExpr>` be shared with rayon workers in
 /// `ParallelContext` (see the `PhysicalPlan` module note); each concrete
-/// aggregate holds only an `Arc<dyn Expression>` input plus plain data.
-pub trait AggregateExpression: fmt::Display + Send + Sync {
+/// aggregate holds only an `Arc<dyn PhysicalExpr>` input plus plain data.
+pub trait AggregateExpr: fmt::Display + Send + Sync {
     /// The expression whose values are aggregated.
-    fn input_expression(&self) -> Arc<dyn Expression>;
+    fn input_expression(&self) -> Arc<dyn PhysicalExpr>;
 
     /// Create a fresh accumulator for this aggregate.
     fn create_accumulator(&self) -> Box<dyn Accumulator>;
@@ -27,7 +27,7 @@ pub trait AggregateExpression: fmt::Display + Send + Sync {
     /// Type-erased self-reference for runtime downcasting (see
     /// `PhysicalPlan::as_any`). `fdapquery_proto::serialize_physical_aggr_expr` —
     /// the only caller that needs to branch on concrete aggregate type —
-    /// uses `aggr.as_any().downcast_ref::<MinExpression>()` etc. Same pattern
+    /// uses `aggr.as_any().downcast_ref::<MinExpr>()` etc. Same pattern
     /// DataFusion uses for `AggregateUDFImpl` / `AggregateExpr`.
     fn as_any(&self) -> &dyn std::any::Any;
 }

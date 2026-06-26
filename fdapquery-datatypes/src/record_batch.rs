@@ -10,8 +10,8 @@
 //!   self-releasing.
 
 use crate::Result;
+use crate::ScalarValue;
 use crate::arrow_vector_builder::ArrowVectorBuilder;
-use crate::scalar_value::ScalarValue;
 use crate::schema::Schema;
 use crate::{arrow_field_vector::ArrowFieldVector, column_vector::ColumnVector};
 use arrow_array::ArrayRef;
@@ -73,7 +73,7 @@ pub fn create(schema: &Schema, columns: Vec<Box<dyn ColumnVector>>) -> Result<Re
         .iter()
         .map(|c| column_to_array(c.as_ref()))
         .collect::<Result<Vec<ArrayRef>>>()?;
-    let arrow_schema = Arc::new(schema.to_arrow());
+    let arrow_schema = Arc::new(schema.clone());
     RecordBatch::try_new(arrow_schema, arrays).map_err(Into::into)
 }
 
@@ -119,15 +119,14 @@ pub fn to_csv(batch: &RecordBatch) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow_types::{INT32_TYPE, STRING_TYPE};
     use arrow_array::{ArrayRef, Int32Array, StringArray};
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
     use std::sync::Arc;
 
     fn sample_batch() -> RecordBatch {
         let schema = Arc::new(ArrowSchema::new(vec![
-            ArrowField::new("id", INT32_TYPE, false),
-            ArrowField::new("name", STRING_TYPE, false),
+            ArrowField::new("id", arrow_schema::DataType::Int32, false),
+            ArrowField::new("name", arrow_schema::DataType::Utf8, false),
         ]));
         let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let name: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
@@ -168,10 +167,10 @@ mod tests {
         // One real column (id) and one *virtual* literal column — the literal has
         // no backing array, so `create` must materialize it.
         let id = ArrowFieldVector::new(Arc::new(Int32Array::from(vec![1, 2, 3])));
-        let lit = LiteralValueVector::new(INT32_TYPE, ScalarValue::Int32(7), 3);
+        let lit = LiteralValueVector::new(arrow_schema::DataType::Int32, ScalarValue::Int32(7), 3);
         let schema = Schema::new(vec![
-            Field::new("id", INT32_TYPE),
-            Field::new("seven", INT32_TYPE),
+            Field::new("id", arrow_schema::DataType::Int32, true),
+            Field::new("seven", arrow_schema::DataType::Int32, true),
         ]);
 
         let batch = create(&schema, vec![Box::new(id), Box::new(lit)])

@@ -8,7 +8,7 @@
 //! - Rules apply in a fixed order. (Cost-based reordering is not implemented.)
 //!
 //! Currently ships one rule, `ProjectionPushDownRule`, which trims each
-//! `Scan` node's column list down to just the columns referenced by the
+//! `TableScan` node's column list down to just the columns referenced by the
 //! rest of the plan.
 
 // ==============================================================
@@ -21,5 +21,5 @@ pub mod projection_push_down_rule;
 // Re-exports for ergonomic `use optimizer::*;`. Mirrors the pattern
 // used in physical-plan / datatypes / etc.
 // ==============================================================
-pub use optimizer::{Optimizer, OptimizerRule};
+pub use optimizer::{Optimizer, OptimizerConfig, OptimizerRule};
 pub use projection_push_down_rule::ProjectionPushDownRule;

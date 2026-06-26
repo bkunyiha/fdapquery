@@ -8,14 +8,14 @@
 //!
 //! ## Shape — `Arc<dyn ExecutionPlan>` throughout (DataFusion-aligned)
 //! `planAggregate` reads `aggregate.input` and constructs a new
-//! `HashAggregateExec` that shares the input via reference. `agg.input.clone()`
+//! `AggregateExec` that shares the input via reference. `agg.input.clone()`
 //! is a cheap Arc refcount bump; group-by / aggregate / schema fields are
 //! clonable, so no consuming-downcast tricks are needed. Matches DataFusion's
 //! `Arc<dyn ExecutionPlan>` shape.
 
 use crate::{DistributedConfig, QueryStage};
 use fdapquery_physical_plan::{
-    AggregateMode, ExecutionPlan, HashAggregateExec, ShuffleLocation, ShuffleReaderExec,
+    AggregateExec, AggregateMode, ExecutionPlan, ShuffleLocation, ShuffleReaderExec,
     ShuffleWriterExec,
 };
 use std::sync::Arc;
@@ -32,7 +32,7 @@ impl DistributedPlanner {
 
     /// Plan a physical plan for distributed execution.
     pub fn plan(&self, plan: Arc<dyn ExecutionPlan>, job_uuid: &str) -> Vec<QueryStage> {
-        if let Some(aggregate) = plan.as_any().downcast_ref::<HashAggregateExec>() {
+        if let Some(aggregate) = plan.as_any().downcast_ref::<AggregateExec>() {
             self.plan_aggregate(aggregate, job_uuid)
         } else {
             // Non-aggregate plans become a single final stage.
@@ -45,13 +45,13 @@ impl DistributedPlanner {
     /// Takes the aggregate by reference and Arc-clones the fields we need.
     /// The original aggregate's Arc-reference stays valid for the duration of
     /// this method; if the caller doesn't retain it, it drops cleanly.
-    fn plan_aggregate(&self, aggregate: &HashAggregateExec, job_uuid: &str) -> Vec<QueryStage> {
+    fn plan_aggregate(&self, aggregate: &AggregateExec, job_uuid: &str) -> Vec<QueryStage> {
         let partition_count = self.config.partition_count();
 
         // Stage 0: partial aggregate → shuffle writer.
         // Arc-clone the input + group/aggregate exprs to share them with the
         // partial aggregate. Schema is `Clone`.
-        let partial_aggregate = HashAggregateExec::new_with_mode(
+        let partial_aggregate = AggregateExec::new_with_mode(
             Arc::clone(&aggregate.input),
             aggregate.group_expr.clone(),
             aggregate.aggregate_expr.clone(),
@@ -72,7 +72,7 @@ impl DistributedPlanner {
         // `Scheduler::execute` after stage 0 completes
         // (see `update_shuffle_locations` below).
         let shuffle_reader = ShuffleReaderExec::new(aggregate.schema.clone(), vec![]);
-        let final_aggregate = HashAggregateExec::new_with_mode(
+        let final_aggregate = AggregateExec::new_with_mode(
             Arc::new(shuffle_reader),
             aggregate.group_expr.clone(),
             aggregate.aggregate_expr.clone(),
@@ -129,10 +129,10 @@ fn substitute_shuffle_reader(
         ));
     }
     // In the aggregate case, stage 1’s plan is not just a ShuffleReaderExec. It is:
-    //   HashAggregateExec
+    //   AggregateExec
     //     input: ShuffleReaderExec
     //
-    // Stage roots are often parents like HashAggregateExec; walk down to find
+    // Stage roots are often parents like AggregateExec; walk down to find
     // the ShuffleReaderExec leaf that actually needs the locations.
     // Otherwise: recurse into children, then rebuild this node with the
     // (possibly transformed) children. If no descendant is a ShuffleReader,
@@ -151,9 +151,9 @@ mod tests {
     use super::*;
     use crate::ExecutorConfig;
     use fdapquery_catalog::CsvDataSource;
-    use fdapquery_expr::{Aggregate, LogicalPlan, Scan, col, sum};
+    use fdapquery_expr::{Aggregate, LogicalPlan, TableScan, col, sum};
     use fdapquery_optimizer::Optimizer;
-    use fdapquery_physical_plan::QueryPlanner;
+    use fdapquery_physical_plan::DefaultPhysicalPlanner;
     use std::sync::Arc;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
@@ -170,7 +170,8 @@ mod tests {
     #[test]
     fn plan_aggregate_query_into_two_stages() {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
+        let scan =
+            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
         let aggregate = LogicalPlan::Aggregate(Aggregate::new(
             scan,
             vec![col("state")],
@@ -178,7 +179,7 @@ mod tests {
         ));
 
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
-        let physical_plan = QueryPlanner::new()
+        let physical_plan = DefaultPhysicalPlanner::new()
             .create_physical_plan(&optimized)
             .unwrap();
 
@@ -201,8 +202,8 @@ mod tests {
         let partial = writer
             .input
             .as_any()
-            .downcast_ref::<HashAggregateExec>()
-            .expect("ShuffleWriter input should be HashAggregateExec");
+            .downcast_ref::<AggregateExec>()
+            .expect("ShuffleWriter input should be AggregateExec");
         assert_eq!(partial.mode, AggregateMode::Partial);
 
         // Stage 1: final aggregate, depends on stage 0, is the final stage.
@@ -213,8 +214,8 @@ mod tests {
         let final_agg = stage1
             .plan
             .as_any()
-            .downcast_ref::<HashAggregateExec>()
-            .expect("stage 1 plan should be HashAggregateExec");
+            .downcast_ref::<AggregateExec>()
+            .expect("stage 1 plan should be AggregateExec");
         assert_eq!(final_agg.mode, AggregateMode::Final);
     }
 
@@ -222,8 +223,11 @@ mod tests {
     #[test]
     fn non_aggregate_query_produces_single_stage() {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
-        let physical_plan = QueryPlanner::new().create_physical_plan(&scan).unwrap();
+        let scan =
+            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
+        let physical_plan = DefaultPhysicalPlanner::new()
+            .create_physical_plan(&scan)
+            .unwrap();
 
         let planner = DistributedPlanner::new(three_executor_config());
         let stages = planner.plan(physical_plan, "test-job-456");

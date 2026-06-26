@@ -1,6 +1,6 @@
 //!
 //! Runs the same `SELECT state, SUM(CAST(salary AS double)) FROM employee
-//! GROUP BY state` query two ways — through a sequential `ExecutionContext`
+//! GROUP BY state` query two ways — through a sequential `SessionContext`
 //! and through a 4-worker `ParallelContext` — then verifies the two outputs
 //! match by comparing them as `state → sum` maps. Prints each side's wall-clock
 //! timing.
@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use fdapquery::{ParallelContext, SessionContext};
 use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
-use fdapquery_execution::{ExecutionContext, ParallelContext};
 use futures::TryStreamExt;
 
 /// In-repo employee fixture used by the existing execution-module tests.
@@ -30,7 +30,7 @@ async fn main() {
 
     // ---- Sequential execution ----
     println!("--- Sequential Execution ---");
-    let mut seq_ctx = ExecutionContext::new(HashMap::new());
+    let mut seq_ctx = SessionContext::new(HashMap::new());
     seq_ctx.register_csv("employee", EMPLOYEE_CSV);
     let seq_df = seq_ctx.sql(sql).expect("seq sql plan");
     let seq_start = Instant::now();

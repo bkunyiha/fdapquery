@@ -1,19 +1,18 @@
 //!
-//! Home of the root [`Expression`] trait, the literal expressions, and the
-//! [`Accumulator`] trait. Like [`crate::physical_plan::PhysicalPlan`], `Expression`
-//! is a **trait** referenced through `Arc<dyn Expression>` rather than an enum
+//! Home of the root [`PhysicalExpr`] trait, the literal expressions, and the
+//! [`Accumulator`] trait. Like [`crate::physical_plan::PhysicalPlan`], `PhysicalExpr`
+//! is a **trait** referenced through `Arc<dyn PhysicalExpr>` rather than an enum
 //! (the expression set is large and open in spirit).
 //!
 //! A physical expression evaluates against an input [`RecordBatch`] and produces
 //! a whole column of output ([`ColumnVector`]) — it is the runtime counterpart of
-//! a `fdapquery_expr::LogicalExpr`.
+//! a `fdapquery_expr::Expr`.
 //!
 //! ## Typed values via `ScalarValue`
 //! `Accumulator` and related traits exchange typed values via the
 //! [`ScalarValue`] enum (with its own `Null` variant), rather than an
 //! untyped boxed-`Any`.
 
-use fdapquery_datatypes::arrow_types::{DATE_DAY_TYPE, DOUBLE_TYPE, INT64_TYPE, STRING_TYPE};
 use fdapquery_datatypes::{
     ColumnVector, FdapQueryError, LiteralValueVector, RecordBatch, Result, ScalarValue,
     record_batch,
@@ -22,12 +21,12 @@ use std::fmt;
 
 /// Physical representation of an expression.
 ///
-/// `Expression: fmt::Display` so that composite expressions (binary, cast) and
-/// operators can print their operands. `Send + Sync` lets `Arc<dyn Expression>`
+/// `PhysicalExpr: fmt::Display` so that composite expressions (binary, cast) and
+/// operators can print their operands. `Send + Sync` lets `Arc<dyn PhysicalExpr>`
 /// be shared with rayon workers in `ParallelContext` (see the `PhysicalPlan`
 /// module note). It holds: every concrete expression stores only
-/// `Arc<dyn Expression>` operands plus plain data.
-pub trait Expression: fmt::Display + Send + Sync {
+/// `Arc<dyn PhysicalExpr>` operands plus plain data.
+pub trait PhysicalExpr: fmt::Display + Send + Sync {
     /// Evaluate against an input record batch and produce a column of output.
     ///
     /// Returns a boxed trait object `Box<dyn ColumnVector>`. Failures
@@ -38,25 +37,25 @@ pub trait Expression: fmt::Display + Send + Sync {
     /// Type-erased self-reference for runtime downcasting (see
     /// `PhysicalPlan::as_any` for the rationale). The protobuf serializer
     /// — the only caller that needs to branch on concrete expression type —
-    /// uses `expr.as_any().downcast_ref::<ColumnExpression>()` etc., the same
-    /// pattern DataFusion uses for `PhysicalExpr`. Each leaf `impl Expression`
+    /// uses `expr.as_any().downcast_ref::<Column>()` etc., the same
+    /// pattern DataFusion uses for `PhysicalExpr`. Each leaf `impl PhysicalExpr`
     /// (column, the four literals, cast) overrides with
     /// `fn as_any(&self) -> &dyn Any { self }`.
     fn as_any(&self) -> &dyn std::any::Any;
 
     /// Family-narrowing accessor for the boolean expression family. Returns
-    /// `&dyn BooleanExpression` so the caller can read `op_name()`/`left()`/
+    /// `&dyn BooleanExpr` so the caller can read `op_name()`/`left()`/
     /// `right()` without further per-operator dispatch. Each of the eight
     /// boolean operators overrides this (via the `bool_expr!` macro). Kept
     /// even after the `as_any` migration because there is no concrete type
     /// that represents "any boolean op" — the dispatch is genuinely 1-to-N.
-    fn as_boolean_expression(&self) -> Option<&dyn crate::BooleanExpression> {
+    fn as_boolean_expression(&self) -> Option<&dyn crate::BooleanExpr> {
         None
     }
 
     /// Family-narrowing accessor for the math expression family (Add/Sub/Mul/
     /// Div/Mod). Same rationale as `as_boolean_expression`.
-    fn as_math_expression(&self) -> Option<&dyn crate::MathExpression> {
+    fn as_math_expression(&self) -> Option<&dyn crate::MathExpr> {
         None
     }
 }
@@ -67,20 +66,20 @@ pub trait Expression: fmt::Display + Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// A literal `i64`.
-pub struct LiteralLongExpression {
+pub struct LiteralLong {
     pub value: i64,
 }
 
-impl LiteralLongExpression {
+impl LiteralLong {
     pub fn new(value: i64) -> Self {
         Self { value }
     }
 }
 
-impl Expression for LiteralLongExpression {
+impl PhysicalExpr for LiteralLong {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         Ok(Box::new(LiteralValueVector::new(
-            INT64_TYPE,
+            arrow_schema::DataType::Int64,
             ScalarValue::Int64(self.value),
             record_batch::row_count(input),
         )))
@@ -91,27 +90,27 @@ impl Expression for LiteralLongExpression {
     }
 }
 
-impl fmt::Display for LiteralLongExpression {
+impl fmt::Display for LiteralLong {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.value)
     }
 }
 
 /// A literal `f64`.
-pub struct LiteralDoubleExpression {
+pub struct LiteralDouble {
     pub value: f64,
 }
 
-impl LiteralDoubleExpression {
+impl LiteralDouble {
     pub fn new(value: f64) -> Self {
         Self { value }
     }
 }
 
-impl Expression for LiteralDoubleExpression {
+impl PhysicalExpr for LiteralDouble {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         Ok(Box::new(LiteralValueVector::new(
-            DOUBLE_TYPE,
+            arrow_schema::DataType::Float64,
             ScalarValue::Float64(self.value),
             record_batch::row_count(input),
         )))
@@ -122,20 +121,20 @@ impl Expression for LiteralDoubleExpression {
     }
 }
 
-impl fmt::Display for LiteralDoubleExpression {
+impl fmt::Display for LiteralDouble {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.value)
     }
 }
 
-/// A literal string. Stored as `ScalarValue::Utf8(String)` under `STRING_TYPE`
+/// A literal string. Stored as `ScalarValue::Utf8(String)` under `arrow_schema::DataType::Utf8`
 /// so it compares directly against string columns read from a scan, which
 /// also surface as `Utf8`.
-pub struct LiteralStringExpression {
+pub struct LiteralString {
     pub value: String,
 }
 
-impl LiteralStringExpression {
+impl LiteralString {
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -143,10 +142,10 @@ impl LiteralStringExpression {
     }
 }
 
-impl Expression for LiteralStringExpression {
+impl PhysicalExpr for LiteralString {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         Ok(Box::new(LiteralValueVector::new(
-            STRING_TYPE,
+            arrow_schema::DataType::Utf8,
             ScalarValue::Utf8(self.value.clone()),
             record_batch::row_count(input),
         )))
@@ -157,7 +156,7 @@ impl Expression for LiteralStringExpression {
     }
 }
 
-impl fmt::Display for LiteralStringExpression {
+impl fmt::Display for LiteralString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "'{}'", self.value)
     }
@@ -165,20 +164,20 @@ impl fmt::Display for LiteralStringExpression {
 
 /// A literal date stored as days since the Unix epoch
 ///.
-pub struct LiteralDateExpression {
+pub struct LiteralDate {
     pub days_since_epoch: i32,
 }
 
-impl LiteralDateExpression {
+impl LiteralDate {
     pub fn new(days_since_epoch: i32) -> Self {
         Self { days_since_epoch }
     }
 }
 
-impl Expression for LiteralDateExpression {
+impl PhysicalExpr for LiteralDate {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         Ok(Box::new(LiteralValueVector::new(
-            DATE_DAY_TYPE,
+            arrow_schema::DataType::Date32,
             ScalarValue::Date32(self.days_since_epoch),
             record_batch::row_count(input),
         )))
@@ -189,28 +188,28 @@ impl Expression for LiteralDateExpression {
     }
 }
 
-impl fmt::Display for LiteralDateExpression {
+impl fmt::Display for LiteralDate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.days_since_epoch)
     }
 }
 
 /// A literal interval expressed as a whole number of days, stored under
-/// `INT64_TYPE` / `Int64`.
-pub struct LiteralIntervalDaysExpression {
+/// `arrow_schema::DataType::Int64` / `Int64`.
+pub struct LiteralIntervalDays {
     pub days: i64,
 }
 
-impl LiteralIntervalDaysExpression {
+impl LiteralIntervalDays {
     pub fn new(days: i64) -> Self {
         Self { days }
     }
 }
 
-impl Expression for LiteralIntervalDaysExpression {
+impl PhysicalExpr for LiteralIntervalDays {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         Ok(Box::new(LiteralValueVector::new(
-            INT64_TYPE,
+            arrow_schema::DataType::Int64,
             ScalarValue::Int64(self.days),
             record_batch::row_count(input),
         )))
@@ -221,7 +220,7 @@ impl Expression for LiteralIntervalDaysExpression {
     }
 }
 
-impl fmt::Display for LiteralIntervalDaysExpression {
+impl fmt::Display for LiteralIntervalDays {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.days)
     }

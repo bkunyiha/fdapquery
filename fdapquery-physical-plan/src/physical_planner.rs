@@ -1,11 +1,11 @@
 //! Translates a `LogicalPlan` (what to compute) into a `PhysicalPlan` (how to
 //! run it) — the seam between the planner and the executor. Two `match`
 //! functions: `create_physical_plan` over the six `LogicalPlan` operators and
-//! `create_physical_expr` over the `LogicalExpr` variants. The most boring
+//! `create_physical_expr` over the `Expr` variants. The most boring
 //! module in the workspace, by design.
 //!
 //! ## Notes
-//! - **Exhaustive matches, no catch-all.** Both `LogicalPlan` and `LogicalExpr`
+//! - **Exhaustive matches, no catch-all.** Both `LogicalPlan` and `Expr`
 //!   are closed enums (§3.1), so the matches are exhaustive. Variants that
 //!   genuinely have no physical counterpart use an explicit `panic!` arm with
 //!   an "unsupported" message.
@@ -20,37 +20,72 @@
 //!   `NaiveDate::num_days_from_ce()` converted to days-since-Unix-epoch.
 
 use fdapquery_datatypes::{FdapQueryError, Result, Schema};
-use fdapquery_expr::{AggregateExpr, LogicalExpr, LogicalPlan};
+// Session 15d-1 #91 renamed the physical-side `AggregateExpression`
+// trait → `AggregateExpr`, which now collides with the logical-side
+// `fdapquery_expr::AggregateExpr` enum. Alias the logical one so the
+// bare `AggregateExpr` in this file resolves to the physical trait
+// (the more common reference; lowers the logical-side noise in match
+// arms to a single prefix).
+use fdapquery_expr::{AggregateExpr as LogicalAggregateExpr, Expr, LogicalPlan};
 // Items from sibling modules in this crate. (Pre-Session-12 these were
 // imported via `fdapquery_physical_plan::` since `query_planner` lived
 // in a separate crate; after the fold the path is `crate::`.)
 use crate::{
-    AddExpression, AggregateExpression, AndExpression, AvgExpression, CastExpression,
-    ColumnExpression, CountExpression, DateAddIntervalExpression, DateSubtractIntervalExpression,
-    DivideExpression, EqExpression, ExecutionPlan, Expression, GtEqExpression, GtExpression,
-    HashAggregateExec, HashJoinExec, LimitExec, LiteralDateExpression, LiteralDoubleExpression,
-    LiteralIntervalDaysExpression, LiteralLongExpression, LiteralStringExpression, LtEqExpression,
-    LtExpression, MaxExpression, MinExpression, MultiplyExpression, NeqExpression, OrExpression,
-    ProjectionExec, ScanExec, SelectionExec, SubtractExpression, SumExpression,
+    AddExpr, AggregateExec, AggregateExpr, AndExpr, AvgExpr, CastExpr, Column, CountExpr,
+    DateAddIntervalExpr, DateSubtractIntervalExpr, DivideExpr, EqExpr, ExecutionPlan, FilterExec,
+    GlobalLimitExec, GtEqExpr, GtExpr, HashJoinExec, LiteralDate, LiteralDouble,
+    LiteralIntervalDays, LiteralLong, LiteralString, LtEqExpr, LtExpr, MaxExpr, MinExpr,
+    MultiplyExpr, NeqExpr, OrExpr, PhysicalExpr, ProjectionExec, ScanExec, SubtractExpr, SumExpr,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Convert a `chrono::NaiveDate` to "days since the Unix epoch" (1970-01-01).
 /// Used to lower a logical `LiteralDate(NaiveDate)` into a physical
-/// `LiteralDateExpression { days_since_epoch: i32 }`.
+/// `LiteralDate { days_since_epoch: i32 }`.
 fn days_since_unix_epoch(date: chrono::NaiveDate) -> i32 {
     let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 is a valid date");
     (date - epoch).num_days() as i32
 }
 
-/// Creates a physical query plan from a logical query plan.
-#[derive(Default)]
-pub struct QueryPlanner;
+/// Convert a `LogicalPlan` into an executable `Arc<dyn ExecutionPlan>`.
+///
+/// Same shape as DataFusion's `PhysicalPlanner` trait at
+/// `datafusion-core/src/physical_planner.rs:128`. Session 15d-1 #109
+/// extracted this from the previous concrete `QueryPlanner` struct so
+/// downstream code can hold an `Arc<dyn PhysicalPlanner>` and swap in
+/// custom planners — currently only [`DefaultPhysicalPlanner`] implements
+/// it; the customization point lands fully when `SessionStateBuilder`
+/// is introduced (deferred to feature parity).
+pub trait PhysicalPlanner: Send + Sync {
+    fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>>;
+}
 
-impl QueryPlanner {
+/// Default `PhysicalPlanner` impl — the all-of-fdapquery logical-to-physical
+/// lowering. Renamed from `QueryPlanner` in Session 15d-1 #109 to match
+/// DataFusion's `DefaultPhysicalPlanner` (struct at
+/// `datafusion-core/src/physical_planner.rs:266`).
+#[derive(Default)]
+pub struct DefaultPhysicalPlanner;
+
+impl PhysicalPlanner for DefaultPhysicalPlanner {
+    /// Trait-dispatch entry point. Delegates to the inherent
+    /// `DefaultPhysicalPlanner::create_physical_plan` so consumers
+    /// holding the concrete type don't pay a vtable indirection.
+    ///
+    /// Matches DataFusion's delegation pattern at
+    /// `datafusion-core/src/physical_planner.rs:271-281`. Rust resolves
+    /// `self.create_physical_plan(plan)` to the inherent method
+    /// because inherent methods have priority over trait methods in
+    /// name lookup — no infinite recursion.
+    fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
+        self.create_physical_plan(plan)
+    }
+}
+
+impl DefaultPhysicalPlanner {
     pub fn new() -> Self {
-        QueryPlanner
+        DefaultPhysicalPlanner
     }
 
     /// Create a physical plan from a logical plan.
@@ -61,18 +96,18 @@ impl QueryPlanner {
     /// `with_new_children`.
     pub fn create_physical_plan(&self, plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(match plan {
-            LogicalPlan::Scan(s) => Arc::new(ScanExec::new(
+            LogicalPlan::TableScan(s) => Arc::new(ScanExec::new(
                 Arc::clone(&s.data_source),
                 s.projection.clone(),
             )?),
-            LogicalPlan::Selection(s) => {
+            LogicalPlan::Filter(s) => {
                 let input = self.create_physical_plan(&s.input)?;
                 let filter_expr = self.create_physical_expr(&s.expr, &s.input)?;
-                Arc::new(SelectionExec::new(input, filter_expr))
+                Arc::new(FilterExec::new(input, filter_expr))
             }
             LogicalPlan::Projection(p) => {
                 let input = self.create_physical_plan(&p.input)?;
-                let projection_expr: Vec<Arc<dyn Expression>> = p
+                let projection_expr: Vec<Arc<dyn PhysicalExpr>> = p
                     .expr
                     .iter()
                     .map(|e| self.create_physical_expr(e, &p.input))
@@ -91,17 +126,17 @@ impl QueryPlanner {
             }
             LogicalPlan::Aggregate(a) => {
                 let input = self.create_physical_plan(&a.input)?;
-                let group_expr: Vec<Arc<dyn Expression>> = a
+                let group_expr: Vec<Arc<dyn PhysicalExpr>> = a
                     .group_expr
                     .iter()
                     .map(|e| self.create_physical_expr(e, &a.input))
                     .collect::<Result<Vec<_>>>()?;
-                let aggregate_expr: Vec<Arc<dyn AggregateExpression>> = a
+                let aggregate_expr: Vec<Arc<dyn AggregateExpr>> = a
                     .aggregate_expr
                     .iter()
                     .map(|agg| self.create_aggregate_expr(agg, &a.input))
                     .collect::<Result<Vec<_>>>()?;
-                Arc::new(HashAggregateExec::new(
+                Arc::new(AggregateExec::new(
                     input,
                     group_expr,
                     aggregate_expr,
@@ -110,7 +145,7 @@ impl QueryPlanner {
             }
             LogicalPlan::Limit(l) => {
                 let input = self.create_physical_plan(&l.input)?;
-                Arc::new(LimitExec::new(input, l.limit as usize))
+                Arc::new(GlobalLimitExec::new(input, l.limit as usize))
             }
             LogicalPlan::Join(j) => {
                 let left_plan = self.create_physical_plan(&j.left)?;
@@ -123,9 +158,9 @@ impl QueryPlanner {
                     j.on.iter()
                         .map(|(left_col, _)| {
                             left_schema
-                                .fields
+                                .fields()
                                 .iter()
-                                .position(|f| &f.name == left_col)
+                                .position(|f| f.name() == left_col)
                                 .ok_or_else(|| {
                                     FdapQueryError::SchemaError(format!(
                                         "no column named '{left_col}' in left input"
@@ -137,9 +172,9 @@ impl QueryPlanner {
                     j.on.iter()
                         .map(|(_, right_col)| {
                             right_schema
-                                .fields
+                                .fields()
                                 .iter()
-                                .position(|f| &f.name == right_col)
+                                .position(|f| f.name() == right_col)
                                 .ok_or_else(|| {
                                     FdapQueryError::SchemaError(format!(
                                         "no column named '{right_col}' in right input"
@@ -156,11 +191,11 @@ impl QueryPlanner {
                         .map(|(_, r)| r.clone())
                         .collect();
                 let right_columns_to_exclude: HashSet<usize> = right_schema
-                    .fields
+                    .fields()
                     .iter()
                     .enumerate()
                     .filter_map(|(i, f)| {
-                        if duplicate_key_names.contains(&f.name) {
+                        if duplicate_key_names.contains(f.name()) {
                             Some(i)
                         } else {
                             None
@@ -185,26 +220,26 @@ impl QueryPlanner {
     /// `Aggregate` branch.
     fn create_aggregate_expr(
         &self,
-        agg: &AggregateExpr,
+        agg: &LogicalAggregateExpr,
         input: &LogicalPlan,
-    ) -> Result<Arc<dyn AggregateExpression>> {
+    ) -> Result<Arc<dyn AggregateExpr>> {
         Ok(match agg {
-            AggregateExpr::Max(e) => {
-                Arc::new(MaxExpression::new(self.create_physical_expr(e, input)?))
+            LogicalAggregateExpr::Max(e) => {
+                Arc::new(MaxExpr::new(self.create_physical_expr(e, input)?))
             }
-            AggregateExpr::Min(e) => {
-                Arc::new(MinExpression::new(self.create_physical_expr(e, input)?))
+            LogicalAggregateExpr::Min(e) => {
+                Arc::new(MinExpr::new(self.create_physical_expr(e, input)?))
             }
-            AggregateExpr::Sum(e) => {
-                Arc::new(SumExpression::new(self.create_physical_expr(e, input)?))
+            LogicalAggregateExpr::Sum(e) => {
+                Arc::new(SumExpr::new(self.create_physical_expr(e, input)?))
             }
-            AggregateExpr::Avg(e) => {
-                Arc::new(AvgExpression::new(self.create_physical_expr(e, input)?))
+            LogicalAggregateExpr::Avg(e) => {
+                Arc::new(AvgExpr::new(self.create_physical_expr(e, input)?))
             }
-            AggregateExpr::Count(e) => {
-                Arc::new(CountExpression::new(self.create_physical_expr(e, input)?))
+            LogicalAggregateExpr::Count(e) => {
+                Arc::new(CountExpr::new(self.create_physical_expr(e, input)?))
             }
-            AggregateExpr::CountDistinct(_) => {
+            LogicalAggregateExpr::CountDistinct(_) => {
                 return Err(FdapQueryError::NotImplemented(
                     "COUNT(DISTINCT ...) is not supported".into(),
                 ));
@@ -215,124 +250,118 @@ impl QueryPlanner {
     /// Create a physical expression from a logical expression.
     pub fn create_physical_expr(
         &self,
-        expr: &LogicalExpr,
+        expr: &Expr,
         input: &LogicalPlan,
-    ) -> Result<Arc<dyn Expression>> {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(match expr {
-            LogicalExpr::LiteralLong(n) => Arc::new(LiteralLongExpression::new(*n)),
-            LogicalExpr::LiteralDouble(n) => Arc::new(LiteralDoubleExpression::new(*n)),
-            LogicalExpr::LiteralString(s) => Arc::new(LiteralStringExpression::new(s.clone())),
+            Expr::LiteralLong(n) => Arc::new(LiteralLong::new(*n)),
+            Expr::LiteralDouble(n) => Arc::new(LiteralDouble::new(*n)),
+            Expr::LiteralString(s) => Arc::new(LiteralString::new(s.clone())),
             // Lower a `LiteralDate` to a date literal expressed as days since
             // the Unix epoch.
-            LogicalExpr::LiteralDate(date) => {
-                Arc::new(LiteralDateExpression::new(days_since_unix_epoch(*date)))
-            }
-            LogicalExpr::LiteralIntervalDays(days) => {
-                Arc::new(LiteralIntervalDaysExpression::new(*days))
-            }
-            LogicalExpr::DateSubtractInterval { date, interval } => {
-                Arc::new(DateSubtractIntervalExpression::new(
+            Expr::LiteralDate(date) => Arc::new(LiteralDate::new(days_since_unix_epoch(*date))),
+            Expr::LiteralIntervalDays(days) => Arc::new(LiteralIntervalDays::new(*days)),
+            Expr::DateSubtractInterval { date, interval } => {
+                Arc::new(DateSubtractIntervalExpr::new(
                     self.create_physical_expr(date, input)?,
                     self.create_physical_expr(interval, input)?,
                 ))
             }
-            LogicalExpr::DateAddInterval { date, interval } => {
-                Arc::new(DateAddIntervalExpression::new(
-                    self.create_physical_expr(date, input)?,
-                    self.create_physical_expr(interval, input)?,
-                ))
-            }
-            LogicalExpr::ColumnIndex(i) => Arc::new(ColumnExpression::new(*i)),
-            LogicalExpr::Column(name) => {
+            Expr::DateAddInterval { date, interval } => Arc::new(DateAddIntervalExpr::new(
+                self.create_physical_expr(date, input)?,
+                self.create_physical_expr(interval, input)?,
+            )),
+            Expr::ColumnIndex(i) => Arc::new(Column::new(*i)),
+            Expr::Column(name) => {
                 let i = input
                     .schema()?
-                    .fields
+                    .fields()
                     .iter()
-                    .position(|f| &f.name == name)
+                    .position(|f| f.name() == name)
                     .ok_or_else(|| {
                         FdapQueryError::SchemaError(format!("no column named '{name}'"))
                     })?;
-                Arc::new(ColumnExpression::new(i))
+                Arc::new(Column::new(i))
             }
             // An alias has no physical expression — it only renamed the column
             // during planning. Plan the inner expression directly.
-            LogicalExpr::Alias { expr, .. } => self.create_physical_expr(expr, input)?,
-            LogicalExpr::Cast { expr, data_type } => Arc::new(CastExpression::new(
+            Expr::Alias { expr, .. } => self.create_physical_expr(expr, input)?,
+            Expr::Cast { expr, data_type } => Arc::new(CastExpr::new(
                 self.create_physical_expr(expr, input)?,
                 data_type.clone(),
             )),
             // Binary expressions: plan both sides, then pick the operator.
-            LogicalExpr::Eq { l, r } => Arc::new(EqExpression::new(
+            Expr::Eq { l, r } => Arc::new(EqExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Neq { l, r } => Arc::new(NeqExpression::new(
+            Expr::Neq { l, r } => Arc::new(NeqExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Gt { l, r } => Arc::new(GtExpression::new(
+            Expr::Gt { l, r } => Arc::new(GtExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::GtEq { l, r } => Arc::new(GtEqExpression::new(
+            Expr::GtEq { l, r } => Arc::new(GtEqExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Lt { l, r } => Arc::new(LtExpression::new(
+            Expr::Lt { l, r } => Arc::new(LtExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::LtEq { l, r } => Arc::new(LtEqExpression::new(
+            Expr::LtEq { l, r } => Arc::new(LtEqExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::And { l, r } => Arc::new(AndExpression::new(
+            Expr::And { l, r } => Arc::new(AndExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Or { l, r } => Arc::new(OrExpression::new(
+            Expr::Or { l, r } => Arc::new(OrExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Add { l, r } => Arc::new(AddExpression::new(
+            Expr::Add { l, r } => Arc::new(AddExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Subtract { l, r } => Arc::new(SubtractExpression::new(
+            Expr::Subtract { l, r } => Arc::new(SubtractExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Multiply { l, r } => Arc::new(MultiplyExpression::new(
+            Expr::Multiply { l, r } => Arc::new(MultiplyExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
-            LogicalExpr::Divide { l, r } => Arc::new(DivideExpression::new(
+            Expr::Divide { l, r } => Arc::new(DivideExpr::new(
                 self.create_physical_expr(l, input)?,
                 self.create_physical_expr(r, input)?,
             )),
 
             // --- Variants with no physical counterpart. ---
-            LogicalExpr::LiteralFloat(_) => {
+            Expr::LiteralFloat(_) => {
                 return Err(FdapQueryError::NotImplemented(
                     "LiteralFloat has no physical expression; use LiteralDouble".into(),
                 ));
             }
-            LogicalExpr::Not(_) => {
+            Expr::Not(_) => {
                 return Err(FdapQueryError::NotImplemented(
                     "NOT is not supported".into(),
                 ));
             }
-            LogicalExpr::Modulus { .. } => {
+            Expr::Modulus { .. } => {
                 return Err(FdapQueryError::NotImplemented(
                     "modulus is not supported".into(),
                 ));
             }
-            LogicalExpr::ScalarFunction { name, .. } => {
+            Expr::ScalarFunction { name, .. } => {
                 return Err(FdapQueryError::NotImplemented(format!(
                     "scalar function '{name}' is not supported"
                 )));
             }
-            LogicalExpr::AggregateExpr(_) => {
+            Expr::AggregateExpr(_) => {
                 return Err(FdapQueryError::Internal(
                     "an aggregate cannot be planned as a scalar expression; \
                      aggregates are lowered by the Aggregate operator"
@@ -346,25 +375,24 @@ impl QueryPlanner {
 #[cfg(test)]
 mod tests {
     //! Tests for `plan aggregate query`. Asserts the plan *structure*: the
-    //! root is a `HashAggregateExec` over a single `ScanExec` leaf, with the
+    //! root is a `AggregateExec` over a single `ScanExec` leaf, with the
     //! expected resolved column indices in its `Display`.
     use super::*;
     use fdapquery_catalog::InMemoryDataSource;
-    use fdapquery_datatypes::arrow_types::{DOUBLE_TYPE, UINT32_TYPE};
     use fdapquery_datatypes::{Field, Schema};
-    use fdapquery_expr::{DataFrame, LogicalPlan, Scan, col, max};
+    use fdapquery_expr::{DataFrame, LogicalPlan, TableScan, col, max};
     use fdapquery_optimizer::Optimizer;
     use std::sync::Arc;
 
     #[test]
     fn plan_aggregate_query() {
         let schema = Schema::new(vec![
-            Field::new("passenger_count", UINT32_TYPE),
-            Field::new("max_fare", DOUBLE_TYPE),
+            Field::new("passenger_count", arrow_schema::DataType::UInt32, true),
+            Field::new("max_fare", arrow_schema::DataType::Float64, true),
         ]);
         let data_source = Arc::new(InMemoryDataSource::new(schema, vec![]));
-        let df = DataFrame::new(LogicalPlan::Scan(
-            Scan::new("", data_source, vec![]).unwrap(),
+        let df = DataFrame::new(LogicalPlan::TableScan(
+            TableScan::new("", data_source, vec![]).unwrap(),
         ));
 
         // SELECT passenger_count, MAX(max_fare) ... GROUP BY passenger_count
@@ -376,18 +404,16 @@ mod tests {
         // Optimize (ProjectionPushDown trims the scan to [max_fare, passenger_count]).
         let optimized = Optimizer::new().optimize(&plan).unwrap();
 
-        let planner = QueryPlanner::new();
+        let planner = DefaultPhysicalPlanner::new();
         let physical = planner.create_physical_plan(&optimized).unwrap();
 
-        // Root is a HashAggregateExec; the optimizer's sorted pushdown puts
+        // Root is a AggregateExec; the optimizer's sorted pushdown puts
         // max_fare at index 0 and passenger_count at index 1, so the group key is
         // #1 and the MAX argument is #0. (`format` is the free fn — `pretty()` is
         // gated `where Self: Sized` and isn't callable on `Arc<dyn ExecutionPlan>`.)
         let pretty = crate::format(physical.as_ref());
         assert!(
-            pretty.starts_with(
-                "HashAggregateExec: groupExpr=[#1], aggrExpr=[MAX(#0)], mode=Complete"
-            ),
+            pretty.starts_with("AggregateExec: groupExpr=[#1], aggrExpr=[MAX(#0)], mode=Complete"),
             "unexpected root line: {pretty}"
         );
 
@@ -403,6 +429,6 @@ mod tests {
         assert!(scan_line.contains("max_fare") && scan_line.contains("passenger_count"));
 
         // Output schema is the aggregate's: [passenger_count, MAX(max_fare)].
-        assert_eq!(physical.schema().fields.len(), 2);
+        assert_eq!(physical.schema().fields().len(), 2);
     }
 }

@@ -1,4 +1,4 @@
-//! The single-node front door to the engine. `ExecutionContext` ties the
+//! The single-node front door to the engine. `SessionContext` ties the
 //! whole pipeline together: it parses SQL (or accepts a `DataFrame` built
 //! fluently), optimizes the logical plan, lowers it to a physical plan, and
 //! executes it, yielding a stream of [`RecordBatch`]es. Most user-facing code
@@ -10,8 +10,8 @@
 //! - `PhysicalPlan::execute` yields a lazy
 //!   `Box<dyn Iterator<Item = RecordBatch>>` stream.
 //! - Plan-taking and DataFrame-taking variants have distinct names:
-//!   [`ExecutionContext::execute`] for a logical plan and
-//!   [`ExecutionContext::execute_data_frame`] for a `DataFrame`.
+//!   [`SessionContext::execute`] for a logical plan and
+//!   [`SessionContext::execute_data_frame`] for a `DataFrame`.
 //! - `register*` methods take `&mut self` and mutate a plain `HashMap`,
 //!   keeping the context `Send + Sync` (no interior mutability) so
 //!   `ParallelContext` can share it with rayon workers.
@@ -24,9 +24,9 @@ use std::sync::Arc;
 use fdapquery_catalog::CsvDataSource;
 use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
+use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
 use fdapquery_optimizer::Optimizer;
-use fdapquery_physical_plan::QueryPlanner;
+use fdapquery_physical_plan::DefaultPhysicalPlanner;
 use fdapquery_physical_plan::{RuntimeEnv, SendableRecordBatchStream, SessionConfig, TaskContext};
 // `PrattParser` brings the `parse` method into scope for `SqlParser`.
 use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
@@ -35,7 +35,7 @@ use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 const DEFAULT_BATCH_SIZE: usize = 1024;
 
 /// Single-node execution context.
-pub struct ExecutionContext {
+pub struct SessionContext {
     /// Configuration settings.
     pub settings: HashMap<String, String>,
     /// CSV read batch size, derived from `settings` once at construction.
@@ -44,7 +44,7 @@ pub struct ExecutionContext {
     tables: HashMap<String, DataFrame>,
 }
 
-impl ExecutionContext {
+impl SessionContext {
     pub fn new(settings: HashMap<String, String>) -> Self {
         let batch_size = settings
             .get("rquery.csv.batchSize")
@@ -84,9 +84,9 @@ impl ExecutionContext {
     /// Get a `DataFrame` representing the specified CSV file.
     pub fn csv(&self, filename: &str) -> DataFrame {
         let source = CsvDataSource::new(filename, None, true, self.batch_size);
-        let scan = Scan::new(filename, Arc::new(source), vec![])
-            .expect("ExecutionContext::csv: scan construction");
-        DataFrame::new(LogicalPlan::Scan(scan))
+        let scan = TableScan::new(filename, Arc::new(source), vec![])
+            .expect("SessionContext::csv: scan construction");
+        DataFrame::new(LogicalPlan::TableScan(scan))
     }
 
     /// Register a `DataFrame` with the context.
@@ -96,9 +96,9 @@ impl ExecutionContext {
 
     /// Register a data source with the context.
     pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn TableProvider>) {
-        let scan = Scan::new(table_name, data_source, vec![])
-            .expect("ExecutionContext::register_data_source: scan construction");
-        self.register(table_name, DataFrame::new(LogicalPlan::Scan(scan)));
+        let scan = TableScan::new(table_name, data_source, vec![])
+            .expect("SessionContext::register_data_source: scan construction");
+        self.register(table_name, DataFrame::new(LogicalPlan::TableScan(scan)));
     }
 
     /// Register a CSV data source with the context.
@@ -125,7 +125,7 @@ impl ExecutionContext {
     /// single-process mode).
     pub fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
         let optimized = Optimizer::new().optimize(plan)?;
-        let physical = QueryPlanner::new().create_physical_plan(&optimized)?;
+        let physical = DefaultPhysicalPlanner::new().create_physical_plan(&optimized)?;
         let ctx = Arc::new(TaskContext::new(
             "single-node",
             "localhost",
@@ -139,7 +139,7 @@ impl ExecutionContext {
 
 #[cfg(test)]
 mod tests {
-    //! Integration tests for `ExecutionContext`: logical-plan-string
+    //! Integration tests for `SessionContext`: logical-plan-string
     //! assertions for `ctx.sql()`, plus end-to-end execution cases. The
     //! `Fuzzer`-backed cases — `min max sum float`, `float math`,
     //! `boolean expressions`, `inner join using DataFrame`,
@@ -155,7 +155,6 @@ mod tests {
     use super::*;
     use fdapquery_catalog::InMemoryDataSource;
     use fdapquery_datatypes::RecordBatch;
-    use fdapquery_datatypes::arrow_types::{BOOLEAN_TYPE, FLOAT_TYPE, INT32_TYPE, STRING_TYPE};
     use fdapquery_datatypes::record_batch::to_csv;
     use fdapquery_datatypes::{Field, ScalarValue, Schema};
     use fdapquery_expr::{JoinType, cast, col, format, lit_string, max, min, sum};
@@ -174,15 +173,15 @@ mod tests {
     /// scan of an `InMemoryDataSource`. Used by every Fuzzer-backed case.
     fn in_memory_df(name: &str, schema: Schema, batch: RecordBatch) -> DataFrame {
         let source = InMemoryDataSource::new(schema, vec![batch]);
-        DataFrame::new(LogicalPlan::Scan(
-            Scan::new(name, Arc::new(source), vec![]).unwrap(),
+        DataFrame::new(LogicalPlan::TableScan(
+            TableScan::new(name, Arc::new(source), vec![]).unwrap(),
         ))
     }
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 
-    fn ctx_with_employee() -> ExecutionContext {
-        let mut ctx = ExecutionContext::new(HashMap::new());
+    fn ctx_with_employee() -> SessionContext {
+        let mut ctx = SessionContext::new(HashMap::new());
         ctx.register_csv("employee", EMPLOYEE_CSV);
         ctx
     }
@@ -195,7 +194,7 @@ mod tests {
         let df = ctx.sql("SELECT id FROM employee").unwrap();
         assert_eq!(
             format(df.logical_plan()),
-            "Projection: #id\n\tScan: ../testdata/employee.csv; projection=None\n"
+            "Projection: #id\n\tTableScan: ../testdata/employee.csv; projection=None\n"
         );
     }
 
@@ -208,9 +207,9 @@ mod tests {
         assert_eq!(
             format(df.logical_plan()),
             "Projection: #id\n\
-             \tSelection: #state = 'CO'\n\
+             \tFilter: #state = 'CO'\n\
              \t\tProjection: #id, #state\n\
-             \t\t\tScan: ../testdata/employee.csv; projection=None\n"
+             \t\t\tTableScan: ../testdata/employee.csv; projection=None\n"
         );
     }
 
@@ -223,12 +222,12 @@ mod tests {
         assert_eq!(
             format(df.logical_plan()),
             "Projection: #salary * 0.1 as bonus\n\
-             \tScan: ../testdata/employee.csv; projection=None\n"
+             \tTableScan: ../testdata/employee.csv; projection=None\n"
         );
     }
 
     #[test]
-    fn selection_referencing_aliased_expression() {
+    fn filter_referencing_aliased_expression() {
         let ctx = ctx_with_employee();
         let df = ctx
             .sql(
@@ -239,9 +238,9 @@ mod tests {
         assert_eq!(
             format(df.logical_plan()),
             "Projection: #annual_salary\n\
-             \tSelection: #annual_salary > 1000 AND #state = 'CO'\n\
+             \tFilter: #annual_salary > 1000 AND #state = 'CO'\n\
              \t\tProjection: #salary as annual_salary, #state\n\
-             \t\t\tScan: ../testdata/employee.csv; projection=None\n"
+             \t\t\tTableScan: ../testdata/employee.csv; projection=None\n"
         );
     }
 
@@ -249,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn employees_in_co_using_dataframe() {
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let df = ctx
             .csv(EMPLOYEE_CSV)
             .filter(col("state").eq(lit_string("CO")))
@@ -264,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn employees_in_ca_using_sql() {
-        let mut ctx = ExecutionContext::new(HashMap::new());
+        let mut ctx = SessionContext::new(HashMap::new());
         ctx.register_csv("employee", EMPLOYEE_CSV);
         let df = ctx
             .sql("SELECT id, first_name, last_name FROM employee WHERE state = 'CA'")
@@ -280,10 +279,10 @@ mod tests {
         // row order is HashMap-driven (non-deterministic), so assert the set of
         // rows rather than their order. Rust's `to_csv` renders the null-state
         // group as "null,11500"; we check the two named groups + the row count.
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let df = ctx.csv(EMPLOYEE_CSV).aggregate(
             vec![col("state")],
-            vec![max(cast(col("salary"), INT32_TYPE))],
+            vec![max(cast(col("salary"), arrow_schema::DataType::Int32))],
         );
         let batches = collect_batches(ctx.execute_data_frame(&df)).await;
         assert_eq!(batches.len(), 1);
@@ -300,7 +299,7 @@ mod tests {
 
     #[tokio::test]
     async fn limit_using_dataframe() {
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let df = ctx
             .csv(EMPLOYEE_CSV)
             .project(vec![col("id"), col("first_name"), col("last_name")])
@@ -315,7 +314,7 @@ mod tests {
 
     #[tokio::test]
     async fn limit_using_sql() {
-        let mut ctx = ExecutionContext::new(HashMap::new());
+        let mut ctx = SessionContext::new(HashMap::new());
         ctx.register_csv("employee", EMPLOYEE_CSV);
         let df = ctx
             .sql("SELECT id, first_name, last_name FROM employee LIMIT 2")
@@ -330,7 +329,7 @@ mod tests {
 
     #[tokio::test]
     async fn limit_with_filter_using_sql() {
-        let mut ctx = ExecutionContext::new(HashMap::new());
+        let mut ctx = SessionContext::new(HashMap::new());
         ctx.register_csv("employee", EMPLOYEE_CSV);
         let df = ctx
             .sql("SELECT id, first_name, last_name FROM employee WHERE state = 'CO' LIMIT 1")
@@ -349,8 +348,8 @@ mod tests {
         // formatting follows Rust's `f32::to_string` — see the module-level
         // float-formatting note.
         let schema = Schema::new(vec![
-            Field::new("a", STRING_TYPE),
-            Field::new("b", FLOAT_TYPE),
+            Field::new("a", arrow_schema::DataType::Utf8, true),
+            Field::new("b", arrow_schema::DataType::Float32, true),
         ]);
         let batch = Fuzzer::new().create_record_batch(
             &schema,
@@ -370,7 +369,7 @@ mod tests {
             ],
         );
 
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let df = in_memory_df("test", schema, batch).aggregate(
             vec![col("a")],
             vec![min(col("b")), max(col("b")), sum(col("b"))],
@@ -395,8 +394,8 @@ mod tests {
         // matches whatever Rust's f32 formatter produces — no guesswork about
         // float precision.
         let schema = Schema::new(vec![
-            Field::new("a", FLOAT_TYPE),
-            Field::new("b", FLOAT_TYPE),
+            Field::new("a", arrow_schema::DataType::Float32, true),
+            Field::new("b", arrow_schema::DataType::Float32, true),
         ]);
         let batch = Fuzzer::new().create_record_batch(
             &schema,
@@ -416,7 +415,7 @@ mod tests {
             ],
         );
 
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let df = in_memory_df("test", schema, batch).project(vec![
             col("a").add(col("b")),
             col("a").subtract(col("b")),
@@ -435,8 +434,8 @@ mod tests {
     #[tokio::test]
     async fn boolean_expressions() {
         let schema = Schema::new(vec![
-            Field::new("a", BOOLEAN_TYPE),
-            Field::new("b", BOOLEAN_TYPE),
+            Field::new("a", arrow_schema::DataType::Boolean, true),
+            Field::new("b", arrow_schema::DataType::Boolean, true),
         ]);
         let batch = Fuzzer::new().create_record_batch(
             &schema,
@@ -456,7 +455,7 @@ mod tests {
             ],
         );
 
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let df = in_memory_df("test", schema, batch)
             .project(vec![col("a").and(col("b")), col("a").or(col("b"))]);
         let batches = collect_batches(ctx.execute_data_frame(&df)).await;
@@ -470,12 +469,12 @@ mod tests {
     #[tokio::test]
     async fn inner_join_using_dataframe() {
         let left_schema = Schema::new(vec![
-            Field::new("id", INT32_TYPE),
-            Field::new("name", STRING_TYPE),
+            Field::new("id", arrow_schema::DataType::Int32, true),
+            Field::new("name", arrow_schema::DataType::Utf8, true),
         ]);
         let right_schema = Schema::new(vec![
-            Field::new("id", INT32_TYPE),
-            Field::new("dept", STRING_TYPE),
+            Field::new("id", arrow_schema::DataType::Int32, true),
+            Field::new("dept", arrow_schema::DataType::Utf8, true),
         ]);
         let left_batch = Fuzzer::new().create_record_batch(
             &left_schema,
@@ -512,7 +511,7 @@ mod tests {
         let right_df = in_memory_df("right", right_schema, right_batch);
         let joined = left_df.join(right_df, JoinType::Inner, vec![("id".into(), "id".into())]);
 
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let batches = collect_batches(ctx.execute_data_frame(&joined)).await;
         assert_eq!(batches.len(), 1);
         assert_eq!(
@@ -524,12 +523,12 @@ mod tests {
     #[tokio::test]
     async fn left_join_using_dataframe() {
         let left_schema = Schema::new(vec![
-            Field::new("id", INT32_TYPE),
-            Field::new("name", STRING_TYPE),
+            Field::new("id", arrow_schema::DataType::Int32, true),
+            Field::new("name", arrow_schema::DataType::Utf8, true),
         ]);
         let right_schema = Schema::new(vec![
-            Field::new("id", INT32_TYPE),
-            Field::new("dept", STRING_TYPE),
+            Field::new("id", arrow_schema::DataType::Int32, true),
+            Field::new("dept", arrow_schema::DataType::Utf8, true),
         ]);
         let left_batch = Fuzzer::new().create_record_batch(
             &left_schema,
@@ -561,7 +560,7 @@ mod tests {
         let right_df = in_memory_df("right", right_schema, right_batch);
         let joined = left_df.join(right_df, JoinType::Left, vec![("id".into(), "id".into())]);
 
-        let ctx = ExecutionContext::new(HashMap::new());
+        let ctx = SessionContext::new(HashMap::new());
         let batches = collect_batches(ctx.execute_data_frame(&joined)).await;
         assert_eq!(batches.len(), 1);
         assert_eq!(

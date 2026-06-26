@@ -41,13 +41,13 @@ tracing          = { workspace = true }
 #   `LogicalPlan`.
 # - physical-plan: provides `Task` and `ShuffleLocation` — the types
 #   `FlightExecutorClient` ships across the wire.
-fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-catalog    = { path = "../fdapquery-catalog" }
-fdapquery-expr  = { path = "../fdapquery-expr" }
-fdapquery-proto      = { path = "../fdapquery-proto" }
-fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
-fdapquery-distributed   = { path = "../fdapquery-distributed" }
-fdapquery-sql           = { path = "../fdapquery-sql" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }
+fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
+fdapquery-proto = { version = "0.1.0", path = "../fdapquery-proto" }
+fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
+fdapquery-distributed = { version = "0.1.0", path = "../fdapquery-distributed" }
+fdapquery-sql = { version = "0.1.0", path = "../fdapquery-sql" }
 
 anyhow       = { workspace = true }
 
@@ -56,7 +56,7 @@ anyhow       = { workspace = true }
 # random port and drives a distributed query through it. The dep is
 # dev-only — at runtime the client crate has no knowledge of
 # `flight-server`; the protocol contract is the protobuf bytes.
-fdapquery-flight-server = { path = "../fdapquery-flight-server" }
+fdapquery-flight-server = { version = "0.1.0", path = "../fdapquery-flight-server" }
 # `tokio-stream::wrappers::TcpListenerStream` wraps the bound
 # `TcpListener` for `tonic::transport::Server::serve_with_incoming` in
 # the in-process server spawn. Dev-only — production callers use

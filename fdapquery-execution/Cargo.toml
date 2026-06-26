@@ -1,6 +1,6 @@
 [package]
 name         = "fdapquery-execution"
-description  = "ExecutionContext and ParallelContext — the runtime entry point."
+description  = "Low-level runtime types: TaskContext, RuntimeEnv, SessionConfig, ShuffleManager."
 edition.workspace      = true
 license.workspace      = true
 version.workspace      = true
@@ -8,24 +8,36 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-arrow                 = { workspace = true }
-# `futures` brings the `Stream` trait and `try_collect`/`try_next` combinators
-# the rayon-bound `ParallelContext::execute_parallel_aggregate` needs to drain
-# its per-bucket async streams via `futures::executor::block_on`.
-futures               = { workspace = true }
-rayon                 = { workspace = true }
-fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
-fdapquery-expr   = { path = "../fdapquery-expr" }
-fdapquery-sql            = { path = "../fdapquery-sql" }
-fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
-fdapquery-optimizer      = { path = "../fdapquery-optimizer" }
-fdapquery-catalog     = { path = "../fdapquery-catalog" }
+# Session 15c — this crate now holds only the low-level per-task runtime
+# types (`TaskContext`, `RuntimeEnv`, `SessionConfig`) and the per-process
+# runtime resources they own (`ShuffleManager`, `ShuffleLocation`). The
+# high-level `ExecutionContext` / `ParallelContext` API moved out to the
+# `fdapquery` umbrella crate (matches DataFusion's split of
+# `datafusion-execution` (low-level) and `datafusion` (high-level
+# `SessionContext`)). The heavy-weight deps that used to live here
+# (`fdapquery-physical-plan`, `-expr`, `-sql`, `-optimizer`, `-catalog`,
+# `arrow`, `futures`, `rayon`) moved to the umbrella alongside the code
+# that needed them.
+#
+# `arrow-ipc` powers `ShuffleManager`'s local Arrow IPC file
+# writer/reader. `fdapquery-datatypes` supplies `RecordBatch` / `Result`.
+arrow-ipc           = { workspace = true }
+# Session 15d-1 #92 — `stream.rs` moved from physical-plan to here so
+# `SendableRecordBatchStream` lives at its DataFusion-canonical
+# location (`datafusion-execution::stream`). Pulls in arrow-schema for
+# `SchemaRef`, futures for the `Stream` trait, and pin-project-lite
+# for the safe pin-projection inside `RecordBatchStreamAdapter`.
+arrow-schema        = { workspace = true }
+futures             = { workspace = true }
+pin-project-lite    = { workspace = true }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
 
 [dev-dependencies]
-# The Fuzzer-backed ExecutionTest cases (`min max sum float`, `float math`,
-# `boolean expressions`, `inner join`, `left join`) construct deterministic
-# in-memory batches via `Fuzzer::create_record_batch(schema, columns)`.
-fdapquery-fuzzer         = { path = "../fdapquery-fuzzer" }
-# Tokio runtime for `#[tokio::test]` — every context test drives an async
-# stream to completion via `try_collect().await`.
-tokio                 = { workspace = true }
+# `shuffle_manager.rs`'s standalone round-trip test builds in-memory
+# arrow batches directly (`Int32Array`, `StringArray`, `ArrowSchema`)
+# rather than going through `fdapquery-datatypes`'s converters.
+# Only the test code touches these crates; the runtime types use
+# `fdapquery_datatypes::RecordBatch`.
+arrow-array         = { workspace = true }
+# Session 15d-1 #92 — `stream.rs` moved here with its tokio-driven tests.
+tokio               = { workspace = true }

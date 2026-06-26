@@ -1,4 +1,4 @@
-//! Random `LogicalPlan` / `RecordBatch` / `LogicalExpr` generator for differential
+//! Random `LogicalPlan` / `RecordBatch` / `Expr` generator for differential
 //! testing. A `Fuzzer` is seeded deterministically so the same Rust run reproduces
 //! the same sequence of batches and plans.
 //!
@@ -32,7 +32,7 @@
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
 };
-use fdapquery_expr::{DataFrame, LogicalExpr};
+use fdapquery_expr::{DataFrame, Expr};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
@@ -89,9 +89,9 @@ impl Fuzzer {
     /// [`Self::create_record_batch`].
     pub fn create_random_record_batch(&mut self, schema: &Schema, n: usize) -> RecordBatch {
         let columns: Vec<Vec<ScalarValue>> = schema
-            .fields
+            .fields()
             .iter()
-            .map(|f| self.create_values(&f.data_type, n))
+            .map(|f| self.create_values(f.data_type(), n))
             .collect();
         self.create_record_batch(schema, columns)
     }
@@ -110,7 +110,7 @@ impl Fuzzer {
         );
         let row_count = columns[0].len();
         let field_vectors: Vec<Box<dyn ColumnVector>> = schema
-            .fields
+            .fields()
             .iter()
             .zip(columns)
             .map(|(field, col)| {
@@ -120,9 +120,9 @@ impl Fuzzer {
                     "Fuzzer::create_record_batch: column length mismatch \
                      ({} != {row_count}) for field {:?}",
                     col.len(),
-                    field.name,
+                    field.name(),
                 );
-                let mut builder = ArrowVectorBuilder::new(&field.data_type, row_count);
+                let mut builder = ArrowVectorBuilder::new(field.data_type(), row_count);
                 for v in &col {
                     builder.append_value(v);
                 }
@@ -154,7 +154,7 @@ impl Fuzzer {
         match self.rng.rng().random_range(0..2) {
             0 => {
                 let expr_count = self.rng.rng().random_range(1..5);
-                let exprs: Vec<LogicalExpr> = (0..expr_count)
+                let exprs: Vec<Expr> = (0..expr_count)
                     .map(|_| self.create_expression(&child, 0, max_expr_depth))
                     .collect();
                 child.project(exprs)
@@ -175,26 +175,21 @@ impl Fuzzer {
     /// `LiteralLong` / `LiteralString`; internal nodes are one of the eight
     /// binary operators (`Eq` / `Neq` / `Lt` / `LtEq` / `Gt` / `GtEq` / `And` /
     /// `Or`).
-    pub fn create_expression(
-        &mut self,
-        input: &DataFrame,
-        depth: usize,
-        max_depth: usize,
-    ) -> LogicalExpr {
+    pub fn create_expression(&mut self, input: &DataFrame, depth: usize, max_depth: usize) -> Expr {
         if depth == max_depth {
             // Leaf node: pick a random literal or column reference.
             let fields_len = input
                 .schema()
                 .expect("Fuzzer: input schema for random expression")
-                .fields
+                .fields()
                 .len();
             return match self.rng.rng().random_range(0..4) {
-                0 => LogicalExpr::ColumnIndex(self.rng.rng().random_range(0..fields_len)),
-                1 => LogicalExpr::LiteralDouble(self.rng.next_double()),
-                2 => LogicalExpr::LiteralLong(self.rng.next_long()),
+                0 => Expr::ColumnIndex(self.rng.rng().random_range(0..fields_len)),
+                1 => Expr::LiteralDouble(self.rng.next_double()),
+                2 => Expr::LiteralLong(self.rng.next_long()),
                 _ => {
                     let len = self.rng.rng().random_range(0..64);
-                    LogicalExpr::LiteralString(self.rng.next_string(len))
+                    Expr::LiteralString(self.rng.next_string(len))
                 }
             };
         }
@@ -202,14 +197,14 @@ impl Fuzzer {
         let l = Box::new(self.create_expression(input, depth + 1, max_depth));
         let r = Box::new(self.create_expression(input, depth + 1, max_depth));
         match self.rng.rng().random_range(0..8) {
-            0 => LogicalExpr::Eq { l, r },
-            1 => LogicalExpr::Neq { l, r },
-            2 => LogicalExpr::Lt { l, r },
-            3 => LogicalExpr::LtEq { l, r },
-            4 => LogicalExpr::Gt { l, r },
-            5 => LogicalExpr::GtEq { l, r },
-            6 => LogicalExpr::And { l, r },
-            _ => LogicalExpr::Or { l, r },
+            0 => Expr::Eq { l, r },
+            1 => Expr::Neq { l, r },
+            2 => Expr::Lt { l, r },
+            3 => Expr::LtEq { l, r },
+            4 => Expr::Gt { l, r },
+            5 => Expr::GtEq { l, r },
+            6 => Expr::And { l, r },
+            _ => Expr::Or { l, r },
         }
     }
 }
@@ -334,15 +329,15 @@ mod tests {
     //! panicking — i.e. random plan generation is stable across runs.
     use super::*;
     use fdapquery_catalog::CsvDataSource;
-    use fdapquery_expr::{LogicalPlan, Scan};
+    use fdapquery_expr::{LogicalPlan, TableScan};
     use std::sync::Arc;
 
     #[test]
     fn fuzzer_example() {
         let path = "../testdata/employee.csv";
         let csv = CsvDataSource::new(path, None, true, 10);
-        let input = DataFrame::new(LogicalPlan::Scan(
-            Scan::new("employee.csv", Arc::new(csv), vec![]).unwrap(),
+        let input = DataFrame::new(LogicalPlan::TableScan(
+            TableScan::new("employee.csv", Arc::new(csv), vec![]).unwrap(),
         ));
         let mut fuzzer = Fuzzer::new();
         for _ in 0..50 {

@@ -1,4 +1,4 @@
-//! `pb::LogicalPlanNode` → `LogicalPlan`, `pb::LogicalExprNode` → `LogicalExpr`,
+//! `pb::LogicalPlanNode` → `LogicalPlan`, `pb::LogicalExprNode` → `Expr`,
 //! plus the action/schema/field helpers. Inverse of
 //! [`crate::protobuf_serializer`].
 //!
@@ -16,7 +16,7 @@
 //!   plan field as `Option<T>`, so the "is this variant set?" check is
 //!   `node.x.is_some()`.
 //! - `LiteralInt8/16/32/64` and `LiteralUint8/16/32/64` all collapse into
-//!   `LogicalExpr::LiteralLong(i64)` — that's what `lit_long` is for.
+//!   `Expr::LiteralLong(i64)` — that's what `lit_long` is for.
 //! - The `literal_date` arm reverses the days-since-epoch encoding back
 //!   into a `chrono::NaiveDate`.
 //! - `IsNull` / `IsNotNull` / `Not` arms are unimplemented; their logical-plan
@@ -25,9 +25,9 @@
 
 use crate::pb;
 use fdapquery_catalog::{CsvDataSource, ParquetDataSource};
-use fdapquery_datatypes::{Field, Schema, arrow_types};
+use fdapquery_datatypes::{Field, Schema};
 use fdapquery_expr::{
-    Aggregate, AggregateExpr, Limit, LogicalExpr, LogicalPlan, Projection, Scan, Selection,
+    Aggregate, AggregateExpr, Expr, Filter, Limit, LogicalPlan, Projection, TableScan,
 };
 // JoinNode is not deserialised here. If/when that's added, re-import `JoinType`.
 use fdapquery_physical_plan::{Action, QueryAction};
@@ -42,8 +42,8 @@ pub fn deserialize_logical_plan(node: &pb::LogicalPlanNode) -> LogicalPlan {
         // CSV the proto schema is left unset, so we pass `None` and let
         // `CsvDataSource` re-infer from the file.
         let ds = CsvDataSource::new(&csv.path, None, csv.has_header, 1024);
-        LogicalPlan::Scan(
-            Scan::new(
+        LogicalPlan::TableScan(
+            TableScan::new(
                 &csv.path,
                 Arc::new(ds),
                 csv.projection
@@ -55,8 +55,8 @@ pub fn deserialize_logical_plan(node: &pb::LogicalPlanNode) -> LogicalPlan {
         )
     } else if let Some(parquet) = &node.parquet_scan {
         let ds = ParquetDataSource::new(&parquet.path);
-        LogicalPlan::Scan(
-            Scan::new(
+        LogicalPlan::TableScan(
+            TableScan::new(
                 &parquet.path,
                 Arc::new(ds),
                 parquet
@@ -67,10 +67,12 @@ pub fn deserialize_logical_plan(node: &pb::LogicalPlanNode) -> LogicalPlan {
             )
             .expect("deserialize_logical_plan: Parquet scan construction"),
         )
+    // Wire field name `selection` is fixed by `SelectionNode selection = 21;`
+    // in rquery.proto. Stable across the Rust-side rename in Session 15d-1 #89.
     } else if let Some(sel) = &node.selection {
         let input = deserialize_plan_input(node);
         let expr = deserialize_logical_expr(sel.expr.as_ref().expect("SelectionNode.expr unset"));
-        LogicalPlan::Selection(Selection::new(input, expr))
+        LogicalPlan::Filter(Filter::new(input, expr))
     } else if let Some(proj) = &node.projection {
         let input = deserialize_plan_input(node);
         let expr = proj.expr.iter().map(deserialize_logical_expr).collect();
@@ -87,12 +89,12 @@ pub fn deserialize_logical_plan(node: &pb::LogicalPlanNode) -> LogicalPlan {
             .collect();
         // Each `aggr_expr` is a LogicalExprNode whose oneof is the
         // AggregateExpr variant; deserialise then unwrap the
-        // `LogicalExpr::AggregateExpr(Box<AggregateExpr>)` wrapper.
+        // `Expr::AggregateExpr(Box<AggregateExpr>)` wrapper.
         let aggregate_expr = agg
             .aggr_expr
             .iter()
             .map(|e| match deserialize_logical_expr(e) {
-                LogicalExpr::AggregateExpr(ae) => *ae,
+                Expr::AggregateExpr(ae) => *ae,
                 other => panic!(
                     "AggregateNode.aggr_expr did not deserialise to an \
                      AggregateExpr: {other:?}"
@@ -108,7 +110,7 @@ pub fn deserialize_logical_plan(node: &pb::LogicalPlanNode) -> LogicalPlan {
 /// Helper: pull the recursive `LogicalPlanNode.input` field (which prost
 /// generates as `Option<Box<LogicalPlanNode>>`) and deserialise it. Panics
 /// with a clear message if `input` is unset on a node that expects one
-/// (Projection / Selection / Limit / Aggregate).
+/// (Projection / Filter / Limit / Aggregate).
 fn deserialize_plan_input(node: &pb::LogicalPlanNode) -> LogicalPlan {
     let inner = node
         .input
@@ -117,28 +119,28 @@ fn deserialize_plan_input(node: &pb::LogicalPlanNode) -> LogicalPlan {
     deserialize_logical_plan(inner)
 }
 
-/// `pb::LogicalExprNode` → `LogicalExpr`.
-pub fn deserialize_logical_expr(node: &pb::LogicalExprNode) -> LogicalExpr {
+/// `pb::LogicalExprNode` → `Expr`.
+pub fn deserialize_logical_expr(node: &pb::LogicalExprNode) -> Expr {
     use pb::logical_expr_node::ExprType;
     match node.expr_type.as_ref() {
-        Some(ExprType::ColumnName(name)) => LogicalExpr::Column(name.clone()),
-        Some(ExprType::LiteralString(s)) => LogicalExpr::LiteralString(s.clone()),
+        Some(ExprType::ColumnName(name)) => Expr::Column(name.clone()),
+        Some(ExprType::LiteralString(s)) => Expr::LiteralString(s.clone()),
         // All integer literals collapse into `LiteralLong(i64)`.
-        Some(ExprType::LiteralInt8(n)) => LogicalExpr::LiteralLong(*n as i64),
-        Some(ExprType::LiteralInt16(n)) => LogicalExpr::LiteralLong(*n as i64),
-        Some(ExprType::LiteralInt32(n)) => LogicalExpr::LiteralLong(*n as i64),
-        Some(ExprType::LiteralInt64(n)) => LogicalExpr::LiteralLong(*n),
-        Some(ExprType::LiteralUint8(n)) => LogicalExpr::LiteralLong(*n as i64),
-        Some(ExprType::LiteralUint16(n)) => LogicalExpr::LiteralLong(*n as i64),
-        Some(ExprType::LiteralUint32(n)) => LogicalExpr::LiteralLong(*n as i64),
-        Some(ExprType::LiteralUint64(n)) => LogicalExpr::LiteralLong(*n as i64),
-        Some(ExprType::LiteralF32(n)) => LogicalExpr::LiteralFloat(*n),
-        Some(ExprType::LiteralF64(n)) => LogicalExpr::LiteralDouble(*n),
+        Some(ExprType::LiteralInt8(n)) => Expr::LiteralLong(*n as i64),
+        Some(ExprType::LiteralInt16(n)) => Expr::LiteralLong(*n as i64),
+        Some(ExprType::LiteralInt32(n)) => Expr::LiteralLong(*n as i64),
+        Some(ExprType::LiteralInt64(n)) => Expr::LiteralLong(*n),
+        Some(ExprType::LiteralUint8(n)) => Expr::LiteralLong(*n as i64),
+        Some(ExprType::LiteralUint16(n)) => Expr::LiteralLong(*n as i64),
+        Some(ExprType::LiteralUint32(n)) => Expr::LiteralLong(*n as i64),
+        Some(ExprType::LiteralUint64(n)) => Expr::LiteralLong(*n as i64),
+        Some(ExprType::LiteralF32(n)) => Expr::LiteralFloat(*n),
+        Some(ExprType::LiteralF64(n)) => Expr::LiteralDouble(*n),
         // Added by the Rust port; reverses the days-since-epoch encoding.
-        Some(ExprType::LiteralDate(days)) => LogicalExpr::LiteralDate(naive_date_from_days(*days)),
+        Some(ExprType::LiteralDate(days)) => Expr::LiteralDate(naive_date_from_days(*days)),
         Some(ExprType::Alias(a)) => {
             let expr = deserialize_logical_expr(a.expr.as_deref().expect("AliasNode.expr unset"));
-            LogicalExpr::Alias {
+            Expr::Alias {
                 expr: Box::new(expr),
                 alias: a.alias.clone(),
             }
@@ -151,18 +153,18 @@ pub fn deserialize_logical_expr(node: &pb::LogicalExprNode) -> LogicalExpr {
                 b.r.as_deref().expect("BinaryExprNode.r unset"),
             ));
             match b.op.as_str() {
-                "eq" => LogicalExpr::Eq { l, r },
-                "neq" => LogicalExpr::Neq { l, r },
-                "lt" => LogicalExpr::Lt { l, r },
-                "lteq" => LogicalExpr::LtEq { l, r },
-                "gt" => LogicalExpr::Gt { l, r },
-                "gteq" => LogicalExpr::GtEq { l, r },
-                "and" => LogicalExpr::And { l, r },
-                "or" => LogicalExpr::Or { l, r },
-                "add" => LogicalExpr::Add { l, r },
-                "subtract" => LogicalExpr::Subtract { l, r },
-                "multiply" => LogicalExpr::Multiply { l, r },
-                "divide" => LogicalExpr::Divide { l, r },
+                "eq" => Expr::Eq { l, r },
+                "neq" => Expr::Neq { l, r },
+                "lt" => Expr::Lt { l, r },
+                "lteq" => Expr::LtEq { l, r },
+                "gt" => Expr::Gt { l, r },
+                "gteq" => Expr::GtEq { l, r },
+                "and" => Expr::And { l, r },
+                "or" => Expr::Or { l, r },
+                "add" => Expr::Add { l, r },
+                "subtract" => Expr::Subtract { l, r },
+                "multiply" => Expr::Multiply { l, r },
+                "divide" => Expr::Divide { l, r },
                 other => panic!("Unsupported binary operator: '{other}'"),
             }
         }
@@ -180,7 +182,7 @@ pub fn deserialize_logical_expr(node: &pb::LogicalExprNode) -> LogicalExpr {
                 pb::AggregateFunction::Count => AggregateExpr::Count(inner),
                 pb::AggregateFunction::CountDistinct => AggregateExpr::CountDistinct(inner),
             };
-            LogicalExpr::AggregateExpr(Box::new(agg))
+            Expr::AggregateExpr(Box::new(agg))
         }
         // The underlying logical-plan variants don't exist yet.
         Some(ExprType::IsNullExpr(_)) => {
@@ -198,13 +200,13 @@ pub fn deserialize_logical_expr(node: &pb::LogicalExprNode) -> LogicalExpr {
 
 /// `pb::Schema` → `fdapquery_datatypes::Schema`.
 pub fn deserialize_schema(schema: &pb::Schema) -> Schema {
-    let fields = schema.columns.iter().map(deserialize_field).collect();
+    let fields: Vec<Field> = schema.columns.iter().map(deserialize_field).collect();
     Schema::new(fields)
 }
 
 /// `pb::Field` → `fdapquery_datatypes::Field`.
 pub fn deserialize_field(field: &pb::Field) -> Field {
-    Field::new(&field.name, from_proto_arrow_type(field.arrow_type))
+    Field::new(&field.name, from_proto_arrow_type(field.arrow_type), true)
 }
 
 /// `pb::Action` → `Box<dyn Action>` (wrapping a `QueryAction`).
@@ -223,19 +225,19 @@ fn from_proto_arrow_type(arrow_type: i32) -> DataType {
         panic!("Cannot deserialize Arrow data type enum from protobuf: {arrow_type}")
     });
     match at {
-        pb::ArrowType::Bool => arrow_types::BOOLEAN_TYPE,
-        pb::ArrowType::Int8 => arrow_types::INT8_TYPE,
-        pb::ArrowType::Int16 => arrow_types::INT16_TYPE,
-        pb::ArrowType::Int32 => arrow_types::INT32_TYPE,
-        pb::ArrowType::Int64 => arrow_types::INT64_TYPE,
-        pb::ArrowType::Uint8 => arrow_types::UINT8_TYPE,
-        pb::ArrowType::Uint16 => arrow_types::UINT16_TYPE,
-        pb::ArrowType::Uint32 => arrow_types::UINT32_TYPE,
-        pb::ArrowType::Uint64 => arrow_types::UINT64_TYPE,
-        pb::ArrowType::Float => arrow_types::FLOAT_TYPE,
-        pb::ArrowType::Double => arrow_types::DOUBLE_TYPE,
-        pb::ArrowType::Utf8 => arrow_types::STRING_TYPE,
-        pb::ArrowType::Date32 => arrow_types::DATE_DAY_TYPE,
+        pb::ArrowType::Bool => arrow_schema::DataType::Boolean,
+        pb::ArrowType::Int8 => arrow_schema::DataType::Int8,
+        pb::ArrowType::Int16 => arrow_schema::DataType::Int16,
+        pb::ArrowType::Int32 => arrow_schema::DataType::Int32,
+        pb::ArrowType::Int64 => arrow_schema::DataType::Int64,
+        pb::ArrowType::Uint8 => arrow_schema::DataType::UInt8,
+        pb::ArrowType::Uint16 => arrow_schema::DataType::UInt16,
+        pb::ArrowType::Uint32 => arrow_schema::DataType::UInt32,
+        pb::ArrowType::Uint64 => arrow_schema::DataType::UInt64,
+        pb::ArrowType::Float => arrow_schema::DataType::Float32,
+        pb::ArrowType::Double => arrow_schema::DataType::Float64,
+        pb::ArrowType::Utf8 => arrow_schema::DataType::Utf8,
+        pb::ArrowType::Date32 => arrow_schema::DataType::Date32,
         other => panic!("Cannot deserialize Arrow type from protobuf: {other:?}"),
     }
 }

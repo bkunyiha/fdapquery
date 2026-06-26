@@ -116,7 +116,7 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
 /// employee GROUP BY state` distributed query end-to-end through the
 /// scheduler + FlightExecutorClient + flight-server + shuffle files +
 /// final-stage aggregate. Assert the resulting row count and total sum
-/// match what the in-process `ExecutionContext` would produce.
+/// match what the in-process `SessionContext` would produce.
 #[tokio::test]
 async fn distributed_aggregate_query_end_to_end_via_flight() {
     let (addr, shuffle_dir) = spawn_in_process_server("exec-test");

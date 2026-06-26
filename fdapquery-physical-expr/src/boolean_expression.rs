@@ -3,12 +3,12 @@
 //! `AND`, `OR`, `=`, `!=`, `<`, `<=`, `>`, `>=`.
 //!
 //! ## Trait with a default method
-//! As with [`crate::binary_expression::BinaryExpression`], `BooleanExpression`
-//! is a trait with a default method. Unlike the math family, `BooleanExpression`
-//! extends [`Expression`] directly (not `BinaryExpression`): comparison does
+//! As with [`crate::binary_expression::BinaryExpr`], `BooleanExpr`
+//! is a trait with a default method. Unlike the math family, `BooleanExpr`
+//! extends [`PhysicalExpr`] directly (not `BinaryExpr`): comparison does
 //! *not* coerce numeric types — it requires the two sides to already share a
 //! type and panics otherwise. The default
-//! [`BooleanExpression::evaluate_boolean`] holds the shared "evaluate both
+//! [`BooleanExpr::evaluate_boolean`] holds the shared "evaluate both
 //! sides, build a Boolean column cell-by-cell" logic; each concrete operator
 //! supplies only its per-cell predicate via `compare_value`.
 //!
@@ -30,23 +30,22 @@
 //! does in SQL, `AND`/`OR` use the Kleene truth tables ([`and3`]/[`or3`]),
 //! and `evaluate_boolean` writes an `UNKNOWN` out as a `ScalarValue::Null`
 //! cell — so the output is a *nullable* Boolean column, exactly what a real
-//! SQL engine produces. `SelectionExec` keeps only `Some(true)` rows, so both
+//! SQL engine produces. `FilterExec` keeps only `Some(true)` rows, so both
 //! `FALSE` and `UNKNOWN` correctly drop a row from a `WHERE` clause.
 
-use crate::expressions::Expression;
+use crate::expressions::PhysicalExpr;
 use arrow_schema::DataType;
-use fdapquery_datatypes::arrow_types::BOOLEAN_TYPE;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
 };
 use std::sync::Arc;
 
 /// A boolean (comparison or logical) binary expression.
-pub trait BooleanExpression: Expression {
+pub trait BooleanExpr: PhysicalExpr {
     /// The left operand expression.
-    fn left(&self) -> &Arc<dyn Expression>;
+    fn left(&self) -> &Arc<dyn PhysicalExpr>;
     /// The right operand expression.
-    fn right(&self) -> &Arc<dyn Expression>;
+    fn right(&self) -> &Arc<dyn PhysicalExpr>;
 
     /// The per-cell predicate. Returns `Option<bool>`: `Some(b)` for a definite
     /// result, `None` for SQL `UNKNOWN` (produced whenever an operand is
@@ -85,7 +84,7 @@ pub trait BooleanExpression: Expression {
             )));
         }
         let arrow_type = ll.get_type();
-        let mut builder = ArrowVectorBuilder::new(&BOOLEAN_TYPE, ll.size());
+        let mut builder = ArrowVectorBuilder::new(&arrow_schema::DataType::Boolean, ll.size());
         for i in 0..ll.size() {
             let l = ll.get_value(i)?;
             let r = rr.get_value(i)?;
@@ -261,8 +260,8 @@ fn or3(l: Option<bool>, r: Option<bool>) -> Option<bool> {
 }
 
 /// Generate a concrete boolean operator: a struct holding `l`/`r`, its
-/// `BooleanExpression` impl (`compare_value` is the per-cell body `$body`), the
-/// trivial `Expression` delegate to `evaluate_boolean`, and a `Display` impl
+/// `BooleanExpr` impl (`compare_value` is the per-cell body `$body`), the
+/// trivial `PhysicalExpr` delegate to `evaluate_boolean`, and a `Display` impl
 /// rendering `"l <sym> r"`. Each operator becomes a tiny struct overriding one
 /// method.
 macro_rules! boolean_op {
@@ -273,21 +272,21 @@ macro_rules! boolean_op {
      |$l:ident, $r:ident, $t:ident| $body:expr) => {
         #[doc = concat!("`l ", $sym, " r`.")]
         pub struct $name {
-            l: Arc<dyn Expression>,
-            r: Arc<dyn Expression>,
+            l: Arc<dyn PhysicalExpr>,
+            r: Arc<dyn PhysicalExpr>,
         }
 
         impl $name {
-            pub fn new(l: Arc<dyn Expression>, r: Arc<dyn Expression>) -> Self {
+            pub fn new(l: Arc<dyn PhysicalExpr>, r: Arc<dyn PhysicalExpr>) -> Self {
                 Self { l, r }
             }
         }
 
-        impl BooleanExpression for $name {
-            fn left(&self) -> &Arc<dyn Expression> {
+        impl BooleanExpr for $name {
+            fn left(&self) -> &Arc<dyn PhysicalExpr> {
                 &self.l
             }
-            fn right(&self) -> &Arc<dyn Expression> {
+            fn right(&self) -> &Arc<dyn PhysicalExpr> {
                 &self.r
             }
             fn compare_value(
@@ -303,14 +302,14 @@ macro_rules! boolean_op {
             }
         }
 
-        impl Expression for $name {
+        impl PhysicalExpr for $name {
             fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
                 self.evaluate_boolean(input)
             }
             fn as_any(&self) -> &dyn std::any::Any {
                 self
             }
-            fn as_boolean_expression(&self) -> Option<&dyn BooleanExpression> {
+            fn as_boolean_expression(&self) -> Option<&dyn BooleanExpr> {
                 Some(self)
             }
         }
@@ -325,48 +324,28 @@ macro_rules! boolean_op {
 
 // AND / OR ignore the Arrow type and operate on the truthiness of each side,
 // using SQL Kleene three-valued logic so a NULL operand propagates correctly.
-boolean_op!(AndExpression, "AND", "and", |l, r, _t| Ok(and3(
+boolean_op!(AndExpr, "AND", "and", |l, r, _t| Ok(and3(
     as_opt_bool(l)?,
     as_opt_bool(r)?
 )));
-boolean_op!(OrExpression, "OR", "or", |l, r, _t| Ok(or3(
+boolean_op!(OrExpr, "OR", "or", |l, r, _t| Ok(or3(
     as_opt_bool(l)?,
     as_opt_bool(r)?
 )));
 
 // Comparisons dispatch on the (shared) Arrow type via `compare_typed!`.
+boolean_op!(EqExpr, "=", "eq", |l, r, t| compare_typed!(l, r, t, ==));
+boolean_op!(NeqExpr, "!=", "neq", |l, r, t| compare_typed!(l, r, t, !=));
+boolean_op!(LtExpr, "<", "lt", |l, r, t| compare_typed!(l, r, t, <));
 boolean_op!(
-    EqExpression,
-    "=",
-    "eq",
-    |l, r, t| compare_typed!(l, r, t, ==)
-);
-boolean_op!(
-    NeqExpression,
-    "!=",
-    "neq",
-    |l, r, t| compare_typed!(l, r, t, !=)
-);
-boolean_op!(
-    LtExpression,
-    "<",
-    "lt",
-    |l, r, t| compare_typed!(l, r, t, <)
-);
-boolean_op!(
-    LtEqExpression,
+    LtEqExpr,
     "<=",
     "lteq",
     |l, r, t| compare_typed!(l, r, t, <=)
 );
+boolean_op!(GtExpr, ">", "gt", |l, r, t| compare_typed!(l, r, t, >));
 boolean_op!(
-    GtExpression,
-    ">",
-    "gt",
-    |l, r, t| compare_typed!(l, r, t, >)
-);
-boolean_op!(
-    GtEqExpression,
+    GtEqExpr,
     ">=",
     "gteq",
     |l, r, t| compare_typed!(l, r, t, >=)
@@ -381,7 +360,7 @@ mod tests {
     //! operator's output against Rust's own `>=` over the same values, so the
     //! assertion is self-consistent regardless of the concrete numbers chosen.
     use super::*;
-    use crate::column_expression::ColumnExpression;
+    use crate::column_expression::Column;
     use arrow_array::{
         ArrayRef, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, StringArray,
     };
@@ -399,10 +378,7 @@ mod tests {
     }
 
     fn gteq(batch: &RecordBatch) -> Box<dyn ColumnVector> {
-        let expr = GtEqExpression::new(
-            Arc::new(ColumnExpression::new(0)),
-            Arc::new(ColumnExpression::new(1)),
-        );
+        let expr = GtEqExpr::new(Arc::new(Column::new(0)), Arc::new(Column::new(1)));
         expr.evaluate(batch).unwrap()
     }
 
@@ -509,7 +485,7 @@ mod tests {
         // field as a null cell, so `state = 'CO'` compares a `ScalarValue::Null`.
         // SQL three-valued logic: NULL = 'CO' is UNKNOWN, written as a null cell —
         // not a panic, and not `false`. The WHERE filter drops it either way.
-        use crate::expressions::LiteralStringExpression;
+        use crate::expressions::LiteralString;
         let a: Vec<Option<&str>> = vec![Some("CO"), None, Some("CA")];
         let schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
             "state",
@@ -518,9 +494,9 @@ mod tests {
         )]));
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(a)) as ArrayRef]).unwrap();
-        let expr = EqExpression::new(
-            Arc::new(ColumnExpression::new(0)),
-            Arc::new(LiteralStringExpression::new("CO".to_string())),
+        let expr = EqExpr::new(
+            Arc::new(Column::new(0)),
+            Arc::new(LiteralString::new("CO".to_string())),
         );
         let result = expr.evaluate(&batch).unwrap();
         assert_eq!(result.get_value(0).unwrap(), ScalarValue::Boolean(true)); // "CO" == "CO"
@@ -534,7 +510,7 @@ mod tests {
         // implementation that stringified both sides treated `null != 'CO'` as
         // `"null" != "CO"` == true, which wrongly KEPT a null row in
         // `WHERE state != 'CO'`.
-        use crate::expressions::LiteralStringExpression;
+        use crate::expressions::LiteralString;
         let a: Vec<Option<&str>> = vec![Some("CO"), None, Some("CA")];
         let schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
             "state",
@@ -543,9 +519,9 @@ mod tests {
         )]));
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(a)) as ArrayRef]).unwrap();
-        let expr = NeqExpression::new(
-            Arc::new(ColumnExpression::new(0)),
-            Arc::new(LiteralStringExpression::new("CO".to_string())),
+        let expr = NeqExpr::new(
+            Arc::new(Column::new(0)),
+            Arc::new(LiteralString::new("CO".to_string())),
         );
         let result = expr.evaluate(&batch).unwrap();
         assert_eq!(result.get_value(0).unwrap(), ScalarValue::Boolean(false)); // "CO" != "CO"
@@ -571,12 +547,9 @@ mod tests {
             ],
         )
         .unwrap();
-        let result = GtExpression::new(
-            Arc::new(ColumnExpression::new(0)),
-            Arc::new(ColumnExpression::new(1)),
-        )
-        .evaluate(&batch)
-        .unwrap();
+        let result = GtExpr::new(Arc::new(Column::new(0)), Arc::new(Column::new(1)))
+            .evaluate(&batch)
+            .unwrap();
         assert_eq!(result.get_value(0).unwrap(), ScalarValue::Boolean(false)); // 5 > 10
         assert_eq!(result.get_value(1).unwrap(), ScalarValue::Null); // NULL > 10 -> UNKNOWN
         assert_eq!(result.get_value(2).unwrap(), ScalarValue::Boolean(true)); // 20 > 10

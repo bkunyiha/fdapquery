@@ -5,20 +5,19 @@
 //! ## Trait with a default method
 //! As with the binary/boolean/math families, the shared "evaluate input, map
 //! each non-null value through `apply`" logic lives in a trait
-//! ([`UnaryMathExpression`]) with a default method (`evaluate_unary`) and a
+//! ([`UnaryMathExpr`]) with a default method (`evaluate_unary`) and a
 //! required `apply` kernel. Each concrete function implements
-//! `UnaryMathExpression` and a one-line `Expression` delegate.
+//! `UnaryMathExpr` and a one-line `PhysicalExpr` delegate.
 
-use crate::expressions::{Expression, number_to_f64};
-use fdapquery_datatypes::arrow_types::DOUBLE_TYPE;
+use crate::expressions::{PhysicalExpr, number_to_f64};
 use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// A unary math function.
-pub trait UnaryMathExpression: Expression {
+pub trait UnaryMathExpr: PhysicalExpr {
     /// The input expression whose values are transformed.
-    fn input(&self) -> &Arc<dyn Expression>;
+    fn input(&self) -> &Arc<dyn PhysicalExpr>;
 
     /// The function applied to each non-null value.
     fn apply(&self, value: f64) -> f64;
@@ -27,7 +26,7 @@ pub trait UnaryMathExpression: Expression {
     /// each non-null value through `apply`, producing a `Float64` column.
     fn evaluate_unary(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         let n = self.input().evaluate(input)?;
-        let mut builder = ArrowVectorBuilder::new(&DOUBLE_TYPE, n.size());
+        let mut builder = ArrowVectorBuilder::new(&arrow_schema::DataType::Float64, n.size());
         for i in 0..n.size() {
             let value = n.get_value(i)?;
             if value.is_null() {
@@ -43,17 +42,17 @@ pub trait UnaryMathExpression: Expression {
 
 /// Square root.
 pub struct Sqrt {
-    expr: Arc<dyn Expression>,
+    expr: Arc<dyn PhysicalExpr>,
 }
 
 impl Sqrt {
-    pub fn new(expr: Arc<dyn Expression>) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self { expr }
     }
 }
 
-impl UnaryMathExpression for Sqrt {
-    fn input(&self) -> &Arc<dyn Expression> {
+impl UnaryMathExpr for Sqrt {
+    fn input(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
     }
     fn apply(&self, value: f64) -> f64 {
@@ -61,7 +60,7 @@ impl UnaryMathExpression for Sqrt {
     }
 }
 
-impl Expression for Sqrt {
+impl PhysicalExpr for Sqrt {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_unary(input)
     }
@@ -79,17 +78,17 @@ impl fmt::Display for Sqrt {
 
 /// Natural logarithm.
 pub struct Log {
-    expr: Arc<dyn Expression>,
+    expr: Arc<dyn PhysicalExpr>,
 }
 
 impl Log {
-    pub fn new(expr: Arc<dyn Expression>) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self { expr }
     }
 }
 
-impl UnaryMathExpression for Log {
-    fn input(&self) -> &Arc<dyn Expression> {
+impl UnaryMathExpr for Log {
+    fn input(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
     }
     fn apply(&self, value: f64) -> f64 {
@@ -97,7 +96,7 @@ impl UnaryMathExpression for Log {
     }
 }
 
-impl Expression for Log {
+impl PhysicalExpr for Log {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_unary(input)
     }

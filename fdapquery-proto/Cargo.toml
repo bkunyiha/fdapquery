@@ -13,10 +13,10 @@ prost         = { workspace = true }
 tonic         = { workspace = true }
 chrono        = { workspace = true }       # NaiveDate for LogicalExpr::LiteralDate serdes
 arrow-schema  = { workspace = true }       # DataType return-type for from_proto_arrow_type
-fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-catalog    = { path = "../fdapquery-catalog" } # CsvDataSource / ParquetDataSource for scan deserialisation
-fdapquery-expr  = { path = "../fdapquery-expr" }
-fdapquery-physical-plan = { path = "../fdapquery-physical-plan" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" } # CsvDataSource / ParquetDataSource for scan deserialisation
+fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
+fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
 
 [build-dependencies]
 # tonic 0.14 split the prost-based codegen (`configure()` / `compile_protos`)

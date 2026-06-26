@@ -7,10 +7,10 @@
 //! - [`ScalarValue`] is the typed-enum substitution for `Any`, with a `Null`
 //!   variant carrying nullability.
 //!
-//! [`ScalarValue`]: crate::scalar_value::ScalarValue
+//! [`ScalarValue`]: crate::ScalarValue
 
 use crate::Result;
-use crate::scalar_value::ScalarValue;
+use crate::ScalarValue;
 use arrow_schema::DataType;
 
 /// Abstraction over different implementations of a column vector.

@@ -11,10 +11,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use fdapquery::SessionContext;
 use fdapquery_catalog::InMemoryDataSource;
 use fdapquery_datatypes::record_batch::to_csv;
-use fdapquery_datatypes::{RecordBatch, SchemaConverter};
-use fdapquery_execution::ExecutionContext;
+use fdapquery_datatypes::RecordBatch;
 use futures::TryStreamExt;
 use rayon::prelude::*;
 
@@ -69,15 +69,14 @@ async fn main() {
     // Re-aggregate the 12 per-month partials. Register the collected batches
     // as an InMemoryDataSource and run the FINAL_SQL through a fresh context.
     //
-    // `RecordBatch::schema()` returns an `Arc<arrow_schema::Schema>`;
-    // `InMemoryDataSource::new` wants a `fdapquery_datatypes::Schema`, so we round-trip
-    // through `SchemaConverter::from_arrow`.
+    // `Schema` IS `arrow_schema::Schema` — `RecordBatch::schema()` returns
+    // `Arc<Schema>`, so just clone the inner value.
     // -----------------------------------------------------------------------
-    let final_schema = SchemaConverter::from_arrow(&first.schema());
+    let final_schema = first.schema().as_ref().clone();
     let in_memory: Arc<dyn fdapquery_catalog::TableProvider> =
         Arc::new(InMemoryDataSource::new(final_schema, results));
 
-    let mut ctx = ExecutionContext::new(HashMap::new());
+    let mut ctx = SessionContext::new(HashMap::new());
     ctx.register_data_source("tripdata", in_memory);
 
     let df = ctx.sql(FINAL_SQL).expect("parallel_query: final sql plan");
@@ -98,7 +97,7 @@ async fn main() {
     }
 }
 
-/// Per-month worker. Builds a fresh `ExecutionContext`, registers
+/// Per-month worker. Builds a fresh `SessionContext`, registers
 /// `yellow_tripdata_2019-{MM}.csv` under the table name `tripdata`, runs
 /// `sql`, and drives the async stream to completion via
 /// `futures::executor::block_on` — rayon workers don't run on a tokio
@@ -109,7 +108,7 @@ async fn main() {
 /// `Send` without any wrapping.
 fn execute_query(path: &str, month: u32, sql: &str) -> Vec<RecordBatch> {
     let filename = format!("{path}/yellow_tripdata_2019-{month:02}.csv");
-    let mut ctx = ExecutionContext::new(HashMap::new());
+    let mut ctx = SessionContext::new(HashMap::new());
     ctx.register_csv("tripdata", &filename);
     let df = ctx.sql(sql).expect("parallel_query: per-month sql plan");
     let stream = ctx

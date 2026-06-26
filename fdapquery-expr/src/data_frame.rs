@@ -5,12 +5,12 @@
 
 use crate::aggregate::Aggregate;
 use crate::expressions::AggregateExpr;
+use crate::filter::Filter;
 use crate::join::{Join, JoinType};
 use crate::limit::Limit;
-use crate::logical_expr::LogicalExpr;
+use crate::logical_expr::Expr;
 use crate::logical_plan::LogicalPlan;
 use crate::projection::Projection;
-use crate::selection::Selection;
 use fdapquery_datatypes::{Result, Schema};
 
 /// Fluent builder over a [`LogicalPlan`].
@@ -26,25 +26,21 @@ impl DataFrame {
     }
 
     /// Apply a projection.
-    pub fn project(self, expr: Vec<LogicalExpr>) -> DataFrame {
+    pub fn project(self, expr: Vec<Expr>) -> DataFrame {
         DataFrame {
             plan: LogicalPlan::Projection(Projection::new(self.plan, expr)),
         }
     }
 
     /// Apply a filter.
-    pub fn filter(self, expr: LogicalExpr) -> DataFrame {
+    pub fn filter(self, expr: Expr) -> DataFrame {
         DataFrame {
-            plan: LogicalPlan::Selection(Selection::new(self.plan, expr)),
+            plan: LogicalPlan::Filter(Filter::new(self.plan, expr)),
         }
     }
 
     /// Aggregate.
-    pub fn aggregate(
-        self,
-        group_by: Vec<LogicalExpr>,
-        aggregate_expr: Vec<AggregateExpr>,
-    ) -> DataFrame {
+    pub fn aggregate(self, group_by: Vec<Expr>, aggregate_expr: Vec<AggregateExpr>) -> DataFrame {
         DataFrame {
             plan: LogicalPlan::Aggregate(Aggregate::new(self.plan, group_by, aggregate_expr)),
         }
@@ -95,19 +91,19 @@ mod tests {
     use super::*;
     use crate::expressions::{col, count, lit_double, lit_long, lit_string, max, min};
     use crate::logical_plan::{LogicalPlan, format};
-    use crate::scan::Scan;
+    use crate::scan::TableScan;
     use fdapquery_catalog::CsvDataSource;
     use std::sync::Arc;
 
     fn csv() -> DataFrame {
         let path = "../testdata/employee.csv";
-        let scan = Scan::new(
+        let scan = TableScan::new(
             "employee",
             Arc::new(CsvDataSource::new(path, None, true, 1024)),
             vec![],
         )
         .unwrap();
-        DataFrame::new(LogicalPlan::Scan(scan))
+        DataFrame::new(LogicalPlan::TableScan(scan))
     }
 
     #[test]
@@ -117,8 +113,8 @@ mod tests {
             .project(vec![col("id"), col("first_name"), col("last_name")]);
 
         let expected = "Projection: #id, #first_name, #last_name\n\
-                        \tSelection: #state = 'CO'\n\
-                        \t\tScan: employee; projection=None\n";
+                        \tFilter: #state = 'CO'\n\
+                        \t\tTableScan: employee; projection=None\n";
 
         assert_eq!(format(df.logical_plan()), expected);
     }
@@ -136,10 +132,10 @@ mod tests {
             ])
             .filter(col("bonus").gt(lit_long(1000)));
 
-        let expected = "Selection: #bonus > 1000\n\
+        let expected = "Filter: #bonus > 1000\n\
                         \tProjection: #id, #first_name, #last_name, #salary, #salary * 0.1 as bonus\n\
-                        \t\tSelection: #state = 'CO'\n\
-                        \t\t\tScan: employee; projection=None\n";
+                        \t\tFilter: #state = 'CO'\n\
+                        \t\t\tTableScan: employee; projection=None\n";
 
         assert_eq!(format(df.logical_plan()), expected);
     }
@@ -154,7 +150,7 @@ mod tests {
         assert_eq!(
             format(df.logical_plan()),
             "Aggregate: groupExpr=[#state], aggregateExpr=[MIN(#salary), MAX(#salary), COUNT(#salary)]\n\
-             \tScan: employee; projection=None\n"
+             \tTableScan: employee; projection=None\n"
         );
     }
 }

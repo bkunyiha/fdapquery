@@ -45,8 +45,8 @@
 
 use crate::plan_properties::PlanProperties;
 use crate::stream::SendableRecordBatchStream;
-use crate::task_context::TaskContext;
 use fdapquery_datatypes::{Result, Schema};
+use fdapquery_execution::TaskContext;
 use std::fmt;
 use std::sync::Arc;
 
@@ -57,7 +57,7 @@ use std::sync::Arc;
 /// a `partition: usize` so callers can ask for one specific output
 /// partition at a time — this is how the engine fans a query out across
 /// cores or executors. For single-partition operators
-/// (`ProjectionExec`, `SelectionExec`, `LimitExec`, etc.) only
+/// (`ProjectionExec`, `FilterExec`, `GlobalLimitExec`, etc.) only
 /// `partition == 0` is valid; passing anything else surfaces as
 /// `Err(Internal(_))`.
 ///
@@ -80,7 +80,7 @@ pub trait ExecutionPlan: fmt::Display + Send + Sync {
     /// The optimiser reads `properties().output_partitioning` to decide
     /// whether to insert a `RepartitionExec`. Operators expose this via a
     /// borrow (`-> &PlanProperties`), not a clone, because some
-    /// `PlanProperties` fields may hold `Arc<dyn Expression>` (in
+    /// `PlanProperties` fields may hold `Arc<dyn PhysicalExpr>` (in
     /// `Partitioning::Hash`) that's cheap to share but not free to clone
     /// per call.
     fn properties(&self) -> &PlanProperties;

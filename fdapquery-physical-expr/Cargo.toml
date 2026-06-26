@@ -15,7 +15,7 @@ arrow-schema  = { workspace = true }
 chrono        = { workspace = true }
 # `Result`, `FdapQueryError`, `ScalarValue`, `ColumnVector`, `arrow_types::*`
 # — used by every expression file.
-fdapquery-datatypes = { path = "../fdapquery-datatypes" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
 
 [dev-dependencies]
 # Test modules in boolean_expression.rs and cast_expression.rs build

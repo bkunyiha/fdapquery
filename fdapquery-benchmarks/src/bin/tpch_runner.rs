@@ -16,7 +16,7 @@
 //! `chrono::NaiveDate` → days-since-epoch), Q1's
 //! `date '1998-12-01' - interval '68 days'` predicate plans correctly
 //! through the engine. Whether it executes end-to-end depends on
-//! `DateSubtractIntervalExpression` at the physical layer.
+//! `DateSubtractIntervalExpr` at the physical layer.
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,11 +24,11 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Instant;
 
+use fdapquery::SessionContext;
 use fdapquery_catalog::ParquetDataSource;
 use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_datatypes::record_batch::to_csv;
-use fdapquery_execution::ExecutionContext;
 use futures::TryStreamExt;
 
 /// The eight TPC-H tables.
@@ -60,7 +60,7 @@ async fn main() -> ExitCode {
     println!();
 
     // Register the eight TPC-H tables as ParquetDataSource scans.
-    let mut ctx = ExecutionContext::new(HashMap::new());
+    let mut ctx = SessionContext::new(HashMap::new());
     for table in TPCH_TABLES {
         let path = format!("{data_dir}/{table}.parquet");
         let source: Arc<dyn TableProvider> = Arc::new(ParquetDataSource::new(path));

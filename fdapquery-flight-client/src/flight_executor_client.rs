@@ -16,7 +16,7 @@
 //! `execute_final_task` *works* because `ExecutionPlan::execute` takes
 //! `Arc<TaskContext>` as a trait-method parameter, so
 //! `ShuffleReaderExec::execute(0, ctx)` honours the context. The final
-//! stage's plan is `HashAggregateExec(Final)` wrapping
+//! stage's plan is `AggregateExec(Final)` wrapping
 //! `ShuffleReaderExec`; when the server calls
 //! `plan.execute(0, Arc::clone(&self.ctx))`, the context flows through
 //! the aggregate to the reader, which reads its shuffle locations via
@@ -109,7 +109,7 @@ impl FlightExecutorClient {
 /// Build an empty `SendableRecordBatchStream` over an empty schema —
 /// used by `fetch_shuffle` as the not-implemented stub.
 fn empty_stream() -> SendableRecordBatchStream {
-    let schema = Arc::new(Schema::new(vec![]).to_arrow());
+    let schema = Arc::new(Schema::empty());
     Box::pin(RecordBatchStreamAdapter::new(
         schema,
         futures::stream::empty::<Result<RecordBatch>>(),
@@ -173,7 +173,7 @@ impl ExecutorClient for FlightExecutorClient {
     /// because the `ExecutionPlan::execute` trait method takes
     /// `Arc<TaskContext>` and every operator threads it through. The
     /// server runs `task.plan.execute(0, Arc::clone(&ctx))`;
-    /// `HashAggregateExec(Final).execute(0, ctx)` calls
+    /// `AggregateExec(Final).execute(0, ctx)` calls
     /// `ShuffleReaderExec.execute(0, ctx)` which reads shuffle files via
     /// `ctx.runtime.shuffle_manager`. No special-case plan-tree
     /// rewriting needed.
@@ -215,7 +215,7 @@ impl ExecutorClient for FlightExecutorClient {
         // `do_get_streams_flight_data_for_a_logical_plan` exercises.
         let arrow_schema = match batches.first() {
             Some(batch) => batch.schema(),
-            None => Arc::new(Schema::new(vec![]).to_arrow()),
+            None => Arc::new(Schema::empty()),
         };
         let stream = futures::stream::iter(batches.into_iter().map(Ok::<_, FdapQueryError>));
         Ok(Box::pin(RecordBatchStreamAdapter::new(

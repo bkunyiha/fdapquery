@@ -7,14 +7,36 @@
 //! unsupported-expression failures as `FdapQueryError` variants.
 
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_expr::{AggregateExpr, LogicalExpr, LogicalPlan};
+use fdapquery_expr::{AggregateExpr, Expr, LogicalPlan};
 use std::collections::HashSet;
 
 use crate::projection_push_down_rule::ProjectionPushDownRule;
 
+/// Session 15d-1 #99 — `OptimizerConfig` carries tunable rule
+/// parameters (`skip_failed_rules`, `max_passes`, etc. in DataFusion).
+/// fdapquery's is empty for now; grows when consumers want to tune.
+#[derive(Default)]
+pub struct OptimizerConfig;
+
 /// A logical-plan rewrite rule.
+///
+/// Session 15d-1 #99 changed the method shape to match DataFusion's
+/// `OptimizerRule::try_optimize`:
+///
+/// - `Ok(Some(plan))` — the rule fired and produced a new plan.
+/// - `Ok(None)` — the rule didn't apply to this plan shape; the
+///   `Optimizer` keeps the previous plan unchanged.
+/// - `Err(_)` — the rule failed; the engine propagates.
+///
+/// The `name` method backs logging/diagnostics — DataFusion's
+/// optimizer prints the rule name on each pass.
 pub trait OptimizerRule {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan>;
+    fn name(&self) -> &str;
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        config: &OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>>;
 }
 
 /// Runs the optimisation rules in a fixed order.
@@ -26,15 +48,19 @@ impl Optimizer {
         Optimizer
     }
 
-    /// apply a list of rules in order.
+    /// Apply a list of rules in order. Session 15d-1 #99 calls
+    /// `try_optimize` per rule; an `Ok(None)` return leaves the
+    /// previous plan unchanged for the next rule.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        ProjectionPushDownRule.optimize(plan)
+        let config = OptimizerConfig;
+        let rewritten = ProjectionPushDownRule.try_optimize(plan, &config)?;
+        Ok(rewritten.unwrap_or_else(|| plan.clone()))
     }
 }
 
 /// Collect the column names referenced by each expression in `exprs`.
 pub fn extract_columns_list(
-    exprs: &[LogicalExpr],
+    exprs: &[Expr],
     input: &LogicalPlan,
     accum: &mut HashSet<String>,
 ) -> Result<()> {
@@ -46,46 +72,46 @@ pub fn extract_columns_list(
 
 /// Collect the column names referenced by a single expression.
 pub fn extract_columns(
-    expr: &LogicalExpr,
+    expr: &Expr,
     input: &LogicalPlan,
     accum: &mut HashSet<String>,
 ) -> Result<()> {
     match expr {
         // A column-by-index resolves to a name via the input's schema.
-        LogicalExpr::ColumnIndex(i) => {
+        Expr::ColumnIndex(i) => {
             let schema = input.schema()?;
-            accum.insert(schema.fields[*i].name.clone());
+            accum.insert(schema.fields()[*i].name().clone());
         }
-        LogicalExpr::Column(name) => {
+        Expr::Column(name) => {
             accum.insert(name.clone());
         }
         // Every two-operand expression `{ l, r }` variant.
-        LogicalExpr::Eq { l, r }
-        | LogicalExpr::Neq { l, r }
-        | LogicalExpr::Gt { l, r }
-        | LogicalExpr::GtEq { l, r }
-        | LogicalExpr::Lt { l, r }
-        | LogicalExpr::LtEq { l, r }
-        | LogicalExpr::And { l, r }
-        | LogicalExpr::Or { l, r }
-        | LogicalExpr::Add { l, r }
-        | LogicalExpr::Subtract { l, r }
-        | LogicalExpr::Multiply { l, r }
-        | LogicalExpr::Divide { l, r }
-        | LogicalExpr::Modulus { l, r } => {
+        Expr::Eq { l, r }
+        | Expr::Neq { l, r }
+        | Expr::Gt { l, r }
+        | Expr::GtEq { l, r }
+        | Expr::Lt { l, r }
+        | Expr::LtEq { l, r }
+        | Expr::And { l, r }
+        | Expr::Or { l, r }
+        | Expr::Add { l, r }
+        | Expr::Subtract { l, r }
+        | Expr::Multiply { l, r }
+        | Expr::Divide { l, r }
+        | Expr::Modulus { l, r } => {
             extract_columns(l, input, accum)?;
             extract_columns(r, input, accum)?;
         }
-        LogicalExpr::Alias { expr, .. } => extract_columns(expr, input, accum)?,
-        LogicalExpr::Cast { expr, .. } => extract_columns(expr, input, accum)?,
+        Expr::Alias { expr, .. } => extract_columns(expr, input, accum)?,
+        Expr::Cast { expr, .. } => extract_columns(expr, input, accum)?,
         // Literals reference no columns.
-        LogicalExpr::LiteralString(_)
-        | LogicalExpr::LiteralLong(_)
-        | LogicalExpr::LiteralDouble(_)
-        | LogicalExpr::LiteralDate(_)
-        | LogicalExpr::LiteralIntervalDays(_) => {}
-        LogicalExpr::DateSubtractInterval { date, interval }
-        | LogicalExpr::DateAddInterval { date, interval } => {
+        Expr::LiteralString(_)
+        | Expr::LiteralLong(_)
+        | Expr::LiteralDouble(_)
+        | Expr::LiteralDate(_)
+        | Expr::LiteralIntervalDays(_) => {}
+        Expr::DateSubtractInterval { date, interval }
+        | Expr::DateAddInterval { date, interval } => {
             extract_columns(date, input, accum)?;
             extract_columns(interval, input, accum)?;
         }
@@ -103,7 +129,7 @@ pub fn extract_columns(
 }
 
 /// The argument expression inside an aggregate.
-pub fn aggregate_inner(agg: &AggregateExpr) -> &LogicalExpr {
+pub fn aggregate_inner(agg: &AggregateExpr) -> &Expr {
     match agg {
         AggregateExpr::Sum(e)
         | AggregateExpr::Min(e)

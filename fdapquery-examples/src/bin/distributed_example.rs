@@ -180,7 +180,7 @@ impl ExecutorClient for LocalExecutorClient {
             executor.id, task.stage_id, task.task_id, task.partition_id,
         );
 
-        // The final-stage plan is `HashAggregateExec(Final)` wrapping a
+        // The final-stage plan is `AggregateExec(Final)` wrapping a
         // `ShuffleReaderExec` whose `shuffle_locations` were populated by
         // `DistributedPlanner::update_shuffle_locations`.
         // `execute(0, ctx)` flows the context through the aggregate to
@@ -208,7 +208,7 @@ impl ExecutorClient for LocalExecutorClient {
             .shuffle_manager
             .read_partition(&location.job_uuid, location.stage_id, location.partition_id)
             .map_err(|e| FdapQueryError::Internal(format!("read_partition: {e}")))?;
-        let arrow_schema = Arc::new(fdapquery_datatypes::Schema::new(vec![]).to_arrow());
+        let arrow_schema = Arc::new(fdapquery_datatypes::Schema::empty());
         let stream = futures::stream::iter(iter);
         Ok(Box::pin(
             fdapquery_physical_plan::RecordBatchStreamAdapter::new(arrow_schema, stream),

@@ -8,9 +8,12 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-fdapquery-execution    = { path = "../fdapquery-execution" }
-fdapquery-catalog   = { path = "../fdapquery-catalog" }    # ParquetDataSource (tpch_runner), InMemoryDataSource (benchmarks)
-fdapquery-datatypes    = { path = "../fdapquery-datatypes" }     # RecordBatch, SchemaConverter, to_csv
+# Session 15c — `ExecutionContext` moved from `fdapquery-execution` to
+# the `fdapquery` umbrella crate. The binaries now import via
+# `use fdapquery::ExecutionContext;`.
+fdapquery           = { version = "0.1.0", path = "../fdapquery" }
+fdapquery-catalog   = { version = "0.1.0", path = "../fdapquery-catalog" }    # ParquetDataSource (tpch_runner), InMemoryDataSource (benchmarks)
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }  # RecordBatch, SchemaConverter, to_csv
 # `tokio` for `#[tokio::main]` — the binaries drain the engine's
 # `SendableRecordBatchStream` results on the tokio runtime.
 tokio        = { workspace = true }

@@ -721,6 +721,8 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 name = "fdapquery"
 version = "0.1.0"
 dependencies = [
+ "arrow",
+ "arrow-schema",
  "fdapquery-catalog",
  "fdapquery-common",
  "fdapquery-datatypes",
@@ -728,10 +730,14 @@ dependencies = [
  "fdapquery-expr",
  "fdapquery-functions",
  "fdapquery-functions-aggregate",
+ "fdapquery-fuzzer",
  "fdapquery-optimizer",
  "fdapquery-physical-expr",
  "fdapquery-physical-plan",
  "fdapquery-sql",
+ "futures",
+ "rayon",
+ "tokio",
 ]
 
 [[package]]
@@ -740,9 +746,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "env_logger",
+ "fdapquery",
  "fdapquery-catalog",
  "fdapquery-datatypes",
- "fdapquery-execution",
  "futures",
  "log",
  "rayon",
@@ -758,6 +764,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "fdapquery-datatypes",
+ "fdapquery-execution",
  "futures",
  "parquet",
  "tokio",
@@ -806,12 +813,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
+ "arrow-schema",
  "async-trait",
  "env_logger",
+ "fdapquery",
  "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-distributed",
- "fdapquery-execution",
  "fdapquery-expr",
  "fdapquery-flight-client",
  "fdapquery-flight-server",
@@ -829,16 +837,12 @@ dependencies = [
 name = "fdapquery-execution"
 version = "0.1.0"
 dependencies = [
- "arrow",
- "fdapquery-catalog",
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
  "fdapquery-datatypes",
- "fdapquery-expr",
- "fdapquery-fuzzer",
- "fdapquery-optimizer",
- "fdapquery-physical-plan",
- "fdapquery-sql",
  "futures",
- "rayon",
+ "pin-project-lite",
  "tokio",
 ]
 
@@ -883,6 +887,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "arrow-flight",
+ "fdapquery",
  "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-execution",
@@ -951,12 +956,12 @@ name = "fdapquery-physical-plan"
 version = "0.1.0"
 dependencies = [
  "arrow-array",
- "arrow-ipc",
  "arrow-schema",
  "async-stream",
  "chrono",
  "fdapquery-catalog",
  "fdapquery-datatypes",
+ "fdapquery-execution",
  "fdapquery-expr",
  "fdapquery-optimizer",
  "fdapquery-physical-expr",

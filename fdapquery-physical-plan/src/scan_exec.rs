@@ -16,16 +16,16 @@
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
-use crate::task_context::TaskContext;
 use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{FdapQueryError, Result, Schema};
+use fdapquery_execution::TaskContext;
 use std::fmt;
 use std::sync::Arc;
 
-/// Scan a table provider with optional push-down projection.
+/// TableScan a table provider with optional push-down projection.
 ///
 /// `provider` is held as `Arc<dyn TableProvider>` (matching the logical
-/// `Scan` operator), so the same source can be shared across plan
+/// `TableScan` operator), so the same source can be shared across plan
 /// nodes. The output schema is computed once at construction
 /// (`Schema::select` over the projection) and cached — matching
 /// DataFusion's `ExecutionPlan::schema(&self) -> SchemaRef` shape,
@@ -45,7 +45,26 @@ impl ScanExec {
     /// provider's schema. An invalid projection (a column name not
     /// present in the source) surfaces as `Err(SchemaError(_))`.
     pub fn new(provider: Arc<dyn TableProvider>, projection: Vec<String>) -> Result<Self> {
-        let schema = provider.schema().select(&projection)?;
+        let source_schema = provider.schema();
+        let schema = if projection.is_empty() {
+            source_schema
+        } else {
+            let indices: Vec<usize> = projection
+                .iter()
+                .map(|name| {
+                    source_schema
+                        .fields()
+                        .iter()
+                        .position(|f| f.name() == name)
+                        .ok_or_else(|| {
+                            FdapQueryError::SchemaError(format!(
+                                "ScanExec: projection column '{name}' not in source schema"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<usize>>>()?;
+            source_schema.project(&indices)?
+        };
         let properties = PlanProperties::single_partition_unknown();
         Ok(Self {
             provider,
@@ -81,13 +100,13 @@ impl ExecutionPlan for ScanExec {
                 "ScanExec has 1 output partition; partition {partition} is out of range"
             )));
         }
-        // `TableProvider::scan` returns a `BoxRecordBatchStream`
+        // `TableProvider::scan` returns a `SendableRecordBatchStream`
         // (a pin-boxed async `Stream` over `Result<RecordBatch>`).
         // Wrap it with the projected schema via `RecordBatchStreamAdapter`
         // so it satisfies the `RecordBatchStream` contract that
         // `SendableRecordBatchStream` aliases.
         let stream = self.provider.scan(&self.projection)?;
-        let arrow_schema = Arc::new(self.schema.to_arrow());
+        let arrow_schema = Arc::new(self.schema.clone());
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             arrow_schema,
             stream,
@@ -147,7 +166,12 @@ mod tests {
             true,
             1024,
         ));
-        let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
+        let columns: Vec<String> = ds
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
         let scan = ScanExec::new(Arc::clone(&ds), columns).unwrap();
 
         let ctx = Arc::new(TaskContext::default_test());
@@ -167,7 +191,12 @@ mod tests {
             true,
             1024,
         ));
-        let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
+        let columns: Vec<String> = ds
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
         let scan = ScanExec::new(Arc::clone(&ds), columns).unwrap();
 
         let ctx = Arc::new(TaskContext::default_test());
@@ -184,7 +213,12 @@ mod tests {
             true,
             1024,
         ));
-        let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
+        let columns: Vec<String> = ds
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
         let scan = ScanExec::new(Arc::clone(&ds), columns).unwrap();
 
         assert_eq!(scan.properties().partition_count(), 1);
@@ -199,7 +233,12 @@ mod tests {
             true,
             1024,
         ));
-        let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
+        let columns: Vec<String> = ds
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
         let scan = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
 
         // A "child" — well, just another ScanExec — to force a non-empty vec.

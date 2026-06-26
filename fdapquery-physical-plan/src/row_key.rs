@@ -1,10 +1,15 @@
-//! A hashable key built from a row's values, shared by `HashAggregateExec`
+//! A hashable key built from a row's values, shared by `AggregateExec`
 //! (group keys) and `HashJoinExec` (join keys).
 //!
 //! Floats are hashed and compared **by bit pattern**, so `Hash` and `Eq`
 //! agree (and `NaN` keys group together). See ARCHITECTURE §4.6 for the
 //! rationale for sharing one implementation across both operators.
 
+// Session 15d-1 #108 — `ScalarValue` canonical home is `fdapquery-common`
+// but this crate doesn't list it as a dep. Use the transitional
+// re-export from `fdapquery-datatypes`. (Migrate to direct import
+// when physical-plan adds `fdapquery-common` to Cargo.toml or when
+// the wrappers in 15d-2 reshape the dep graph.)
 use fdapquery_datatypes::ScalarValue;
 use std::hash::{Hash, Hasher};
 

@@ -1,27 +1,41 @@
-//! Pushes the set of referenced columns down to the `Scan`, so the data source
+//! Pushes the set of referenced columns down to the `TableScan`, so the data source
 //! reads only the columns the rest of the query actually needs.
 //!
 //! `LogicalPlan` is a closed `enum`, so the `match` is exhaustive over all
 //! six operators and needs no catch-all (per §3.1).
 
 use fdapquery_datatypes::Result;
-use fdapquery_expr::{Aggregate, Join, Limit, LogicalPlan, Projection, Scan, Selection};
+use fdapquery_expr::{Aggregate, Filter, Join, Limit, LogicalPlan, Projection, TableScan};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::optimizer::{OptimizerRule, aggregate_inner, extract_columns, extract_columns_list};
+use crate::optimizer::{
+    OptimizerConfig, OptimizerRule, aggregate_inner, extract_columns, extract_columns_list,
+};
 
 /// The one optimisation rule so far.
 pub struct ProjectionPushDownRule;
 
 impl OptimizerRule for ProjectionPushDownRule {
-    fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        push_down(plan, &mut HashSet::new())
+    fn name(&self) -> &str {
+        "projection_push_down"
+    }
+
+    /// Session 15d-1 #100 — migrated to the `try_optimize` shape.
+    /// The rule always fires (even if it leaves the plan
+    /// structurally unchanged, e.g. a single `TableScan`), so it
+    /// returns `Ok(Some(_))` whenever `push_down` succeeds.
+    fn try_optimize(
+        &self,
+        plan: &LogicalPlan,
+        _config: &OptimizerConfig,
+    ) -> Result<Option<LogicalPlan>> {
+        push_down(plan, &mut HashSet::new()).map(Some)
     }
 }
 
 /// Rewrite `plan`, accumulating referenced column names on the way down and
-/// trimming the `Scan`'s projection at the leaf.
+/// trimming the `TableScan`'s projection at the leaf.
 fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<LogicalPlan> {
     let rewritten = match plan {
         LogicalPlan::Projection(p) => {
@@ -29,10 +43,10 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
             let input = push_down(&p.input, column_names)?;
             LogicalPlan::Projection(Projection::new(input, p.expr.clone()))
         }
-        LogicalPlan::Selection(s) => {
+        LogicalPlan::Filter(s) => {
             extract_columns(&s.expr, &s.input, column_names)?;
             let input = push_down(&s.input, column_names)?;
-            LogicalPlan::Selection(Selection::new(input, s.expr.clone()))
+            LogicalPlan::Filter(Filter::new(input, s.expr.clone()))
         }
         LogicalPlan::Aggregate(a) => {
             extract_columns_list(&a.group_expr, &a.input, column_names)?;
@@ -57,12 +71,12 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
             // request every column from both sides.
             if column_names.is_empty() {
                 let left_schema = j.left.schema()?;
-                for f in left_schema.fields {
-                    column_names.insert(f.name);
+                for f in left_schema.fields().iter() {
+                    column_names.insert(f.name().clone());
                 }
                 let right_schema = j.right.schema()?;
-                for f in right_schema.fields {
-                    column_names.insert(f.name);
+                for f in right_schema.fields().iter() {
+                    column_names.insert(f.name().clone());
                 }
             }
             // The join keys are always required.
@@ -74,17 +88,17 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
             let right = push_down(&j.right, column_names)?;
             LogicalPlan::Join(Join::new(left, right, j.join_type.clone(), j.on.clone()))
         }
-        LogicalPlan::Scan(s) => {
+        LogicalPlan::TableScan(s) => {
             // Keep only the source columns that were actually requested, sorted.
             let schema = s.data_source.schema();
             let mut pushdown: Vec<String> = schema
-                .fields
+                .fields()
                 .iter()
-                .map(|f| f.name.clone())
+                .map(|f| f.name().clone())
                 .filter(|name| column_names.contains(name))
                 .collect();
             pushdown.sort();
-            LogicalPlan::Scan(Scan::new(
+            LogicalPlan::TableScan(TableScan::new(
                 s.path.clone(),
                 Arc::clone(&s.data_source),
                 pushdown,
@@ -104,21 +118,24 @@ mod tests {
     /// `employee` table scanned with no projection yet.
     fn csv() -> DataFrame {
         let path = "../testdata/employee.csv";
-        let scan = Scan::new(
+        let scan = TableScan::new(
             "employee",
             Arc::new(CsvDataSource::new(path, None, true, 1024)),
             vec![],
         )
         .unwrap();
-        DataFrame::new(LogicalPlan::Scan(scan))
+        DataFrame::new(LogicalPlan::TableScan(scan))
     }
 
     #[test]
     fn projection_push_down() {
         let df = csv().project(vec![col("id"), col("first_name"), col("last_name")]);
-        let optimized = ProjectionPushDownRule.optimize(df.logical_plan()).unwrap();
+        let optimized = ProjectionPushDownRule
+            .try_optimize(df.logical_plan(), &OptimizerConfig)
+            .unwrap()
+            .expect("rule should fire");
         let expected = "Projection: #id, #first_name, #last_name\n\
-                        \tScan: employee; projection=[first_name, id, last_name]\n";
+                        \tTableScan: employee; projection=[first_name, id, last_name]\n";
         assert_eq!(optimized.pretty(), expected);
     }
 
@@ -127,10 +144,13 @@ mod tests {
         let df = csv()
             .filter(col("state").eq(lit_string("CO")))
             .project(vec![col("id"), col("first_name"), col("last_name")]);
-        let optimized = ProjectionPushDownRule.optimize(df.logical_plan()).unwrap();
+        let optimized = ProjectionPushDownRule
+            .try_optimize(df.logical_plan(), &OptimizerConfig)
+            .unwrap()
+            .expect("rule should fire");
         let expected = "Projection: #id, #first_name, #last_name\n\
-                        \tSelection: #state = 'CO'\n\
-                        \t\tScan: employee; projection=[first_name, id, last_name, state]\n";
+                        \tFilter: #state = 'CO'\n\
+                        \t\tTableScan: employee; projection=[first_name, id, last_name, state]\n";
         assert_eq!(optimized.pretty(), expected);
     }
 
@@ -140,11 +160,14 @@ mod tests {
             vec![col("state")],
             vec![min(col("salary")), max(col("salary")), count(col("salary"))],
         );
-        let optimized = ProjectionPushDownRule.optimize(df.logical_plan()).unwrap();
+        let optimized = ProjectionPushDownRule
+            .try_optimize(df.logical_plan(), &OptimizerConfig)
+            .unwrap()
+            .expect("rule should fire");
         assert_eq!(
             format(&optimized),
             "Aggregate: groupExpr=[#state], aggregateExpr=[MIN(#salary), MAX(#salary), COUNT(#salary)]\n\
-             \tScan: employee; projection=[salary, state]\n"
+             \tTableScan: employee; projection=[salary, state]\n"
         );
     }
 }

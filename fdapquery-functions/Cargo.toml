@@ -8,5 +8,5 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-physical-expr = { path = "../fdapquery-physical-expr" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-physical-expr = { version = "0.1.0", path = "../fdapquery-physical-expr" }

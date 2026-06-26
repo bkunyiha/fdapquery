@@ -7,7 +7,7 @@
 //! DataFusion-matching name and a modernized stream return type, but
 //! does **not** yet have the async `scan` planning surface that
 //! returns `Arc<dyn ExecutionPlan>`. The reason is a dep-graph cycle:
-//! `LogicalPlan::Scan` in `fdapquery-expr` holds `Arc<dyn TableProvider>`,
+//! `LogicalPlan::TableScan` in `fdapquery-expr` holds `Arc<dyn TableProvider>`,
 //! so catalog → physical-plan would close the loop
 //! catalog → physical-plan → expr → catalog. Breaking that cycle
 //! cleanly requires DataFusion's two-trait split (a lightweight
@@ -30,15 +30,11 @@
 //! Mirrors `datafusion_catalog::TableProvider`'s NAME exactly; the
 //! method shapes converge in Phase D.
 
-use fdapquery_datatypes::{RecordBatch, Result, Schema};
-use futures::Stream;
-use std::pin::Pin;
-
-/// Pin-boxed, Send-able async stream of `Result<RecordBatch>`. Same shape
-/// as `fdapquery_physical_plan::SendableRecordBatchStream` but without a
-/// dep on the physical-plan crate — keeps the catalog crate free of
-/// physical-plan deps so we don't form a cycle with `fdapquery-expr`.
-pub type BoxRecordBatchStream = Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send + 'static>>;
+use fdapquery_datatypes::{Result, Schema};
+// Session 15d-1 #92 — `SendableRecordBatchStream` now lives at its
+// DataFusion-canonical location (`fdapquery-execution::stream`); the
+// previous local `BoxRecordBatchStream` alias is removed.
+pub use fdapquery_execution::SendableRecordBatchStream;
 
 pub trait TableProvider: Send + Sync {
     /// The table's full schema (no projection applied).
@@ -48,7 +44,7 @@ pub trait TableProvider: Send + Sync {
     /// (column names). An empty projection slice means "all columns".
     /// A projection naming a column not in the schema returns
     /// `Err(SchemaError(_))`.
-    fn scan(&self, projection: &[String]) -> Result<BoxRecordBatchStream>;
+    fn scan(&self, projection: &[String]) -> Result<SendableRecordBatchStream>;
 
     /// Runtime downcasting to the concrete provider type.
     fn as_any(&self) -> &dyn std::any::Any;

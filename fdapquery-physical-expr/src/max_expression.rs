@@ -1,25 +1,25 @@
 //!
 //! `MAX(expr)` — keeps the largest non-null value seen.
 
-use crate::aggregate_expression::{AggregateExpression, scalar_gt};
-use crate::expressions::{Accumulator, AccumulatorValue, Expression};
+use crate::aggregate_expression::{AggregateExpr, scalar_gt};
+use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr};
 use fdapquery_datatypes::{Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `MAX(expr)`.
-pub struct MaxExpression {
-    expr: Arc<dyn Expression>,
+pub struct MaxExpr {
+    expr: Arc<dyn PhysicalExpr>,
 }
 
-impl MaxExpression {
-    pub fn new(expr: Arc<dyn Expression>) -> Self {
+impl MaxExpr {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self { expr }
     }
 }
 
-impl AggregateExpression for MaxExpression {
-    fn input_expression(&self) -> Arc<dyn Expression> {
+impl AggregateExpr for MaxExpr {
+    fn input_expression(&self) -> Arc<dyn PhysicalExpr> {
         Arc::clone(&self.expr)
     }
     fn create_accumulator(&self) -> Box<dyn Accumulator> {
@@ -30,7 +30,7 @@ impl AggregateExpression for MaxExpression {
     }
 }
 
-impl fmt::Display for MaxExpression {
+impl fmt::Display for MaxExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "MAX({})", self.expr)
     }

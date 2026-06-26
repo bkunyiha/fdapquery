@@ -24,10 +24,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use fdapquery::SessionContext;
 use fdapquery_datatypes::RecordBatch;
-use fdapquery_datatypes::arrow_types::FLOAT_TYPE;
 use fdapquery_datatypes::record_batch::to_csv;
-use fdapquery_execution::ExecutionContext;
 use fdapquery_expr::{cast, col, format, max};
 use fdapquery_optimizer::Optimizer;
 use futures::TryStreamExt;
@@ -40,21 +39,24 @@ const NYC_TAXI_CSV: &str = "/mnt/nyctaxi/csv/year=2019/yellow_tripdata_2019-01.c
 async fn main() {
     env_logger::init();
 
-    let ctx = ExecutionContext::new(HashMap::new());
+    let ctx = SessionContext::new(HashMap::new());
 
     let start = Instant::now();
 
     // SELECT passenger_count, MAX(CAST(fare_amount AS float)) GROUP BY passenger_count
     let df = ctx.csv(NYC_TAXI_CSV).aggregate(
         vec![col("passenger_count")],
-        vec![max(cast(col("fare_amount"), FLOAT_TYPE))],
+        vec![max(cast(
+            col("fare_amount"),
+            arrow_schema::DataType::Float32,
+        ))],
     );
 
     println!("Logical Plan:\t{}", format(df.logical_plan()));
 
     // Print the optimized plan separately so a reader can see what
     // `ProjectionPushDown` (and other rules) do to the logical tree.
-    // `ExecutionContext::execute()` will re-run `Optimizer::optimize` internally;
+    // `SessionContext::execute()` will re-run `Optimizer::optimize` internally;
     // the optimizer is idempotent, so the second pass is a no-op shape-wise.
     let optimized_plan = Optimizer::new()
         .optimize(df.logical_plan())

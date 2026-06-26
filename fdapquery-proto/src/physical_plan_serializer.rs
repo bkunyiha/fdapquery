@@ -1,5 +1,5 @@
-//! `PhysicalPlan` → `pb::PhysicalPlanNode`, `Expression` → `pb::PhysicalExprNode`,
-//! `AggregateExpression` → `pb::PhysicalAggregateExprNode`, `Schema` / `Field` →
+//! `PhysicalPlan` → `pb::PhysicalPlanNode`, `PhysicalExpr` → `pb::PhysicalExprNode`,
+//! `AggregateExpr` → `pb::PhysicalAggregateExprNode`, `Schema` / `Field` →
 //! their proto equivalents, plus `ShuffleLocation` and `Task` for distributed
 //! task dispatch. Used by `flight-server` and `distributed` (modules 13–15).
 //!
@@ -23,9 +23,9 @@
 //! ## Notes
 //! - Concrete-operator dispatch uses `plan.as_any().downcast_ref::<XExec>()`
 //!   (same pattern DataFusion uses for `ExecutionPlan` / `PhysicalExpr`).
-//!   Two family-narrowing accessors — `Expression::as_boolean_expression`
-//!   and `as_math_expression` — return `&dyn BooleanExpression` /
-//!   `&dyn MathExpression` so the serializer can read
+//!   Two family-narrowing accessors — `PhysicalExpr::as_boolean_expression`
+//!   and `as_math_expression` — return `&dyn BooleanExpr` /
+//!   `&dyn MathExpr` so the serializer can read
 //!   `left()/right()/op_name()` uniformly across all 8 boolean and 5 math
 //!   operators without per-operator dispatch. Pure leaf dispatches (column,
 //!   literals, cast, the five aggregates, CSV vs Parquet data sources) all
@@ -43,7 +43,7 @@ use crate::pb;
 use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{Field, Schema};
 use fdapquery_physical_plan::{
-    AggregateExpression, AggregateMode, ExecutionPlan, Expression, ShuffleLocation, Task,
+    AggregateExpr, AggregateMode, ExecutionPlan, PhysicalExpr, ShuffleLocation, Task,
 };
 
 use arrow_schema::DataType;
@@ -56,6 +56,7 @@ pub fn serialize_physical_plan(plan: &dyn ExecutionPlan) -> pb::PhysicalPlanNode
     if let Some(scan) = any.downcast_ref::<fdapquery_physical_plan::ScanExec>() {
         let (path, file_format) = data_source_path_and_format(scan.provider.as_ref());
         return pb::PhysicalPlanNode {
+            // Wire variant name `Scan` — stable across Session 15d-1 #90.
             plan_type: Some(PlanType::Scan(pb::ScanExecNode {
                 path,
                 // **Important**: send the FULL (pre-projection) data-source schema,
@@ -87,15 +88,16 @@ pub fn serialize_physical_plan(plan: &dyn ExecutionPlan) -> pb::PhysicalPlanNode
             }))),
         };
     }
-    if let Some(sel) = any.downcast_ref::<fdapquery_physical_plan::SelectionExec>() {
+    if let Some(sel) = any.downcast_ref::<fdapquery_physical_plan::FilterExec>() {
         return pb::PhysicalPlanNode {
+            // Wire variant name `Selection` — stable across Session 15d-1 #89.
             plan_type: Some(PlanType::Selection(Box::new(pb::SelectionExecNode {
                 input: Some(Box::new(serialize_physical_plan(sel.input.as_ref()))),
                 expr: Some(serialize_physical_expr(sel.expr.as_ref())),
             }))),
         };
     }
-    if let Some(agg) = any.downcast_ref::<fdapquery_physical_plan::HashAggregateExec>() {
+    if let Some(agg) = any.downcast_ref::<fdapquery_physical_plan::AggregateExec>() {
         return pb::PhysicalPlanNode {
             plan_type: Some(PlanType::HashAggregate(Box::new(
                 pb::HashAggregateExecNode {
@@ -144,23 +146,22 @@ pub fn serialize_physical_plan(plan: &dyn ExecutionPlan) -> pb::PhysicalPlanNode
     panic!("Cannot serialize physical operator to protobuf: {}", plan)
 }
 
-/// `&dyn Expression` → `pb::PhysicalExprNode`.
-pub fn serialize_physical_expr(expr: &dyn Expression) -> pb::PhysicalExprNode {
+/// `&dyn PhysicalExpr` → `pb::PhysicalExprNode`.
+pub fn serialize_physical_expr(expr: &dyn PhysicalExpr) -> pb::PhysicalExprNode {
     use pb::physical_expr_node::ExprType;
     let any = expr.as_any();
-    let expr_type = if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::ColumnExpression>()
-    {
+    let expr_type = if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::Column>() {
         ExprType::Column(c.i as i32)
-    } else if let Some(s) = any.downcast_ref::<fdapquery_physical_plan::LiteralStringExpression>() {
+    } else if let Some(s) = any.downcast_ref::<fdapquery_physical_plan::LiteralString>() {
         ExprType::LiteralString(s.value.clone())
-    } else if let Some(n) = any.downcast_ref::<fdapquery_physical_plan::LiteralLongExpression>() {
+    } else if let Some(n) = any.downcast_ref::<fdapquery_physical_plan::LiteralLong>() {
         ExprType::LiteralLong(n.value)
-    } else if let Some(n) = any.downcast_ref::<fdapquery_physical_plan::LiteralDoubleExpression>() {
+    } else if let Some(n) = any.downcast_ref::<fdapquery_physical_plan::LiteralDouble>() {
         ExprType::LiteralDouble(n.value)
-    } else if let Some(d) = any.downcast_ref::<fdapquery_physical_plan::LiteralDateExpression>() {
+    } else if let Some(d) = any.downcast_ref::<fdapquery_physical_plan::LiteralDate>() {
         ExprType::LiteralDate(d.days_since_epoch)
     } else if let Some(be) = expr.as_boolean_expression() {
-        // Family-narrowing: `as_boolean_expression` returns `&dyn BooleanExpression`
+        // Family-narrowing: `as_boolean_expression` returns `&dyn BooleanExpr`
         // so we can read `left()/right()/op_name()` uniformly across all 8 ops
         // without enumerating each concrete type here.
         ExprType::BinaryExpr(Box::new(pb::PhysicalBinaryExprNode {
@@ -175,7 +176,7 @@ pub fn serialize_physical_expr(expr: &dyn Expression) -> pb::PhysicalExprNode {
             r: Some(Box::new(serialize_physical_expr(me.right().as_ref()))),
             op: me.op_name().to_string(),
         }))
-    } else if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::CastExpression>() {
+    } else if let Some(c) = any.downcast_ref::<fdapquery_physical_plan::CastExpr>() {
         ExprType::CastExpr(Box::new(pb::PhysicalCastExprNode {
             expr: Some(Box::new(serialize_physical_expr(c.expr.as_ref()))),
             arrow_type: data_type_to_proto(&c.data_type) as i32,
@@ -188,20 +189,18 @@ pub fn serialize_physical_expr(expr: &dyn Expression) -> pb::PhysicalExprNode {
     }
 }
 
-/// `&dyn AggregateExpression` → `pb::PhysicalAggregateExprNode`.
-pub fn serialize_physical_aggr_expr(
-    expr: &dyn AggregateExpression,
-) -> pb::PhysicalAggregateExprNode {
+/// `&dyn AggregateExpr` → `pb::PhysicalAggregateExprNode`.
+pub fn serialize_physical_aggr_expr(expr: &dyn AggregateExpr) -> pb::PhysicalAggregateExprNode {
     let any = expr.as_any();
-    let fn_kind = if any.is::<fdapquery_physical_plan::SumExpression>() {
+    let fn_kind = if any.is::<fdapquery_physical_plan::SumExpr>() {
         pb::AggregateFunction::Sum
-    } else if any.is::<fdapquery_physical_plan::MinExpression>() {
+    } else if any.is::<fdapquery_physical_plan::MinExpr>() {
         pb::AggregateFunction::Min
-    } else if any.is::<fdapquery_physical_plan::MaxExpression>() {
+    } else if any.is::<fdapquery_physical_plan::MaxExpr>() {
         pb::AggregateFunction::Max
-    } else if any.is::<fdapquery_physical_plan::AvgExpression>() {
+    } else if any.is::<fdapquery_physical_plan::AvgExpr>() {
         pb::AggregateFunction::Avg
-    } else if any.is::<fdapquery_physical_plan::CountExpression>() {
+    } else if any.is::<fdapquery_physical_plan::CountExpr>() {
         pb::AggregateFunction::Count
     } else {
         panic!(
@@ -239,7 +238,7 @@ pub fn serialize_task(task: &Task) -> pb::TaskInfo {
 impl From<&Schema> for pb::Schema {
     fn from(schema: &Schema) -> Self {
         pb::Schema {
-            columns: schema.fields.iter().map(Into::into).collect(),
+            columns: schema.fields().iter().map(|f| f.as_ref().into()).collect(),
         }
     }
 }
@@ -248,8 +247,8 @@ impl From<&Schema> for pb::Schema {
 impl From<&Field> for pb::Field {
     fn from(field: &Field) -> Self {
         pb::Field {
-            name: field.name.clone(),
-            arrow_type: data_type_to_proto(&field.data_type) as i32,
+            name: field.name().clone(),
+            arrow_type: data_type_to_proto(field.data_type()) as i32,
             nullable: true,
             children: vec![],
         }

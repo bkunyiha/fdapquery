@@ -132,9 +132,9 @@ impl SqlParser {
         };
 
         // optional WHERE
-        let mut selection = None;
+        let mut filter = None;
         if self.tokens.consume_keyword("WHERE") {
-            selection = self.parse_expr()?;
+            filter = self.parse_expr()?;
         }
 
         // optional GROUP BY
@@ -173,7 +173,7 @@ impl SqlParser {
 
         Ok(SqlSelect {
             projection,
-            selection,
+            filter,
             group_by,
             order_by,
             having,
@@ -512,7 +512,7 @@ mod tests {
             vec![id("id"), id("first_name"), id("last_name")]
         );
         assert_eq!(
-            select.selection,
+            select.filter,
             Some(bin(id("state"), "=", SqlExpr::String("CO".to_string())))
         );
         assert_eq!(select.table_name, "employee");
@@ -620,7 +620,7 @@ mod tests {
         let select = parse_select("SELECT id, first_name FROM employee WHERE state = 'CO' LIMIT 5");
         assert_eq!(select.projection, vec![id("id"), id("first_name")]);
         assert_eq!(
-            select.selection,
+            select.filter,
             Some(bin(id("state"), "=", SqlExpr::String("CO".to_string())))
         );
         assert_eq!(select.limit, Some(5));
@@ -655,7 +655,7 @@ mod tests {
         let select = parse_select("SELECT id FROM orders WHERE order_date < date '1998-12-01'");
         assert_eq!(select.projection, vec![id("id")]);
         assert_eq!(
-            select.selection,
+            select.filter,
             Some(bin(
                 id("order_date"),
                 "<",
@@ -684,7 +684,7 @@ mod tests {
             "-",
             SqlExpr::Interval("68 days".to_string()),
         );
-        assert_eq!(select.selection, Some(bin(id("order_date"), "<", rhs)));
+        assert_eq!(select.filter, Some(bin(id("order_date"), "<", rhs)));
         assert_eq!(select.table_name, "orders");
     }
 

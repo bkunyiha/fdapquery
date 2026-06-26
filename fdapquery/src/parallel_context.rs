@@ -1,12 +1,12 @@
 //! An execution context that runs aggregate queries in parallel. For a
-//! `HashAggregateExec` it: (1) collects the input batches and distributes them
+//! `AggregateExec` it: (1) collects the input batches and distributes them
 //! round-robin across workers, (2) runs a *partial* aggregate on each worker's
 //! slice in parallel, then (3) merges the partial results with a *final*
 //! aggregate. Non-aggregate plans fall through to ordinary sequential
 //! execution.
 //!
 //! ## Notes
-//! - **Parallelism uses rayon.** The work (`HashAggregateExec::execute`)
+//! - **Parallelism uses rayon.** The work (`AggregateExec::execute`)
 //!   is CPU-bound — it walks `ColumnVector`s and folds accumulators — so
 //!   the right tool is `rayon` (a work-stealing pool for CPU-bound
 //!   closures), not `tokio` (which targets I/O-bound concurrency and
@@ -19,13 +19,13 @@
 //!   `futures::executor::block_on(stream.try_collect())` — the same
 //!   bridge `ShuffleWriterExec::write_shuffle` uses.
 //! - **`Send + Sync` prerequisite.** rayon moves each bucket onto a
-//!   worker and shares `&HashAggregateExec` across threads, so
-//!   `ExecutionPlan`, `Expression`, `AggregateExpression`, and
+//!   worker and shares `&AggregateExec` across threads, so
+//!   `ExecutionPlan`, `PhysicalExpr`, `AggregateExpr`, and
 //!   `DataSource` carry `Send + Sync` bounds. The cloned `group_expr` /
 //!   `aggregate_expr` (`Arc` clones) and the schema all satisfy them.
 //! - **Concrete-type recovery.** `ExecutionPlan` exposes
 //!   `fn as_any(&self) -> &dyn Any` and we downcast with
-//!   `plan.as_any().downcast_ref::<HashAggregateExec>()` (mirroring
+//!   `plan.as_any().downcast_ref::<AggregateExec>()` (mirroring
 //!   DataFusion's `ExecutionPlan::as_any`).
 //! - **`InMemoryPlan`** is a leaf `ExecutionPlan` that replays a
 //!   pre-loaded `Vec<RecordBatch>` as a `SendableRecordBatchStream` (via
@@ -46,11 +46,11 @@ use rayon::prelude::*;
 use fdapquery_catalog::CsvDataSource;
 use fdapquery_catalog::TableProvider;
 use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
-use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
+use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
 use fdapquery_optimizer::Optimizer;
-use fdapquery_physical_plan::QueryPlanner;
+use fdapquery_physical_plan::DefaultPhysicalPlanner;
 use fdapquery_physical_plan::{
-    AggregateMode, ExecutionPlan, HashAggregateExec, PlanProperties, RecordBatchStreamAdapter,
+    AggregateExec, AggregateMode, ExecutionPlan, PlanProperties, RecordBatchStreamAdapter,
     RuntimeEnv, SendableRecordBatchStream, SessionConfig, TaskContext,
 };
 // `PrattParser` brings the `parse` method into scope for `SqlParser`.
@@ -125,9 +125,9 @@ impl ParallelContext {
     /// Get a `DataFrame` representing the specified CSV file.
     pub fn csv(&self, filename: &str) -> DataFrame {
         let source = CsvDataSource::new(filename, None, true, self.batch_size);
-        let scan = Scan::new(filename, Arc::new(source), vec![])
+        let scan = TableScan::new(filename, Arc::new(source), vec![])
             .expect("ParallelContext::csv: scan construction");
-        DataFrame::new(LogicalPlan::Scan(scan))
+        DataFrame::new(LogicalPlan::TableScan(scan))
     }
 
     /// Register a `DataFrame` with the context.
@@ -137,9 +137,9 @@ impl ParallelContext {
 
     /// Register a data source with the context.
     pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn TableProvider>) {
-        let scan = Scan::new(table_name, data_source, vec![])
+        let scan = TableScan::new(table_name, data_source, vec![])
             .expect("ParallelContext::register_data_source: scan construction");
-        self.register(table_name, DataFrame::new(LogicalPlan::Scan(scan)));
+        self.register(table_name, DataFrame::new(LogicalPlan::TableScan(scan)));
     }
 
     /// Register a CSV data source with the context.
@@ -160,7 +160,7 @@ impl ParallelContext {
     /// but construction is not.
     pub fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
         let optimized = Optimizer::new().optimize(plan)?;
-        let physical = QueryPlanner::new().create_physical_plan(&optimized)?;
+        let physical = DefaultPhysicalPlanner::new().create_physical_plan(&optimized)?;
         let ctx = Arc::new(TaskContext::new(
             "parallel",
             "localhost",
@@ -171,14 +171,14 @@ impl ParallelContext {
         self.execute_parallel(physical, ctx)
     }
 
-    /// Run a physical plan, special-casing `HashAggregateExec` for parallelism.
+    /// Run a physical plan, special-casing `AggregateExec` for parallelism.
     fn execute_parallel(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // Standard Rust idiom for "is this trait object a specific concrete type?"
-        if let Some(aggregate) = plan.as_any().downcast_ref::<HashAggregateExec>() {
+        if let Some(aggregate) = plan.as_any().downcast_ref::<AggregateExec>() {
             self.execute_parallel_aggregate(aggregate, ctx)
         } else {
             plan.execute(0, ctx)
@@ -188,7 +188,7 @@ impl ParallelContext {
     /// Parallel partial/final aggregation.
     fn execute_parallel_aggregate(
         &self,
-        aggregate: &HashAggregateExec,
+        aggregate: &AggregateExec,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // With a single worker there is nothing to fan out — run the
@@ -229,7 +229,7 @@ impl ParallelContext {
 
         if all_partial.is_empty() {
             // Emit an empty stream over the aggregate's output schema.
-            let arrow_schema = Arc::new(aggregate.schema.to_arrow());
+            let arrow_schema = Arc::new(aggregate.schema.clone());
             let empty = futures::stream::empty::<Result<RecordBatch>>();
             return Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, empty)));
         }
@@ -240,16 +240,16 @@ impl ParallelContext {
 }
 
 /// Run a `Partial` aggregate over one worker's batches. A free function (not
-/// a method) so the rayon closure captures only `&HashAggregateExec`, never
+/// a method) so the rayon closure captures only `&AggregateExec`, never
 /// `&self`. The rayon worker drives the async stream to completion via
 /// `futures::executor::block_on` since rayon threads don't have a tokio
 /// runtime.
 fn execute_partial_aggregate(
-    aggregate: &HashAggregateExec,
+    aggregate: &AggregateExec,
     batches: Vec<RecordBatch>,
     ctx: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
-    let partial = HashAggregateExec::new_with_mode(
+    let partial = AggregateExec::new_with_mode(
         Arc::new(InMemoryPlan::new(aggregate.input.schema(), batches)),
         aggregate.group_expr.clone(),
         aggregate.aggregate_expr.clone(),
@@ -263,11 +263,11 @@ fn execute_partial_aggregate(
 /// the *aggregate's* output schema (the partial results), not the original
 /// input schema.
 fn execute_final_aggregate(
-    aggregate: &HashAggregateExec,
+    aggregate: &AggregateExec,
     partial_batches: Vec<RecordBatch>,
     ctx: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
-    let final_aggregate = HashAggregateExec::new_with_mode(
+    let final_aggregate = AggregateExec::new_with_mode(
         Arc::new(InMemoryPlan::new(aggregate.schema.clone(), partial_batches)),
         aggregate.group_expr.clone(),
         aggregate.aggregate_expr.clone(),
@@ -343,7 +343,7 @@ impl ExecutionPlan for InMemoryPlan {
             )));
         }
         // arrow `RecordBatch` is `Arc`-backed, so cloning the vec is cheap.
-        let arrow_schema = Arc::new(self.schema.to_arrow());
+        let arrow_schema = Arc::new(self.schema.clone());
         let stream = futures::stream::iter(self.batches.clone().into_iter().map(Ok));
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             arrow_schema,
@@ -368,10 +368,10 @@ impl ExecutionPlan for InMemoryPlan {
 #[cfg(test)]
 mod tests {
     //! Compares the parallel context against the sequential
-    //! `ExecutionContext` on a GROUP BY / SUM query, and checks that a
+    //! `SessionContext` on a GROUP BY / SUM query, and checks that a
     //! single-worker parallel context still produces results.
     use super::*;
-    use crate::execution_context::ExecutionContext;
+    use crate::session_context::SessionContext;
     use fdapquery_datatypes::record_batch::{row_count, to_csv};
     use futures::TryStreamExt;
     use std::collections::HashSet;
@@ -402,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn parallel_aggregate_matches_sequential() {
-        let mut seq = ExecutionContext::new(HashMap::new());
+        let mut seq = SessionContext::new(HashMap::new());
         seq.register_csv("employee", EMPLOYEE_CSV);
         let seq_df = seq.sql(SQL).unwrap();
         let seq_rows = row_set(&collect_batches(seq.execute_data_frame(&seq_df)).await);

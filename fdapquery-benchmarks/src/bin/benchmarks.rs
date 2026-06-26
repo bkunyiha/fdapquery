@@ -32,10 +32,10 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
+use fdapquery::SessionContext;
 use fdapquery_catalog::InMemoryDataSource;
 use fdapquery_catalog::TableProvider;
-use fdapquery_datatypes::{RecordBatch, SchemaConverter};
-use fdapquery_execution::ExecutionContext;
+use fdapquery_datatypes::RecordBatch;
 use futures::TryStreamExt;
 use rayon::prelude::*;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -118,11 +118,13 @@ async fn sql_aggregate(
     // Second stage: register the partials as an InMemoryDataSource and run
     // the final aggregate over them.
     // -----------------------------------------------------------------------
-    let final_schema = SchemaConverter::from_arrow(&first.schema());
+    // `RecordBatch::schema()` returns `Arc<Schema>`; `Schema` IS `arrow_schema::Schema`,
+    // so just clone the inner value.
+    let final_schema = first.schema().as_ref().clone();
     let in_memory: Arc<dyn TableProvider> =
         Arc::new(InMemoryDataSource::new(final_schema, results));
 
-    let mut ctx = ExecutionContext::new(settings);
+    let mut ctx = SessionContext::new(settings);
     ctx.register_data_source("tripdata", in_memory);
 
     let df = ctx.sql(sql_final).expect("benchmarks: final sql plan");
@@ -157,7 +159,7 @@ async fn sql_aggregate(
 /// `ParallelContext::execute_parallel_aggregate` and
 /// `ShuffleWriterExec::write_shuffle`.
 fn execute_query(path: &str, sql: &str, settings: &HashMap<String, String>) -> Vec<RecordBatch> {
-    let mut ctx = ExecutionContext::new(settings.clone());
+    let mut ctx = SessionContext::new(settings.clone());
     ctx.register_csv("tripdata", path);
     let df = ctx.sql(sql).expect("benchmarks: per-file sql plan");
     let stream = ctx

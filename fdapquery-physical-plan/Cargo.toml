@@ -15,8 +15,6 @@ rust-version.workspace = true
 # types at different versions and a confusing "expected DataType, found DataType"
 # error. Matching what logical-plan / sql already do.
 arrow-schema  = { workspace = true }
-# `arrow-ipc` powers `ShuffleManager`'s local Arrow IPC file writer/reader.
-arrow-ipc     = { workspace = true }
 # `futures` provides the `Stream` trait — the runtime currency for the new
 # `ExecutionPlan::execute` shape returning `SendableRecordBatchStream`.
 futures          = { workspace = true }
@@ -31,15 +29,22 @@ async-stream     = { workspace = true }
 # physical `LiteralDateExpression { days_since_epoch: i32 }`. Folded in
 # from the dissolved `fdapquery-query-planner` crate in Session 12.
 chrono           = { workspace = true }
-fdapquery-datatypes     = { path = "../fdapquery-datatypes" }
-fdapquery-catalog    = { path = "../fdapquery-catalog" }
-fdapquery-expr  = { path = "../fdapquery-expr" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }
+# Session 15c — `TaskContext`/`RuntimeEnv`/`SessionConfig`/`ShuffleManager`/
+# `ShuffleLocation` moved into `fdapquery-execution`. The operator trait
+# `ExecutionPlan::execute(_, ctx: Arc<TaskContext>)` references this dep;
+# `ShuffleReaderExec` / `ShuffleWriterExec` use `ShuffleManager` through it.
+# Matches DataFusion's `datafusion-physical-plan` → `datafusion-execution`
+# direction.
+fdapquery-execution = { version = "0.1.0", path = "../fdapquery-execution" }
+fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
 # Phase C / Session 13a: the `Expression` / `AggregateExpression` / `Accumulator`
 # traits and every concrete expression type were split out into
 # `fdapquery-physical-expr`. Operators here consume them via this path-dep.
 # `pub use fdapquery_physical_expr::*` re-exports in `src/lib.rs` keep external
 # consumers' `use fdapquery_physical_plan::Expression;` working.
-fdapquery-physical-expr = { path = "../fdapquery-physical-expr" }
+fdapquery-physical-expr = { version = "0.1.0", path = "../fdapquery-physical-expr" }
 
 [dev-dependencies]
 # Tests build RecordBatches directly from typed arrow arrays (Int32Array, …)
@@ -55,4 +60,4 @@ tokio         = { workspace = true }
 # optimizer crate. Folded in from the dissolved `fdapquery-query-planner`'s
 # dev-dependencies in Session 12. Optimizer only depends on
 # `fdapquery-expr` (no path to `fdapquery-physical-plan`), so no cycle.
-fdapquery-optimizer = { path = "../fdapquery-optimizer" }
+fdapquery-optimizer = { version = "0.1.0", path = "../fdapquery-optimizer" }

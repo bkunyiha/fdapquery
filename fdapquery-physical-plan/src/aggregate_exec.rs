@@ -21,17 +21,17 @@
 //! in a scalar output column, so a `Partial` AVG output panics until the
 //! distributed module supplies the intermediate-state schema.
 
-use crate::AggregateExpression;
+use crate::AggregateExpr;
 use crate::AggregateMode;
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
-use crate::task_context::TaskContext;
-use crate::{Accumulator, AccumulatorValue, Expression};
+use crate::{Accumulator, AccumulatorValue, PhysicalExpr};
 use async_stream::try_stream;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, Result, ScalarValue, Schema, record_batch,
 };
+use fdapquery_execution::TaskContext;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::fmt;
@@ -39,21 +39,21 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Group-by hash aggregation.
-pub struct HashAggregateExec {
+pub struct AggregateExec {
     pub input: Arc<dyn ExecutionPlan>,
-    pub group_expr: Vec<Arc<dyn Expression>>,
-    pub aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
+    pub group_expr: Vec<Arc<dyn PhysicalExpr>>,
+    pub aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
     pub schema: Schema,
     pub mode: AggregateMode,
     properties: PlanProperties,
 }
 
-impl HashAggregateExec {
+impl AggregateExec {
     /// Single-node (`Complete`) aggregation — the common case.
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        group_expr: Vec<Arc<dyn Expression>>,
-        aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
+        group_expr: Vec<Arc<dyn PhysicalExpr>>,
+        aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
         schema: Schema,
     ) -> Self {
         Self::new_with_mode(
@@ -68,8 +68,8 @@ impl HashAggregateExec {
     /// Construct with an explicit [`AggregateMode`] (for distributed execution).
     pub fn new_with_mode(
         input: Arc<dyn ExecutionPlan>,
-        group_expr: Vec<Arc<dyn Expression>>,
-        aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
+        group_expr: Vec<Arc<dyn PhysicalExpr>>,
+        aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
         schema: Schema,
         mode: AggregateMode,
     ) -> Self {
@@ -85,9 +85,9 @@ impl HashAggregateExec {
     }
 }
 
-impl ExecutionPlan for HashAggregateExec {
+impl ExecutionPlan for AggregateExec {
     fn name(&self) -> &str {
-        "HashAggregateExec"
+        "AggregateExec"
     }
 
     fn schema(&self) -> Schema {
@@ -117,11 +117,11 @@ impl ExecutionPlan for HashAggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(FdapQueryError::Internal(format!(
-                "HashAggregateExec::with_new_children expected 1 child, got {}",
+                "AggregateExec::with_new_children expected 1 child, got {}",
                 children.len()
             )));
         }
-        Ok(Arc::new(HashAggregateExec::new_with_mode(
+        Ok(Arc::new(AggregateExec::new_with_mode(
             children.into_iter().next().unwrap(),
             self.group_expr.clone(),
             self.aggregate_expr.clone(),
@@ -137,7 +137,7 @@ impl ExecutionPlan for HashAggregateExec {
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
             return Err(FdapQueryError::Internal(format!(
-                "HashAggregateExec has 1 output partition; partition {partition} is out of range"
+                "AggregateExec has 1 output partition; partition {partition} is out of range"
             )));
         }
         // Capture everything the generator body needs by clone — the
@@ -149,7 +149,7 @@ impl ExecutionPlan for HashAggregateExec {
         let n_group = self.group_expr.len();
 
         let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
-        let arrow_schema = Arc::new(self.schema.to_arrow());
+        let arrow_schema = Arc::new(self.schema.clone());
 
         // The aggregator is blocking: it must see every input batch before
         // it can emit its single output batch. The `try_stream!` macro lets
@@ -198,9 +198,9 @@ impl ExecutionPlan for HashAggregateExec {
 
             // Build the output batch: one row per group key.
             let mut builders: Vec<ArrowVectorBuilder> = schema
-                .fields
+                .fields()
                 .iter()
-                .map(|f| ArrowVectorBuilder::new(&f.data_type, map.len()))
+                .map(|f| ArrowVectorBuilder::new(f.data_type(), map.len()))
                 .collect();
 
             for (key, accumulators) in &map {
@@ -216,7 +216,7 @@ impl ExecutionPlan for HashAggregateExec {
                         AggregateMode::Partial => match acc.intermediate_value()? {
                             AccumulatorValue::Scalar(s) => Ok(s),
                             AccumulatorValue::AvgState { .. } => Err(FdapQueryError::NotImplemented(
-                                "HashAggregateExec PARTIAL output of AVG intermediate state \
+                                "AggregateExec PARTIAL output of AVG intermediate state \
                                  requires the distributed module"
                                     .into(),
                             )),
@@ -242,13 +242,13 @@ impl ExecutionPlan for HashAggregateExec {
     }
 }
 
-impl fmt::Display for HashAggregateExec {
+impl fmt::Display for AggregateExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let group: Vec<String> = self.group_expr.iter().map(|e| e.to_string()).collect();
         let aggr: Vec<String> = self.aggregate_expr.iter().map(|e| e.to_string()).collect();
         write!(
             f,
-            "HashAggregateExec: groupExpr=[{}], aggrExpr=[{}], mode={:?}",
+            "AggregateExec: groupExpr=[{}], aggrExpr=[{}], mode={:?}",
             group.join(", "),
             aggr.join(", "),
             self.mode
@@ -324,23 +324,22 @@ mod tests {
     //! integration test builds the physical plan by hand (the `query-planner`
     //! that normally assembles it is covered in module 7).
     use super::*;
-    use crate::ColumnExpression;
-    use crate::CountExpression;
-    use crate::MaxExpression;
-    use crate::MinExpression;
-    use crate::SumExpression;
+    use crate::Column;
+    use crate::CountExpr;
+    use crate::MaxExpr;
+    use crate::MinExpr;
+    use crate::SumExpr;
     use crate::scan_exec::ScanExec;
     use fdapquery_catalog::CsvDataSource;
     use fdapquery_catalog::TableProvider;
     use fdapquery_datatypes::Field;
-    use fdapquery_datatypes::arrow_types::{INT32_TYPE, INT64_TYPE, STRING_TYPE};
     use futures::TryStreamExt;
 
     // ---- Accumulators driven directly. ----
 
     #[test]
     fn min_accumulator() {
-        let mut a = MinExpression::new(Arc::new(ColumnExpression::new(0))).create_accumulator();
+        let mut a = MinExpr::new(Arc::new(Column::new(0))).create_accumulator();
         for v in [10, 14, 4] {
             a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
@@ -349,7 +348,7 @@ mod tests {
 
     #[test]
     fn max_accumulator() {
-        let mut a = MaxExpression::new(Arc::new(ColumnExpression::new(0))).create_accumulator();
+        let mut a = MaxExpr::new(Arc::new(Column::new(0))).create_accumulator();
         for v in [10, 14, 4] {
             a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
@@ -358,7 +357,7 @@ mod tests {
 
     #[test]
     fn sum_accumulator() {
-        let mut a = SumExpression::new(Arc::new(ColumnExpression::new(0))).create_accumulator();
+        let mut a = SumExpr::new(Arc::new(Column::new(0))).create_accumulator();
         for v in [10, 14, 4] {
             a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
@@ -375,24 +374,29 @@ mod tests {
             true,
             1024,
         ));
-        let all: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
+        let all: Vec<String> = ds
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
         let scan = ScanExec::new(Arc::clone(&ds), all).unwrap();
 
         // Output: state, MIN(salary), MAX(salary), COUNT(salary).
         let out_schema = Schema::new(vec![
-            Field::new("state", STRING_TYPE),
-            Field::new("min_salary", INT64_TYPE),
-            Field::new("max_salary", INT64_TYPE),
-            Field::new("count_salary", INT32_TYPE),
+            Field::new("state", arrow_schema::DataType::Utf8, true),
+            Field::new("min_salary", arrow_schema::DataType::Int64, true),
+            Field::new("max_salary", arrow_schema::DataType::Int64, true),
+            Field::new("count_salary", arrow_schema::DataType::Int32, true),
         ]);
         // employee.csv columns: 0=id 1=first_name 2=last_name 3=state 4=job_title 5=salary
-        let agg = HashAggregateExec::new(
+        let agg = AggregateExec::new(
             Arc::new(scan),
-            vec![Arc::new(ColumnExpression::new(3))],
+            vec![Arc::new(Column::new(3))],
             vec![
-                Arc::new(MinExpression::new(Arc::new(ColumnExpression::new(5)))),
-                Arc::new(MaxExpression::new(Arc::new(ColumnExpression::new(5)))),
-                Arc::new(CountExpression::new(Arc::new(ColumnExpression::new(5)))),
+                Arc::new(MinExpr::new(Arc::new(Column::new(5)))),
+                Arc::new(MaxExpr::new(Arc::new(Column::new(5)))),
+                Arc::new(CountExpr::new(Arc::new(Column::new(5)))),
             ],
             out_schema,
         );

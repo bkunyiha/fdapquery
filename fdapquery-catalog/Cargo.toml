@@ -16,7 +16,12 @@ parquet      = { workspace = true }
 # `Pin<Box<dyn Stream<Item = Result<RecordBatch>>>>`, modernizing the
 # pre-13b sync `Iterator` return shape.
 futures      = { workspace = true }
-fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+# Session 15d-1 #92 — `SendableRecordBatchStream` moved to
+# `fdapquery-execution`; catalog imports it from there so
+# `TableProvider::scan` uses the canonical type rather than a local
+# `BoxRecordBatchStream` alias.
+fdapquery-execution = { version = "0.1.0", path = "../fdapquery-execution" }
 
 [dev-dependencies]
 # Tokio runtime for the per-provider `#[tokio::test]` test bodies that

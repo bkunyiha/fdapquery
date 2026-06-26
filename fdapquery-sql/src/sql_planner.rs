@@ -2,8 +2,8 @@
 //! resolving aggregates, projections, filters, GROUP BY, HAVING, and LIMIT.
 //!
 //! ## Notes
-//! - Aggregate functions are folded into `LogicalExpr`, so the projection list
-//!   is a `Vec<LogicalExpr>` that may contain aggregate variants directly.
+//! - Aggregate functions are folded into `Expr`, so the projection list
+//!   is a `Vec<Expr>` that may contain aggregate variants directly.
 //! - Insertion-ordered `Vec<String>` helpers preserve deterministic ordering
 //!   without an external `IndexSet` dependency.
 //! - `parseDataType("double")` maps to arrow-rs `DataType::Float64`, so a cast
@@ -13,9 +13,8 @@
 
 use crate::expressions::{SqlExpr, SqlSelect};
 use arrow_schema::DataType;
-use fdapquery_datatypes::arrow_types::DOUBLE_TYPE;
 use fdapquery_datatypes::{FdapQueryError, Result};
-use fdapquery_expr::{AggregateExpr, DataFrame, LogicalExpr, avg, cast, count, max, min, sum};
+use fdapquery_expr::{AggregateExpr, DataFrame, Expr, avg, cast, count, max, min, sum};
 use std::collections::HashMap;
 
 /// Creates a logical plan from a parsed SQL statement.
@@ -39,7 +38,7 @@ impl SqlPlanner {
         })?;
 
         // translate projection sql expressions into logical expressions
-        let projection_expr: Vec<LogicalExpr> = select
+        let projection_expr: Vec<Expr> = select
             .projection
             .iter()
             .map(|e| self.create_logical_expr(e))
@@ -73,19 +72,19 @@ impl SqlPlanner {
 
         // Aggregate query: split the projection into group columns (referenced by
         // index) and the aggregate expressions.
-        let mut projection: Vec<LogicalExpr> = Vec::new();
+        let mut projection: Vec<Expr> = Vec::new();
         let mut aggr_expr: Vec<AggregateExpr> = Vec::new();
         let num_group_cols = select.group_by.len();
         let mut group_count = 0usize;
 
         for expr in &projection_expr {
-            if let LogicalExpr::AggregateExpr(agg) = expr {
-                projection.push(LogicalExpr::ColumnIndex(num_group_cols + aggr_expr.len()));
+            if let Expr::AggregateExpr(agg) = expr {
+                projection.push(Expr::ColumnIndex(num_group_cols + aggr_expr.len()));
                 aggr_expr.push((**agg).clone());
-            } else if let LogicalExpr::Alias { expr: inner, alias } = expr {
-                if let LogicalExpr::AggregateExpr(agg) = inner.as_ref() {
-                    projection.push(LogicalExpr::Alias {
-                        expr: Box::new(LogicalExpr::ColumnIndex(num_group_cols + aggr_expr.len())),
+            } else if let Expr::Alias { expr: inner, alias } = expr {
+                if let Expr::AggregateExpr(agg) = inner.as_ref() {
+                    projection.push(Expr::Alias {
+                        expr: Box::new(Expr::ColumnIndex(num_group_cols + aggr_expr.len())),
                         alias: alias.clone(),
                     });
                     aggr_expr.push((**agg).clone());
@@ -96,7 +95,7 @@ impl SqlPlanner {
                     )));
                 }
             } else {
-                projection.push(LogicalExpr::ColumnIndex(group_count));
+                projection.push(Expr::ColumnIndex(group_count));
                 group_count += 1;
             }
         }
@@ -122,13 +121,13 @@ impl SqlPlanner {
         &self,
         select: &SqlSelect,
         df: DataFrame,
-        projection_expr: Vec<LogicalExpr>,
+        projection_expr: Vec<Expr>,
         column_names_in_selection: &[String],
         column_names_in_projection: &[String],
     ) -> Result<DataFrame> {
         let mut plan = df;
 
-        let selection = match &select.selection {
+        let filter = match &select.filter {
             None => {
                 plan = plan.project(projection_expr);
                 if let Some(limit) = select.limit {
@@ -141,23 +140,23 @@ impl SqlPlanner {
 
         let missing = ordered_difference(column_names_in_selection, column_names_in_projection);
 
-        // If the selection only references projection outputs we can filter the
+        // If the filter only references projection outputs we can filter the
         // projected DataFrame directly. Otherwise we project the extra columns
-        // the selection needs, filter, then drop them again.
+        // the filter needs, filter, then drop them again.
         if missing.is_empty() {
             plan = plan.project(projection_expr);
-            plan = plan.filter(self.create_logical_expr(selection)?);
+            plan = plan.filter(self.create_logical_expr(filter)?);
         } else {
             let n = projection_expr.len();
             let mut proj = projection_expr;
-            proj.extend(missing.iter().map(|c| LogicalExpr::Column(c.clone())));
+            proj.extend(missing.iter().map(|c| Expr::Column(c.clone())));
             plan = plan.project(proj);
-            plan = plan.filter(self.create_logical_expr(selection)?);
+            plan = plan.filter(self.create_logical_expr(filter)?);
 
-            // drop the columns that were added for the selection
+            // drop the columns that were added for the filter
             let schema = plan.schema()?;
-            let expr: Vec<LogicalExpr> = (0..n)
-                .map(|i| LogicalExpr::Column(schema.fields[i].name.clone()))
+            let expr: Vec<Expr> = (0..n)
+                .map(|i| Expr::Column(schema.fields()[i].name().clone()))
                 .collect();
             plan = plan.project(expr);
         }
@@ -170,14 +169,14 @@ impl SqlPlanner {
 
     fn plan_aggregate_query(
         &self,
-        projection_expr: &[LogicalExpr],
+        projection_expr: &[Expr],
         select: &SqlSelect,
         column_names_in_selection: &[String],
         df: DataFrame,
         aggregate_expr: Vec<AggregateExpr>,
     ) -> Result<DataFrame> {
         let mut plan = df;
-        let projection_without_aggregates: Vec<LogicalExpr> = projection_expr
+        let projection_without_aggregates: Vec<Expr> = projection_expr
             .iter()
             .filter(|e| !is_aggregate_expr(e))
             .cloned()
@@ -190,11 +189,11 @@ impl SqlPlanner {
             visit_aggregate(agg, &mut column_names_in_aggregates);
         }
 
-        if let Some(selection) = &select.selection {
+        if let Some(filter) = &select.filter {
             let column_names_in_projection_without_aggregates =
                 get_referenced_columns(&projection_without_aggregates);
 
-            // columns needed by the selection AND by the aggregate expressions
+            // columns needed by the filter AND by the aggregate expressions
             let mut all_required_columns = column_names_in_projection_without_aggregates.clone();
             ordered_extend(&mut all_required_columns, column_names_in_selection);
             ordered_extend(&mut all_required_columns, &column_names_in_aggregates);
@@ -206,16 +205,16 @@ impl SqlPlanner {
 
             if missing.is_empty() {
                 plan = plan.project(projection_without_aggregates.clone());
-                plan = plan.filter(self.create_logical_expr(selection)?);
+                plan = plan.filter(self.create_logical_expr(filter)?);
             } else {
                 let mut proj = projection_without_aggregates.clone();
-                proj.extend(missing.iter().map(|c| LogicalExpr::Column(c.clone())));
+                proj.extend(missing.iter().map(|c| Expr::Column(c.clone())));
                 plan = plan.project(proj);
-                plan = plan.filter(self.create_logical_expr(selection)?);
+                plan = plan.filter(self.create_logical_expr(filter)?);
             }
         }
 
-        let group_by_expr: Vec<LogicalExpr> = select
+        let group_by_expr: Vec<Expr> = select
             .group_by
             .iter()
             .map(|e| self.create_logical_expr(e))
@@ -229,30 +228,30 @@ impl SqlPlanner {
         table: &DataFrame,
     ) -> Result<Vec<String>> {
         let mut accumulator = Vec::new();
-        if let Some(selection) = &select.selection {
-            let filter_expr = self.create_logical_expr(selection)?;
+        if let Some(filter) = &select.filter {
+            let filter_expr = self.create_logical_expr(filter)?;
             visit(&filter_expr, &mut accumulator);
             let valid: Vec<String> = table
                 .schema()?
-                .fields
+                .fields()
                 .iter()
-                .map(|f| f.name.clone())
+                .map(|f| f.name().clone())
                 .collect();
             accumulator.retain(|name| valid.contains(name));
         }
         Ok(accumulator)
     }
 
-    fn create_logical_expr(&self, expr: &SqlExpr) -> Result<LogicalExpr> {
+    fn create_logical_expr(&self, expr: &SqlExpr) -> Result<Expr> {
         let result = match expr {
-            SqlExpr::Identifier(id) => LogicalExpr::Column(id.clone()),
-            SqlExpr::String(v) => LogicalExpr::LiteralString(v.clone()),
-            SqlExpr::Long(v) => LogicalExpr::LiteralLong(*v),
-            SqlExpr::Double(v) => LogicalExpr::LiteralDouble(*v),
+            SqlExpr::Identifier(id) => Expr::Column(id.clone()),
+            SqlExpr::String(v) => Expr::LiteralString(v.clone()),
+            SqlExpr::Long(v) => Expr::LiteralLong(*v),
+            SqlExpr::Double(v) => Expr::LiteralDouble(*v),
             // Parse the literal with `chrono::NaiveDate::parse_from_str` using
             // ISO-8601 format. Invalid input surfaces as `Plan(_)`.
             SqlExpr::Date(v) => {
-                LogicalExpr::LiteralDate(chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").map_err(
+                Expr::LiteralDate(chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").map_err(
                     |e| FdapQueryError::Plan(format!("invalid date literal '{v}': {e}")),
                 )?)
             }
@@ -273,10 +272,10 @@ impl SqlPlanner {
                     "OR" => l.or(r),
                     // math operators
                     "+" => {
-                        if matches!(l, LogicalExpr::LiteralDate(_))
-                            && matches!(r, LogicalExpr::LiteralIntervalDays(_))
+                        if matches!(l, Expr::LiteralDate(_))
+                            && matches!(r, Expr::LiteralIntervalDays(_))
                         {
-                            LogicalExpr::DateAddInterval {
+                            Expr::DateAddInterval {
                                 date: Box::new(l),
                                 interval: Box::new(r),
                             }
@@ -285,10 +284,10 @@ impl SqlPlanner {
                         }
                     }
                     "-" => {
-                        if matches!(l, LogicalExpr::LiteralDate(_))
-                            && matches!(r, LogicalExpr::LiteralIntervalDays(_))
+                        if matches!(l, Expr::LiteralDate(_))
+                            && matches!(r, Expr::LiteralIntervalDays(_))
                         {
-                            LogicalExpr::DateSubtractInterval {
+                            Expr::DateSubtractInterval {
                                 date: Box::new(l),
                                 interval: Box::new(r),
                             }
@@ -330,8 +329,8 @@ impl SqlPlanner {
                                 )));
                             }
                         };
-                        // bridge the AggregateExpr into LogicalExpr
-                        LogicalExpr::from(agg)
+                        // bridge the AggregateExpr into Expr
+                        Expr::from(agg)
                     }
                     "COUNT" => {
                         if args.is_empty() {
@@ -343,10 +342,10 @@ impl SqlPlanner {
                         let arg = &args[0];
                         if let SqlExpr::Identifier(s) = arg {
                             if s == "*" {
-                                return Ok(LogicalExpr::from(count(LogicalExpr::LiteralLong(1))));
+                                return Ok(Expr::from(count(Expr::LiteralLong(1))));
                             }
                         }
-                        LogicalExpr::from(count(self.create_logical_expr(arg)?))
+                        Expr::from(count(self.create_logical_expr(arg)?))
                     }
                     _ => {
                         return Err(FdapQueryError::Plan(format!(
@@ -366,33 +365,33 @@ impl SqlPlanner {
 
     fn parse_data_type(&self, id: &str) -> Result<DataType> {
         match id {
-            "double" => Ok(DOUBLE_TYPE),
+            "double" => Ok(arrow_schema::DataType::Float64),
             other => Err(FdapQueryError::Plan(format!("invalid data type: {other}"))),
         }
     }
 
-    fn parse_interval(&self, value: &str) -> Result<LogicalExpr> {
+    fn parse_interval(&self, value: &str) -> Result<Expr> {
         let days = parse_interval_days(value.trim()).ok_or_else(|| {
             FdapQueryError::Plan(format!(
                 "invalid interval format: '{value}' (expected 'N days')"
             ))
         })?;
-        Ok(LogicalExpr::LiteralIntervalDays(days))
+        Ok(Expr::LiteralIntervalDays(days))
     }
 }
 
 /// Whether `expr` is an aggregate, or an alias wrapping one.
-fn is_aggregate_expr(expr: &LogicalExpr) -> bool {
+fn is_aggregate_expr(expr: &Expr) -> bool {
     match expr {
-        LogicalExpr::AggregateExpr(_) => true,
-        LogicalExpr::Alias { expr, .. } => matches!(expr.as_ref(), LogicalExpr::AggregateExpr(_)),
+        Expr::AggregateExpr(_) => true,
+        Expr::Alias { expr, .. } => matches!(expr.as_ref(), Expr::AggregateExpr(_)),
         _ => false,
     }
 }
 
 /// Collect the column names referenced by a list of expressions, in first-seen
 /// order.
-fn get_referenced_columns(exprs: &[LogicalExpr]) -> Vec<String> {
+fn get_referenced_columns(exprs: &[Expr]) -> Vec<String> {
     let mut accumulator = Vec::new();
     for e in exprs {
         visit(e, &mut accumulator);
@@ -401,31 +400,31 @@ fn get_referenced_columns(exprs: &[LogicalExpr]) -> Vec<String> {
 }
 
 /// Recursively collect column names into `acc` (insertion-ordered, deduped).
-fn visit(expr: &LogicalExpr, acc: &mut Vec<String>) {
+fn visit(expr: &Expr, acc: &mut Vec<String>) {
     match expr {
-        LogicalExpr::Column(name) if !acc.contains(name) => {
+        Expr::Column(name) if !acc.contains(name) => {
             acc.push(name.clone());
         }
-        LogicalExpr::Column(_) => {}
-        LogicalExpr::Alias { expr, .. } => visit(expr, acc),
+        Expr::Column(_) => {}
+        Expr::Alias { expr, .. } => visit(expr, acc),
         // Every two-operand expression.
-        LogicalExpr::Eq { l, r }
-        | LogicalExpr::Neq { l, r }
-        | LogicalExpr::Gt { l, r }
-        | LogicalExpr::GtEq { l, r }
-        | LogicalExpr::Lt { l, r }
-        | LogicalExpr::LtEq { l, r }
-        | LogicalExpr::And { l, r }
-        | LogicalExpr::Or { l, r }
-        | LogicalExpr::Add { l, r }
-        | LogicalExpr::Subtract { l, r }
-        | LogicalExpr::Multiply { l, r }
-        | LogicalExpr::Divide { l, r }
-        | LogicalExpr::Modulus { l, r } => {
+        Expr::Eq { l, r }
+        | Expr::Neq { l, r }
+        | Expr::Gt { l, r }
+        | Expr::GtEq { l, r }
+        | Expr::Lt { l, r }
+        | Expr::LtEq { l, r }
+        | Expr::And { l, r }
+        | Expr::Or { l, r }
+        | Expr::Add { l, r }
+        | Expr::Subtract { l, r }
+        | Expr::Multiply { l, r }
+        | Expr::Divide { l, r }
+        | Expr::Modulus { l, r } => {
             visit(l, acc);
             visit(r, acc);
         }
-        LogicalExpr::AggregateExpr(agg) => visit_aggregate(agg, acc),
+        Expr::AggregateExpr(agg) => visit_aggregate(agg, acc),
         _ => {}
     }
 }
@@ -485,7 +484,7 @@ mod tests {
     use crate::sql_parser::SqlParser;
     use crate::sql_tokenizer::SqlTokenizer;
     use fdapquery_catalog::CsvDataSource;
-    use fdapquery_expr::{LogicalPlan, Scan, format};
+    use fdapquery_expr::{LogicalPlan, TableScan, format};
     use std::sync::Arc;
 
     /// Tokenize → parse → plan, returning the formatted logical plan. Uses
@@ -508,7 +507,7 @@ mod tests {
         };
 
         let path = "../testdata/employee.csv";
-        let scan = Scan::new(
+        let scan = TableScan::new(
             "",
             Arc::new(CsvDataSource::new(path, None, true, 1024)),
             vec![],
@@ -517,7 +516,7 @@ mod tests {
         let mut tables: HashMap<String, DataFrame> = HashMap::new();
         tables.insert(
             "employee".to_string(),
-            DataFrame::new(LogicalPlan::Scan(scan)),
+            DataFrame::new(LogicalPlan::TableScan(scan)),
         );
 
         SqlPlanner::new().create_data_frame(&select, &tables)
@@ -541,7 +540,7 @@ mod tests {
     #[test]
     fn simple_select() {
         let plan = plan("SELECT state FROM employee");
-        assert_eq!(plan, "Projection: #state\n\tScan: ; projection=None\n");
+        assert_eq!(plan, "Projection: #state\n\tTableScan: ; projection=None\n");
     }
 
     #[test]
@@ -549,9 +548,9 @@ mod tests {
         let plan = plan("SELECT state FROM employee WHERE state = 'CA'");
         assert_eq!(
             plan,
-            "Selection: #state = 'CA'\n\
+            "Filter: #state = 'CA'\n\
              \tProjection: #state\n\
-             \t\tScan: ; projection=None\n"
+             \t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -561,9 +560,9 @@ mod tests {
         assert_eq!(
             plan,
             "Projection: #last_name\n\
-             \tSelection: #state = 'CA'\n\
+             \tFilter: #state = 'CA'\n\
              \t\tProjection: #last_name, #state\n\
-             \t\t\tScan: ; projection=None\n"
+             \t\t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -572,9 +571,9 @@ mod tests {
         let plan = plan("SELECT last_name AS foo FROM employee WHERE foo = 'Einstein'");
         assert_eq!(
             plan,
-            "Selection: #foo = 'Einstein'\n\
+            "Filter: #foo = 'Einstein'\n\
              \tProjection: #last_name as foo\n\
-             \t\tScan: ; projection=None\n"
+             \t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -585,9 +584,9 @@ mod tests {
         assert_eq!(
             plan,
             "Projection: #foo\n\
-             \tSelection: #foo = 'Einstein' AND #state = 'CA'\n\
+             \tFilter: #foo = 'Einstein' AND #state = 'CA'\n\
              \t\tProjection: #last_name as foo, #state\n\
-             \t\t\tScan: ; projection=None\n"
+             \t\t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -598,7 +597,7 @@ mod tests {
             plan,
             "Projection: #0, #1\n\
              \tAggregate: groupExpr=[#state], aggregateExpr=[MAX(#salary)]\n\
-             \t\tScan: ; projection=None\n"
+             \t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -608,10 +607,10 @@ mod tests {
             plan("SELECT state, MAX(salary) FROM employee GROUP BY state HAVING MAX(salary) > 10");
         assert_eq!(
             plan,
-            "Selection: MAX(#salary) > 10\n\
+            "Filter: MAX(#salary) > 10\n\
              \tProjection: #0, #1\n\
              \t\tAggregate: groupExpr=[#state], aggregateExpr=[MAX(#salary)]\n\
-             \t\t\tScan: ; projection=None\n"
+             \t\t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -622,7 +621,7 @@ mod tests {
             plan,
             "Projection: #1, #0\n\
              \tAggregate: groupExpr=[#state], aggregateExpr=[MAX(#salary)]\n\
-             \t\tScan: ; projection=None\n"
+             \t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -634,9 +633,9 @@ mod tests {
             plan,
             "Projection: #0, #1\n\
              \tAggregate: groupExpr=[#state], aggregateExpr=[MAX(#salary)]\n\
-             \t\tSelection: #salary > 50000\n\
+             \t\tFilter: #salary > 50000\n\
              \t\t\tProjection: #state, #salary\n\
-             \t\t\t\tScan: ; projection=None\n"
+             \t\t\t\tTableScan: ; projection=None\n"
         );
     }
 
@@ -649,7 +648,7 @@ mod tests {
             plan,
             "Projection: #0, #1\n\
              \tAggregate: groupExpr=[#state], aggregateExpr=[MAX(CAST(#salary AS Float64))]\n\
-             \t\tScan: ; projection=None\n"
+             \t\tTableScan: ; projection=None\n"
         );
     }
 

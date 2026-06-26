@@ -2,7 +2,7 @@
 //! `Partitioning` exactly — three variants because each carries
 //! different "how do you assign rows to partitions" semantics.
 
-use crate::Expression;
+use crate::PhysicalExpr;
 use std::sync::Arc;
 
 /// Output partitioning of an `ExecutionPlan`.
@@ -20,7 +20,7 @@ use std::sync::Arc;
 ///
 /// Same shape as `datafusion-physical-expr::Partitioning`.
 ///
-/// No `Debug` derive: `dyn Expression` is not `Debug`-bound (operators
+/// No `Debug` derive: `dyn PhysicalExpr` is not `Debug`-bound (operators
 /// implement `Display` for human-readable rendering instead). The
 /// `Display` impl below renders the variant in a tree-printer-friendly
 /// form.
@@ -29,7 +29,7 @@ pub enum Partitioning {
     /// Each output partition receives input batches round-robin.
     RoundRobinBatch(usize),
     /// Each row goes to `hash(keys) mod partition_count`.
-    Hash(Vec<Arc<dyn Expression>>, usize),
+    Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
     /// Partitioned somehow, the engine doesn't know the shape.
     UnknownPartitioning(usize),
 }
@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn partition_count_hash() {
-        let keys: Vec<Arc<dyn Expression>> = vec![];
+        let keys: Vec<Arc<dyn PhysicalExpr>> = vec![];
         assert_eq!(Partitioning::Hash(keys, 3).partition_count(), 3);
     }
 }

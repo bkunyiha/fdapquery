@@ -7,7 +7,7 @@
 //! | Method                       | State |
 //! |------------------------------|-------|
 //! | `do_action("execute_task")`  | **real** — drives intermediate-stage task execution; downcasts to `ShuffleWriterExec`, calls `write_shuffle(Arc<TaskContext>)`, returns `pb::TaskResult` with shuffle locations |
-//! | `do_get`                     | **real** — streams `RecordBatch`es directly off the async `SendableRecordBatchStream` returned by `task.plan.execute(0, ctx)` (distributed final-stage path) or `ExecutionContext::execute(&logical_plan)` (interactive path). No `spawn_blocking` bridge — operators are async-native after Phase B. The async stream is piped into `FlightDataEncoderBuilder` and mapped to `tonic::Status` for the response item type. |
+//! | `do_get`                     | **real** — streams `RecordBatch`es directly off the async `SendableRecordBatchStream` returned by `task.plan.execute(0, ctx)` (distributed final-stage path) or `SessionContext::execute(&logical_plan)` (interactive path). No `spawn_blocking` bridge — operators are async-native after Phase B. The async stream is piped into `FlightDataEncoderBuilder` and mapped to `tonic::Status` for the response item type. |
 //! | `handshake`, `list_flights`, `get_flight_info`, `poll_flight_info`, `get_schema`, `do_put`, `do_exchange`, `list_actions` | stub — `Status::unimplemented` |
 //!
 //! ## Task context
@@ -27,7 +27,9 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
-use fdapquery_execution::execution_context::ExecutionContext;
+// Session 15c — `SessionContext` moved from `fdapquery-execution` to
+// the `fdapquery` umbrella crate.
+use fdapquery::SessionContext;
 use fdapquery_physical_plan::{ShuffleWriterExec, TaskContext};
 use fdapquery_proto::{deserialize_logical_plan, deserialize_task, pb};
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -150,7 +152,7 @@ impl FlightService for FdapQueryFlightProducer {
     ///   is what `FlightExecutorClient::execute_final_task` in module 14
     ///   calls.
     /// - **`action.query` set** — interactive path. Deserialise to a
-    ///   `LogicalPlan`, run via a fresh `ExecutionContext`. The
+    ///   `LogicalPlan`, run via a fresh `SessionContext`. The
     ///   `Context::sql` API in this crate uses this path.
     /// - **Neither set** — `Status::invalid_argument`.
     ///
@@ -199,7 +201,7 @@ impl FlightService for FdapQueryFlightProducer {
                 );
                 // flight-server do_get
                 //   -> task.plan.execute(0, ctx)
-                //      -> HashAggregateExec::execute(0, ctx)
+                //      -> AggregateExec::execute(0, ctx)
                 //         -> ShuffleReaderExec::execute(0, ctx)
                 task.plan
                     .execute(0, Arc::clone(&self.ctx))
@@ -213,7 +215,7 @@ impl FlightService for FdapQueryFlightProducer {
                 // above.
                 let logical_plan = deserialize_logical_plan(&plan_node);
                 info!("do_get executing logical plan: {}", logical_plan.pretty());
-                let exec_ctx = ExecutionContext::new(HashMap::new());
+                let exec_ctx = SessionContext::new(HashMap::new());
                 exec_ctx
                     .execute(&logical_plan)
                     .map_err(|e| Status::internal(format!("execution context error: {e}")))?
@@ -391,7 +393,7 @@ mod tests {
     use fdapquery_catalog::CsvDataSource;
     use fdapquery_catalog::TableProvider;
     use fdapquery_physical_plan::{
-        ColumnExpression, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
+        Column, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
         ShuffleWriterExec, Task,
     };
     use fdapquery_proto::serialize_task;
@@ -426,12 +428,17 @@ mod tests {
     fn build_task() -> Task {
         let ds: Arc<dyn TableProvider> =
             Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-        let columns: Vec<String> = ds.schema().fields.iter().map(|f| f.name.clone()).collect();
+        let columns: Vec<String> = ds
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
         let scan: Arc<dyn ExecutionPlan> =
             Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
         let writer: Arc<dyn ExecutionPlan> = Arc::new(ShuffleWriterExec::new(
             scan,
-            vec![Arc::new(ColumnExpression::new(0))],
+            vec![Arc::new(Column::new(0))],
             "test-job-do-action",
             0,
             3,
@@ -524,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn do_get_streams_flight_data_for_a_logical_plan() {
-        use fdapquery_expr::{LogicalPlan, Scan};
+        use fdapquery_expr::{LogicalPlan, TableScan};
         use fdapquery_proto::serialize_logical_plan;
         use futures::StreamExt;
 
@@ -535,7 +542,8 @@ mod tests {
         // Build a LogicalPlan: scan employee.csv with all columns.
         let ds: Arc<dyn TableProvider> =
             Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-        let logical_plan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, ds, vec![]).unwrap());
+        let logical_plan =
+            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, ds, vec![]).unwrap());
 
         // Serialise as Action protobuf and wrap in a Ticket.
         let plan_node = serialize_logical_plan(&logical_plan);

@@ -3,7 +3,7 @@
 //! the group expressions followed by the aggregate expressions.
 
 use crate::expressions::AggregateExpr;
-use crate::logical_expr::LogicalExpr;
+use crate::logical_expr::Expr;
 use crate::logical_plan::LogicalPlan;
 use fdapquery_datatypes::{Field, Result, Schema};
 use std::fmt;
@@ -11,9 +11,9 @@ use std::fmt;
 #[derive(Clone)]
 pub struct Aggregate {
     pub input: Box<LogicalPlan>,
-    pub group_expr: Vec<LogicalExpr>,
+    pub group_expr: Vec<Expr>,
     /// The aggregate expressions, typed as the narrow `AggregateExpr` family
-    ///. Aggregates bridge into `LogicalExpr` only
+    ///. Aggregates bridge into `Expr` only
     /// when they need to nest inside another expression (see `expressions.rs`).
     pub aggregate_expr: Vec<AggregateExpr>,
 }
@@ -21,7 +21,7 @@ pub struct Aggregate {
 impl Aggregate {
     pub fn new(
         input: LogicalPlan,
-        group_expr: Vec<LogicalExpr>,
+        group_expr: Vec<Expr>,
         aggregate_expr: Vec<AggregateExpr>,
     ) -> Self {
         Self {

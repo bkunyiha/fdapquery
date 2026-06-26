@@ -2,22 +2,22 @@
 //! References a column in the input batch by its position. Evaluating it simply
 //! hands back that column unchanged — the simplest possible physical expression.
 
-use crate::expressions::Expression;
+use crate::expressions::PhysicalExpr;
 use fdapquery_datatypes::{ColumnVector, RecordBatch, Result, record_batch};
 use std::fmt;
 
 /// Reference a column in a batch by index.
-pub struct ColumnExpression {
+pub struct Column {
     pub i: usize,
 }
 
-impl ColumnExpression {
+impl Column {
     pub fn new(i: usize) -> Self {
         Self { i }
     }
 }
 
-impl Expression for ColumnExpression {
+impl PhysicalExpr for Column {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         // `record_batch::field` wraps the existing arrow `ArrayRef`
         // (cheap, Arc-cloned) as a ColumnVector.
@@ -29,7 +29,7 @@ impl Expression for ColumnExpression {
     }
 }
 
-impl fmt::Display for ColumnExpression {
+impl fmt::Display for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "#{}", self.i)
     }

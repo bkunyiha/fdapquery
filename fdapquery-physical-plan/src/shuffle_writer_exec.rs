@@ -19,7 +19,7 @@
 //! ## Hash-partition algorithm
 //! For each input batch, evaluate the partition expressions row-by-row, hash
 //! the resulting tuple via [`crate::row_key::RowKey`] (the same float-aware
-//! hasher `HashJoinExec`/`HashAggregateExec` use for join/group keys), take
+//! hasher `HashJoinExec`/`AggregateExec` use for join/group keys), take
 //! modulo `partition_count` to pick a target partition, then filter the batch
 //! into per-partition sub-batches. After all input is consumed, every
 //! non-empty partition's sub-batches are written via
@@ -30,17 +30,17 @@
 //! Empty partitions get **no file** and **no `ShuffleLocation`**. This
 //! matches `ShuffleManager::write_partition`'s no-op-on-empty contract.
 
-use crate::Expression;
+use crate::PhysicalExpr;
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::row_key::RowKey;
-use crate::shuffle_location::ShuffleLocation;
 use crate::stream::SendableRecordBatchStream;
-use crate::task_context::TaskContext;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue, Schema,
     record_batch,
 };
+use fdapquery_execution::ShuffleLocation;
+use fdapquery_execution::TaskContext;
 use futures::TryStreamExt;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -49,7 +49,7 @@ use std::sync::Arc;
 /// Partitions input by hash and writes shuffle output.
 pub struct ShuffleWriterExec {
     pub input: Arc<dyn ExecutionPlan>,
-    pub partition_expr: Vec<Arc<dyn Expression>>,
+    pub partition_expr: Vec<Arc<dyn PhysicalExpr>>,
     pub job_uuid: String,
     pub stage_id: i32,
     pub partition_count: i32,
@@ -59,7 +59,7 @@ pub struct ShuffleWriterExec {
 impl ShuffleWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        partition_expr: Vec<Arc<dyn Expression>>,
+        partition_expr: Vec<Arc<dyn PhysicalExpr>>,
         job_uuid: impl Into<String>,
         stage_id: i32,
         partition_count: i32,
@@ -277,12 +277,12 @@ mod tests {
     //! nanoseconds so parallel `cargo test` runs don't collide on disk.
 
     use super::*;
-    use crate::ColumnExpression;
+    use crate::Column;
     use crate::scan_exec::ScanExec;
-    use crate::shuffle_manager::ShuffleManager;
-    use crate::task_context::{RuntimeEnv, SessionConfig};
     use fdapquery_catalog::CsvDataSource;
     use fdapquery_catalog::TableProvider;
+    use fdapquery_execution::ShuffleManager;
+    use fdapquery_execution::{RuntimeEnv, SessionConfig};
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 
@@ -299,7 +299,11 @@ mod tests {
     }
 
     fn employee_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
-        ds.schema().fields.iter().map(|f| f.name.clone()).collect()
+        ds.schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
     }
 
     fn make_ctx(executor_id: &str, host: &str, port: u16, base: &str) -> Arc<TaskContext> {
@@ -322,7 +326,7 @@ mod tests {
         let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
         let writer = ShuffleWriterExec::new(
             scan,
-            vec![Arc::new(ColumnExpression::new(0))], // partition by `id`
+            vec![Arc::new(Column::new(0))], // partition by `id`
             "test-job-shuffle-writer",
             0, // stage_id
             3, // partition_count
@@ -393,7 +397,7 @@ mod tests {
                 _ctx: Arc<TaskContext>,
             ) -> Result<SendableRecordBatchStream> {
                 use crate::stream::RecordBatchStreamAdapter;
-                let arrow_schema = Arc::new(self.schema.to_arrow());
+                let arrow_schema = Arc::new(self.schema.clone());
                 let inner = futures::stream::empty::<Result<RecordBatch>>();
                 Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, inner)))
             }
@@ -419,7 +423,7 @@ mod tests {
         let ds = employee_ds();
         let writer = ShuffleWriterExec::new(
             Arc::new(EmptyInput::new(ds.schema())),
-            vec![Arc::new(ColumnExpression::new(0))],
+            vec![Arc::new(Column::new(0))],
             "test-job-shuffle-writer-empty",
             0,
             3,
@@ -458,7 +462,7 @@ mod tests {
         let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
         let writer = ShuffleWriterExec::new(
             scan,
-            vec![Arc::new(ColumnExpression::new(0))],
+            vec![Arc::new(Column::new(0))],
             "test-job-shuffle-writer-one",
             0,
             1, // single partition

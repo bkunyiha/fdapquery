@@ -1,8 +1,8 @@
 //! # protobuf
 //!
 //! Protocol Buffers schemas + serialise / deserialise helpers for
-//! `LogicalPlan`, `LogicalExpr`, `PhysicalPlan`, `Expression`,
-//! `AggregateExpression`, `Action`, `Schema`, `Field`, `ShuffleLocation`, and
+//! `LogicalPlan`, `Expr`, `PhysicalPlan`, `PhysicalExpr`,
+//! `AggregateExpr`, `Action`, `Schema`, `Field`, `ShuffleLocation`, and
 //! `Task`.
 //!
 //! Serialisers and deserialisers are DataFusion-style free

@@ -11,7 +11,7 @@
 //!   at shuffle boundaries (currently only the two-stage aggregate pattern)
 //! - [`scheduler`] — `Scheduler` plus the `ExecutorClient` abstraction boundary
 //!   to the Flight world
-//! - [`distributed_context`] — facade matching `ExecutionContext`'s public API
+//! - [`distributed_context`] — facade matching `SessionContext`'s public API
 //!   (`register_csv` / `register` / `sql` / `execute`)
 //!
 //! ## Architectural notes

@@ -8,22 +8,29 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-fdapquery-execution       = { path = "../fdapquery-execution" }
-fdapquery-catalog      = { path = "../fdapquery-catalog" }    # InMemoryDataSource for parallel_query
-fdapquery-datatypes       = { path = "../fdapquery-datatypes" }     # RecordBatch, ScalarValue, arrow_types
-fdapquery-expr    = { path = "../fdapquery-expr" }  # col, cast, max, format, …
-fdapquery-optimizer       = { path = "../fdapquery-optimizer" }     # Optimizer used by nyc_taxi
+# Session 15c — `ExecutionContext` and `ParallelContext` moved from
+# `fdapquery-execution` to the `fdapquery` umbrella crate. The example
+# binaries now import via `use fdapquery::{ExecutionContext, ParallelContext};`.
+fdapquery           = { version = "0.1.0", path = "../fdapquery" }
+fdapquery-catalog   = { version = "0.1.0", path = "../fdapquery-catalog" }    # InMemoryDataSource for parallel_query
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }  # RecordBatch, ScalarValue, arrow_types
+fdapquery-expr      = { version = "0.1.0", path = "../fdapquery-expr" }       # col, cast, max, format, …
+fdapquery-optimizer = { version = "0.1.0", path = "../fdapquery-optimizer" }     # Optimizer used by nyc_taxi
 # `distributed_example` and `distributed_flight_example` use the distributed
 # stack. The former impls `ExecutorClient` directly; the latter uses
 # `FlightExecutorClient` from the `client` crate against an in-process
 # `flight-server`.
-fdapquery-distributed     = { path = "../fdapquery-distributed" }
-fdapquery-physical-plan   = { path = "../fdapquery-physical-plan" }
-fdapquery-flight-client          = { path = "../fdapquery-flight-client" }
-fdapquery-flight-server   = { path = "../fdapquery-flight-server" }
+fdapquery-distributed = { version = "0.1.0", path = "../fdapquery-distributed" }
+fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
+fdapquery-flight-client = { version = "0.1.0", path = "../fdapquery-flight-client" }
+fdapquery-flight-server = { version = "0.1.0", path = "../fdapquery-flight-server" }
 # Used by `distributed_flight_example` to spawn the in-process tonic server
 # and bind a random TCP port — same pattern as
 # `client/tests/distributed_integration_test.rs`.
+# Session 15d-1 #95 — `nyc_taxi` constructs cast types via
+# `arrow_schema::DataType::Float32` directly (replacing the deleted
+# `arrow_types::FLOAT_TYPE` re-export).
+arrow-schema    = { workspace = true }
 arrow-flight    = { workspace = true }
 tonic           = { workspace = true }
 tokio           = { workspace = true }

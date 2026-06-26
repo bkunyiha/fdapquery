@@ -1,4 +1,4 @@
-//! `LogicalPlan` → `pb::LogicalPlanNode`, `LogicalExpr` → `pb::LogicalExprNode`.
+//! `LogicalPlan` → `pb::LogicalPlanNode`, `Expr` → `pb::LogicalExprNode`.
 //! Used by `client` and `distributed` (modules 13–15) to send logical plans
 //! over the wire.
 //!
@@ -19,12 +19,12 @@
 
 use crate::pb;
 use fdapquery_catalog::{CsvDataSource, ParquetDataSource};
-use fdapquery_expr::{AggregateExpr, JoinType, LogicalExpr, LogicalPlan};
+use fdapquery_expr::{AggregateExpr, Expr, JoinType, LogicalPlan};
 
 /// Convert a `LogicalPlan` to its `pb::LogicalPlanNode` form.
 pub fn serialize_logical_plan(plan: &LogicalPlan) -> pb::LogicalPlanNode {
     match plan {
-        LogicalPlan::Scan(scan) => {
+        LogicalPlan::TableScan(scan) => {
             // Concrete data-source dispatch via `as_any().downcast_ref::<...>()`.
             let projection = Some(pb::ProjectionColumns {
                 columns: scan.projection.clone(),
@@ -72,8 +72,9 @@ pub fn serialize_logical_plan(plan: &LogicalPlan) -> pb::LogicalPlanNode {
             }),
             ..Default::default()
         },
-        LogicalPlan::Selection(s) => pb::LogicalPlanNode {
+        LogicalPlan::Filter(s) => pb::LogicalPlanNode {
             input: Some(Box::new(serialize_logical_plan(&s.input))),
+            // Wire field name `selection` — stable across Session 15d-1 #89.
             selection: Some(pb::SelectionNode {
                 expr: Some(serialize_logical_expr(&s.expr)),
             }),
@@ -115,25 +116,25 @@ pub fn serialize_logical_plan(plan: &LogicalPlan) -> pb::LogicalPlanNode {
     }
 }
 
-/// Convert a `LogicalExpr` to its `pb::LogicalExprNode` form.
-pub fn serialize_logical_expr(expr: &LogicalExpr) -> pb::LogicalExprNode {
+/// Convert a `Expr` to its `pb::LogicalExprNode` form.
+pub fn serialize_logical_expr(expr: &Expr) -> pb::LogicalExprNode {
     use pb::logical_expr_node::ExprType;
     let expr_type = match expr {
-        LogicalExpr::Column(name) => ExprType::ColumnName(name.clone()),
-        LogicalExpr::LiteralString(s) => ExprType::LiteralString(s.clone()),
-        LogicalExpr::LiteralFloat(n) => ExprType::LiteralF32(*n),
-        LogicalExpr::LiteralDouble(n) => ExprType::LiteralF64(*n),
-        LogicalExpr::LiteralLong(n) => ExprType::LiteralInt64(*n),
-        LogicalExpr::LiteralDate(d) => ExprType::LiteralDate(days_since_unix_epoch(*d)),
+        Expr::Column(name) => ExprType::ColumnName(name.clone()),
+        Expr::LiteralString(s) => ExprType::LiteralString(s.clone()),
+        Expr::LiteralFloat(n) => ExprType::LiteralF32(*n),
+        Expr::LiteralDouble(n) => ExprType::LiteralF64(*n),
+        Expr::LiteralLong(n) => ExprType::LiteralInt64(*n),
+        Expr::LiteralDate(d) => ExprType::LiteralDate(days_since_unix_epoch(*d)),
         // Boolean and comparison binary operators.
-        LogicalExpr::Eq { l, r } => binary_op_variant("eq", l, r),
-        LogicalExpr::Neq { l, r } => binary_op_variant("neq", l, r),
-        LogicalExpr::Lt { l, r } => binary_op_variant("lt", l, r),
-        LogicalExpr::LtEq { l, r } => binary_op_variant("lteq", l, r),
-        LogicalExpr::Gt { l, r } => binary_op_variant("gt", l, r),
-        LogicalExpr::GtEq { l, r } => binary_op_variant("gteq", l, r),
-        LogicalExpr::And { l, r } => binary_op_variant("and", l, r),
-        LogicalExpr::Or { l, r } => binary_op_variant("or", l, r),
+        Expr::Eq { l, r } => binary_op_variant("eq", l, r),
+        Expr::Neq { l, r } => binary_op_variant("neq", l, r),
+        Expr::Lt { l, r } => binary_op_variant("lt", l, r),
+        Expr::LtEq { l, r } => binary_op_variant("lteq", l, r),
+        Expr::Gt { l, r } => binary_op_variant("gt", l, r),
+        Expr::GtEq { l, r } => binary_op_variant("gteq", l, r),
+        Expr::And { l, r } => binary_op_variant("and", l, r),
+        Expr::Or { l, r } => binary_op_variant("or", l, r),
         other => panic!("Cannot serialize logical expression to protobuf: {other:?}"),
     };
     pb::LogicalExprNode {
@@ -142,11 +143,7 @@ pub fn serialize_logical_expr(expr: &LogicalExpr) -> pb::LogicalExprNode {
 }
 
 /// Shared builder for the eight boolean / comparison binary operators.
-fn binary_op_variant(
-    op: &str,
-    l: &LogicalExpr,
-    r: &LogicalExpr,
-) -> pb::logical_expr_node::ExprType {
+fn binary_op_variant(op: &str, l: &Expr, r: &Expr) -> pb::logical_expr_node::ExprType {
     pb::logical_expr_node::ExprType::BinaryExpr(Box::new(pb::BinaryExprNode {
         l: Some(Box::new(serialize_logical_expr(l))),
         r: Some(Box::new(serialize_logical_expr(r))),
@@ -203,7 +200,7 @@ mod tests {
     use super::serialize_logical_plan;
     use crate::deserialize_logical_plan;
     use fdapquery_catalog::CsvDataSource;
-    use fdapquery_expr::{DataFrame, LogicalPlan, Scan, col, format, lit_string};
+    use fdapquery_expr::{DataFrame, LogicalPlan, TableScan, col, format, lit_string};
     use std::sync::Arc;
 
     /// In-repo employee fixture from the workspace-shared `testdata/`
@@ -212,8 +209,8 @@ mod tests {
 
     fn csv_df() -> DataFrame {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        DataFrame::new(LogicalPlan::Scan(
-            Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap(),
+        DataFrame::new(LogicalPlan::TableScan(
+            TableScan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap(),
         ))
     }
 
@@ -230,8 +227,8 @@ mod tests {
         let logical_plan = roundtrip(df);
 
         let expected = "Projection: #id, #first_name, #last_name\n\
-                        \tSelection: #state = 'CO'\n\
-                        \t\tScan: ../testdata/employee.csv; projection=None\n";
+                        \tFilter: #state = 'CO'\n\
+                        \t\tTableScan: ../testdata/employee.csv; projection=None\n";
         assert_eq!(format(&logical_plan), expected);
     }
 }

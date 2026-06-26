@@ -6,7 +6,7 @@
 //! ## Implementation notes
 //! - **Join keys / rows are `Vec<ScalarValue>`.** The hash table is keyed by
 //!   [`crate::row_key::RowKey`] — the same float-aware key helper
-//!   `HashAggregateExec` uses for group keys (§4.6 asked for a shared helper).
+//!   `AggregateExec` uses for group keys (§4.6 asked for a shared helper).
 //!   String columns surface as `ScalarValue::Utf8`, so no extra normalization
 //!   is needed.
 //! - **`rightColumnsToExclude`** drops duplicate join-key columns from the right
@@ -20,12 +20,12 @@ use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::row_key::RowKey;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
-use crate::task_context::TaskContext;
 use async_stream::try_stream;
 use fdapquery_datatypes::{
     ArrowFieldVector, ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result,
     ScalarValue, Schema, record_batch,
 };
+use fdapquery_execution::TaskContext;
 use fdapquery_expr::JoinType;
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
@@ -88,9 +88,9 @@ fn combine_rows(
 /// Build an output batch from assembled rows, typed by the output schema.
 fn create_batch(rows: &[Vec<ScalarValue>], schema: &Schema) -> Result<RecordBatch> {
     let mut builders: Vec<ArrowVectorBuilder> = schema
-        .fields
+        .fields()
         .iter()
-        .map(|f| ArrowVectorBuilder::new(&f.data_type, rows.len()))
+        .map(|f| ArrowVectorBuilder::new(f.data_type(), rows.len()))
         .collect();
     for row in rows {
         for (col, value) in row.iter().enumerate() {
@@ -193,9 +193,9 @@ impl ExecutionPlan for HashJoinExec {
         let right_keys = self.right_keys.clone();
         let schema = self.schema.clone();
         let right_columns_to_exclude = self.right_columns_to_exclude.clone();
-        let right_field_count = self.right.schema().fields.len();
-        let left_field_count = self.left.schema().fields.len();
-        let arrow_schema = Arc::new(self.schema.to_arrow());
+        let right_field_count = self.right.schema().fields().len();
+        let left_field_count = self.left.schema().fields().len();
+        let arrow_schema = Arc::new(self.schema.clone());
         let ctx_for_probe = Arc::clone(&ctx);
         let ctx_for_unmatched = Arc::clone(&ctx);
 
@@ -329,7 +329,6 @@ mod tests {
     use arrow_array::{ArrayRef, Int64Array, StringArray};
     use arrow_schema::{Field as ArrowField, Schema as ArrowSchema};
     use fdapquery_datatypes::Field;
-    use fdapquery_datatypes::arrow_types::{INT64_TYPE, STRING_TYPE};
     use futures::TryStreamExt;
     use std::sync::Arc;
 
@@ -365,7 +364,7 @@ mod tests {
             _partition: usize,
             _ctx: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
-            let arrow_schema = Arc::new(self.schema.to_arrow());
+            let arrow_schema = Arc::new(self.schema.clone());
             let inner = futures::stream::iter(self.batches.clone().into_iter().map(Ok));
             Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, inner)))
         }
@@ -393,12 +392,12 @@ mod tests {
     /// left: (id: Int64, name: Utf8) = (1,a),(2,b),(3,c)
     fn left_exec() -> VecExec {
         let schema = Schema::new(vec![
-            Field::new("id", INT64_TYPE),
-            Field::new("name", STRING_TYPE),
+            Field::new("id", arrow_schema::DataType::Int64, true),
+            Field::new("name", arrow_schema::DataType::Utf8, true),
         ]);
         let arrow = Arc::new(ArrowSchema::new(vec![
-            ArrowField::new("id", INT64_TYPE, true),
-            ArrowField::new("name", STRING_TYPE, true),
+            ArrowField::new("id", arrow_schema::DataType::Int64, true),
+            ArrowField::new("name", arrow_schema::DataType::Utf8, true),
         ]));
         let id: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
         let name: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
@@ -411,12 +410,12 @@ mod tests {
     /// right: (id: Int64, dept: Utf8) = (1,eng),(2,sales)
     fn right_exec() -> VecExec {
         let schema = Schema::new(vec![
-            Field::new("id", INT64_TYPE),
-            Field::new("dept", STRING_TYPE),
+            Field::new("id", arrow_schema::DataType::Int64, true),
+            Field::new("dept", arrow_schema::DataType::Utf8, true),
         ]);
         let arrow = Arc::new(ArrowSchema::new(vec![
-            ArrowField::new("id", INT64_TYPE, true),
-            ArrowField::new("dept", STRING_TYPE, true),
+            ArrowField::new("id", arrow_schema::DataType::Int64, true),
+            ArrowField::new("dept", arrow_schema::DataType::Utf8, true),
         ]));
         let id: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
         let dept: ArrayRef = Arc::new(StringArray::from(vec!["eng", "sales"]));
@@ -429,9 +428,9 @@ mod tests {
     /// Output schema: id, name, dept (the right `id` is excluded as a duplicate key).
     fn out_schema() -> Schema {
         Schema::new(vec![
-            Field::new("id", INT64_TYPE),
-            Field::new("name", STRING_TYPE),
-            Field::new("dept", STRING_TYPE),
+            Field::new("id", arrow_schema::DataType::Int64, true),
+            Field::new("name", arrow_schema::DataType::Utf8, true),
+            Field::new("dept", arrow_schema::DataType::Utf8, true),
         ])
     }
 

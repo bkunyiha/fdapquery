@@ -26,3 +26,9 @@
 
 pub mod fdap_query_flight_producer;
 pub mod flight_server;
+
+// Session 15d-1 #96 + #97 — top-level re-exports so external consumers
+// can write the short form `use fdapquery_flight_server::{FdapQueryFlightProducer, serve};`
+// instead of reaching through submodule paths.
+pub use fdap_query_flight_producer::FdapQueryFlightProducer;
+pub use flight_server::serve;

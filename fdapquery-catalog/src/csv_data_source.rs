@@ -12,11 +12,13 @@
 //!   indices here before passing them in.
 //! - I/O and parse errors panic (`File::open` failure, malformed CSV, etc.).
 
-use crate::table_provider::{BoxRecordBatchStream, TableProvider};
+use crate::table_provider::{SendableRecordBatchStream, TableProvider};
 use arrow::csv::{ReaderBuilder, reader::Format};
-use fdapquery_datatypes::{
-    FdapQueryError, Result, Schema, schema::from_arrow as schema_from_arrow,
-};
+use fdapquery_datatypes::{FdapQueryError, Result, Schema};
+// Session 15d-1 #92 — `SendableRecordBatchStream` requires
+// `RecordBatchStream` (carries `schema()`); wrap the raw iterator via
+// `RecordBatchStreamAdapter` to satisfy the trait bound.
+use fdapquery_execution::stream::RecordBatchStreamAdapter;
 use std::fs::File;
 use std::sync::Arc;
 
@@ -74,7 +76,8 @@ impl CsvDataSource {
         let (arrow_schema, _records_read) = format
             .infer_schema(&file, Some(1024))
             .unwrap_or_else(|e| panic!("CsvDataSource::infer_schema: {}", e));
-        schema_from_arrow(&arrow_schema)
+        // `Schema` IS `arrow_schema::Schema`; no conversion needed.
+        arrow_schema
     }
 }
 
@@ -89,15 +92,17 @@ impl TableProvider for CsvDataSource {
 
     /// Produce the record-batch stream for the given projection. An
     /// empty `projection` slice means "all columns".
-    fn scan(&self, projection: &[String]) -> Result<BoxRecordBatchStream> {
+    fn scan(&self, projection: &[String]) -> Result<SendableRecordBatchStream> {
         let file = File::open(&self.filename)?;
 
         // Determine the schema used by the reader (typed schema, not projected).
         let full_schema = self.schema();
-        let full_arrow_schema = Arc::new(full_schema.to_arrow());
+        let full_arrow_schema = Arc::new(full_schema.clone());
 
         // Build the reader. Note: `with_projection` requires column indices.
-        let mut builder = ReaderBuilder::new(full_arrow_schema)
+        // `Arc::clone` because we need the schema again later to wrap the
+        // stream in `RecordBatchStreamAdapter`.
+        let mut builder = ReaderBuilder::new(Arc::clone(&full_arrow_schema))
             .with_header(self.has_headers)
             .with_batch_size(self.batch_size)
             .with_delimiter(self.delimiter);
@@ -108,9 +113,9 @@ impl TableProvider for CsvDataSource {
                 .iter()
                 .map(|name| {
                     full_schema
-                        .fields
+                        .fields()
                         .iter()
-                        .position(|f| &f.name == name)
+                        .position(|f| f.name() == name)
                         .ok_or_else(|| {
                             FdapQueryError::SchemaError(format!(
                                 "CsvDataSource::scan: projection column '{name}' not in schema"
@@ -128,7 +133,15 @@ impl TableProvider for CsvDataSource {
         // on `FdapQueryError::ArrowError`, then wrap the sync iterator
         // as a pin-boxed Stream.
         let iter = reader.map(|res| res.map_err(Into::into));
-        Ok(Box::pin(futures::stream::iter(iter)))
+        // Wrap with the schema-aware adapter — the canonical
+        // `SendableRecordBatchStream` requires the inner stream to
+        // implement `RecordBatchStream` (carries `schema()`). For now
+        // we report the full schema even when a projection is applied;
+        // refining to the projected schema is a follow-up.
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            full_arrow_schema,
+            futures::stream::iter(iter),
+        )))
     }
 }
 
@@ -214,15 +227,14 @@ mod tests {
     async fn read_tsv_no_header() {
         // employee_no_header.tsv is real tab-separated, no header row.
         // Provide an explicit schema since there's no header to infer names from.
-        use fdapquery_datatypes::arrow_types::STRING_TYPE;
         use fdapquery_datatypes::{Field, Schema};
         let schema = Schema::new(vec![
-            Field::new("field_1", STRING_TYPE),
-            Field::new("field_2", STRING_TYPE),
-            Field::new("field_3", STRING_TYPE),
-            Field::new("field_4", STRING_TYPE),
-            Field::new("field_5", STRING_TYPE),
-            Field::new("field_6", STRING_TYPE),
+            Field::new("field_1", arrow_schema::DataType::Utf8, true),
+            Field::new("field_2", arrow_schema::DataType::Utf8, true),
+            Field::new("field_3", arrow_schema::DataType::Utf8, true),
+            Field::new("field_4", arrow_schema::DataType::Utf8, true),
+            Field::new("field_5", arrow_schema::DataType::Utf8, true),
+            Field::new("field_6", arrow_schema::DataType::Utf8, true),
         ]);
         let csv = CsvDataSource::tsv(fixture("employee_no_header.tsv"), Some(schema), false, 1024);
         let batches = drain_scan(&csv, &[]).await;

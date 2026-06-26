@@ -1,17 +1,17 @@
 //!
 //! Arithmetic binary operators: `+`, `-`, `*`, `/`. These form a three-level
-//! template-method hierarchy — `BinaryExpression` (evaluate both sides +
-//! coerce) → `MathExpression` (build an output vector by evaluating each cell)
-//! → `AddExpression` / `SubtractExpression` / … (the per-cell arithmetic).
+//! template-method hierarchy — `BinaryExpr` (evaluate both sides +
+//! coerce) → `MathExpr` (build an output vector by evaluating each cell)
+//! → `AddExpr` / `SubtractExpr` / … (the per-cell arithmetic).
 //!
 //! ## Three-level template method
-//! [`MathExpression`] is a sub-trait of [`BinaryExpression`] that adds the per-cell
-//! kernel [`MathExpression::evaluate_cell`]. The middle layer's "build a vector by
+//! [`MathExpr`] is a sub-trait of [`BinaryExpr`] that adds the per-cell
+//! kernel [`MathExpr::evaluate_cell`]. The middle layer's "build a vector by
 //! looping over cells" logic lives in the shared helper [`math_evaluate_pair`]
-//! rather than as a `BinaryExpression::evaluate_pair` default, because Rust does
+//! rather than as a `BinaryExpr::evaluate_pair` default, because Rust does
 //! not let a sub-trait provide a default body for a super-trait's required method.
 //! Each concrete operator therefore wires the three layers together with three
-//! small impls (`MathExpression`, `BinaryExpression`, `Expression`) — verbose,
+//! small impls (`MathExpr`, `BinaryExpr`, `PhysicalExpr`) — verbose,
 //! but it makes the template-method structure explicit.
 //!
 //! ## Integer overflow
@@ -21,8 +21,8 @@
 //! debug and release. Floating-point arithmetic and integer division use the
 //! plain operators (division by zero panics).
 
-use crate::binary_expression::BinaryExpression;
-use crate::expressions::{Expression, as_f32, as_f64, as_i8, as_i16, as_i32, as_i64};
+use crate::binary_expression::BinaryExpr;
+use crate::expressions::{PhysicalExpr, as_f32, as_f64, as_i8, as_i16, as_i32, as_i64};
 use arrow_schema::DataType;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
@@ -31,7 +31,7 @@ use std::fmt;
 use std::sync::Arc;
 
 /// An arithmetic binary expression.
-pub trait MathExpression: BinaryExpression {
+pub trait MathExpr: BinaryExpr {
     /// Compute one output cell from the two input cells and their (shared) type.
     fn evaluate_cell(
         &self,
@@ -43,7 +43,7 @@ pub trait MathExpression: BinaryExpression {
     /// Wire-format operator name (`"add"`, `"subtract"`, `"multiply"`,
     /// `"divide"`). Used by `fdapquery_proto::serialize_physical_expr` to serialise
     /// this expression as a `pb::PhysicalBinaryExprNode` with the matching
-    /// `op` string. Same shape as `BooleanExpression::op_name`.
+    /// `op` string. Same shape as `BooleanExpr::op_name`.
     fn op_name(&self) -> &'static str;
 }
 
@@ -53,7 +53,7 @@ pub trait MathExpression: BinaryExpression {
 /// Walking the column one cell at a time (rather than reaching for an
 /// `arrow::compute` arithmetic kernel) is deliberate — it teaches how the
 /// operator works at the value level.
-pub(crate) fn math_evaluate_pair<M: MathExpression + ?Sized>(
+pub(crate) fn math_evaluate_pair<M: MathExpr + ?Sized>(
     m: &M,
     l: &dyn ColumnVector,
     r: &dyn ColumnVector,
@@ -79,22 +79,22 @@ fn unsupported_math_type(arrow_type: &DataType) -> FdapQueryError {
 }
 
 // ---------------------------------------------------------------------------
-// AddExpression
+// AddExpr
 // ---------------------------------------------------------------------------
 
 /// `l + r`.
-pub struct AddExpression {
-    l: Arc<dyn Expression>,
-    r: Arc<dyn Expression>,
+pub struct AddExpr {
+    l: Arc<dyn PhysicalExpr>,
+    r: Arc<dyn PhysicalExpr>,
 }
 
-impl AddExpression {
-    pub fn new(l: Arc<dyn Expression>, r: Arc<dyn Expression>) -> Self {
+impl AddExpr {
+    pub fn new(l: Arc<dyn PhysicalExpr>, r: Arc<dyn PhysicalExpr>) -> Self {
         Self { l, r }
     }
 }
 
-impl MathExpression for AddExpression {
+impl MathExpr for AddExpr {
     fn evaluate_cell(
         &self,
         l: &ScalarValue,
@@ -120,11 +120,11 @@ impl MathExpression for AddExpression {
     }
 }
 
-impl BinaryExpression for AddExpression {
-    fn left(&self) -> &Arc<dyn Expression> {
+impl BinaryExpr for AddExpr {
+    fn left(&self) -> &Arc<dyn PhysicalExpr> {
         &self.l
     }
-    fn right(&self) -> &Arc<dyn Expression> {
+    fn right(&self) -> &Arc<dyn PhysicalExpr> {
         &self.r
     }
     fn evaluate_pair(
@@ -136,7 +136,7 @@ impl BinaryExpression for AddExpression {
     }
 }
 
-impl Expression for AddExpression {
+impl PhysicalExpr for AddExpr {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
@@ -145,34 +145,34 @@ impl Expression for AddExpression {
         self
     }
 
-    fn as_math_expression(&self) -> Option<&dyn MathExpression> {
+    fn as_math_expression(&self) -> Option<&dyn MathExpr> {
         Some(self)
     }
 }
 
-impl fmt::Display for AddExpression {
+impl fmt::Display for AddExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}+{}", self.l, self.r)
     }
 }
 
 // ---------------------------------------------------------------------------
-// SubtractExpression
+// SubtractExpr
 // ---------------------------------------------------------------------------
 
 /// `l - r`.
-pub struct SubtractExpression {
-    l: Arc<dyn Expression>,
-    r: Arc<dyn Expression>,
+pub struct SubtractExpr {
+    l: Arc<dyn PhysicalExpr>,
+    r: Arc<dyn PhysicalExpr>,
 }
 
-impl SubtractExpression {
-    pub fn new(l: Arc<dyn Expression>, r: Arc<dyn Expression>) -> Self {
+impl SubtractExpr {
+    pub fn new(l: Arc<dyn PhysicalExpr>, r: Arc<dyn PhysicalExpr>) -> Self {
         Self { l, r }
     }
 }
 
-impl MathExpression for SubtractExpression {
+impl MathExpr for SubtractExpr {
     fn evaluate_cell(
         &self,
         l: &ScalarValue,
@@ -198,11 +198,11 @@ impl MathExpression for SubtractExpression {
     }
 }
 
-impl BinaryExpression for SubtractExpression {
-    fn left(&self) -> &Arc<dyn Expression> {
+impl BinaryExpr for SubtractExpr {
+    fn left(&self) -> &Arc<dyn PhysicalExpr> {
         &self.l
     }
-    fn right(&self) -> &Arc<dyn Expression> {
+    fn right(&self) -> &Arc<dyn PhysicalExpr> {
         &self.r
     }
     fn evaluate_pair(
@@ -214,7 +214,7 @@ impl BinaryExpression for SubtractExpression {
     }
 }
 
-impl Expression for SubtractExpression {
+impl PhysicalExpr for SubtractExpr {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
@@ -223,34 +223,34 @@ impl Expression for SubtractExpression {
         self
     }
 
-    fn as_math_expression(&self) -> Option<&dyn MathExpression> {
+    fn as_math_expression(&self) -> Option<&dyn MathExpr> {
         Some(self)
     }
 }
 
-impl fmt::Display for SubtractExpression {
+impl fmt::Display for SubtractExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}-{}", self.l, self.r)
     }
 }
 
 // ---------------------------------------------------------------------------
-// MultiplyExpression
+// MultiplyExpr
 // ---------------------------------------------------------------------------
 
 /// `l * r`.
-pub struct MultiplyExpression {
-    l: Arc<dyn Expression>,
-    r: Arc<dyn Expression>,
+pub struct MultiplyExpr {
+    l: Arc<dyn PhysicalExpr>,
+    r: Arc<dyn PhysicalExpr>,
 }
 
-impl MultiplyExpression {
-    pub fn new(l: Arc<dyn Expression>, r: Arc<dyn Expression>) -> Self {
+impl MultiplyExpr {
+    pub fn new(l: Arc<dyn PhysicalExpr>, r: Arc<dyn PhysicalExpr>) -> Self {
         Self { l, r }
     }
 }
 
-impl MathExpression for MultiplyExpression {
+impl MathExpr for MultiplyExpr {
     fn evaluate_cell(
         &self,
         l: &ScalarValue,
@@ -276,11 +276,11 @@ impl MathExpression for MultiplyExpression {
     }
 }
 
-impl BinaryExpression for MultiplyExpression {
-    fn left(&self) -> &Arc<dyn Expression> {
+impl BinaryExpr for MultiplyExpr {
+    fn left(&self) -> &Arc<dyn PhysicalExpr> {
         &self.l
     }
-    fn right(&self) -> &Arc<dyn Expression> {
+    fn right(&self) -> &Arc<dyn PhysicalExpr> {
         &self.r
     }
     fn evaluate_pair(
@@ -292,7 +292,7 @@ impl BinaryExpression for MultiplyExpression {
     }
 }
 
-impl Expression for MultiplyExpression {
+impl PhysicalExpr for MultiplyExpr {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
@@ -301,34 +301,34 @@ impl Expression for MultiplyExpression {
         self
     }
 
-    fn as_math_expression(&self) -> Option<&dyn MathExpression> {
+    fn as_math_expression(&self) -> Option<&dyn MathExpr> {
         Some(self)
     }
 }
 
-impl fmt::Display for MultiplyExpression {
+impl fmt::Display for MultiplyExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}*{}", self.l, self.r)
     }
 }
 
 // ---------------------------------------------------------------------------
-// DivideExpression
+// DivideExpr
 // ---------------------------------------------------------------------------
 
 /// `l / r`. Integer division truncates and division by zero panics.
-pub struct DivideExpression {
-    l: Arc<dyn Expression>,
-    r: Arc<dyn Expression>,
+pub struct DivideExpr {
+    l: Arc<dyn PhysicalExpr>,
+    r: Arc<dyn PhysicalExpr>,
 }
 
-impl DivideExpression {
-    pub fn new(l: Arc<dyn Expression>, r: Arc<dyn Expression>) -> Self {
+impl DivideExpr {
+    pub fn new(l: Arc<dyn PhysicalExpr>, r: Arc<dyn PhysicalExpr>) -> Self {
         Self { l, r }
     }
 }
 
-impl MathExpression for DivideExpression {
+impl MathExpr for DivideExpr {
     fn evaluate_cell(
         &self,
         l: &ScalarValue,
@@ -354,11 +354,11 @@ impl MathExpression for DivideExpression {
     }
 }
 
-impl BinaryExpression for DivideExpression {
-    fn left(&self) -> &Arc<dyn Expression> {
+impl BinaryExpr for DivideExpr {
+    fn left(&self) -> &Arc<dyn PhysicalExpr> {
         &self.l
     }
-    fn right(&self) -> &Arc<dyn Expression> {
+    fn right(&self) -> &Arc<dyn PhysicalExpr> {
         &self.r
     }
     fn evaluate_pair(
@@ -370,7 +370,7 @@ impl BinaryExpression for DivideExpression {
     }
 }
 
-impl Expression for DivideExpression {
+impl PhysicalExpr for DivideExpr {
     fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
         self.evaluate_binary(input)
     }
@@ -379,12 +379,12 @@ impl Expression for DivideExpression {
         self
     }
 
-    fn as_math_expression(&self) -> Option<&dyn MathExpression> {
+    fn as_math_expression(&self) -> Option<&dyn MathExpr> {
         Some(self)
     }
 }
 
-impl fmt::Display for DivideExpression {
+impl fmt::Display for DivideExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.l, self.r)
     }

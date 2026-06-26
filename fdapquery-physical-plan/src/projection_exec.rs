@@ -2,12 +2,12 @@
 //! Evaluates a list of expressions against each input batch and assembles the
 //! results into an output batch with the projection's schema.
 
-use crate::Expression;
+use crate::PhysicalExpr;
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
-use crate::task_context::TaskContext;
 use fdapquery_datatypes::{ColumnVector, FdapQueryError, Result, Schema, record_batch};
+use fdapquery_execution::TaskContext;
 use futures::StreamExt;
 use std::fmt;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub struct ProjectionExec {
     pub input: Arc<dyn ExecutionPlan>,
     pub schema: Schema,
-    pub expr: Vec<Arc<dyn Expression>>,
+    pub expr: Vec<Arc<dyn PhysicalExpr>>,
     properties: PlanProperties,
 }
 
@@ -28,7 +28,7 @@ impl ProjectionExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         schema: Schema,
-        expr: Vec<Arc<dyn Expression>>,
+        expr: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Self {
         let properties = PlanProperties::single_partition_unknown();
         Self {
@@ -76,7 +76,7 @@ impl ExecutionPlan for ProjectionExec {
                 .collect::<Result<Vec<_>>>()?;
             record_batch::create(&schema, columns)
         });
-        let arrow_schema = Arc::new(self.schema.to_arrow());
+        let arrow_schema = Arc::new(self.schema.clone());
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             arrow_schema,
             projected,

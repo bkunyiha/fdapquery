@@ -1,8 +1,8 @@
 //!
-//! The mode of a `HashAggregateExec`, used to support distributed (two-stage)
+//! The mode of a `AggregateExec`, used to support distributed (two-stage)
 //! aggregation.
 
-/// How a `HashAggregateExec` aggregates.
+/// How a `AggregateExec` aggregates.
 ///
 /// In distributed execution, aggregation runs in two stages: each executor
 /// computes `Partial` aggregates on its local data, then a coordinator merges

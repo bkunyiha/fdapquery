@@ -6,7 +6,6 @@
 //! moves the real implementations here.
 
 pub use fdapquery_physical_expr::{
-    AggregateExpression, AggregateMode, AvgAccumulator, AvgExpression, CountAccumulator,
-    CountExpression, MaxAccumulator, MaxExpression, MinAccumulator, MinExpression, SumAccumulator,
-    SumExpression,
+    AggregateExpr, AggregateMode, AvgAccumulator, AvgExpr, CountAccumulator, CountExpr,
+    MaxAccumulator, MaxExpr, MinAccumulator, MinExpr, SumAccumulator, SumExpr,
 };

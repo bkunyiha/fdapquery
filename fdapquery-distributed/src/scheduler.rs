@@ -237,9 +237,9 @@ mod tests {
     use crate::ExecutorConfig;
     use fdapquery_catalog::CsvDataSource;
     use fdapquery_datatypes::{RecordBatch, Schema};
-    use fdapquery_expr::{Aggregate, LogicalPlan, Scan, col, sum};
+    use fdapquery_expr::{Aggregate, LogicalPlan, TableScan, col, sum};
     use fdapquery_optimizer::Optimizer;
-    use fdapquery_physical_plan::QueryPlanner;
+    use fdapquery_physical_plan::DefaultPhysicalPlanner;
     use fdapquery_physical_plan::RecordBatchStreamAdapter;
     use futures::TryStreamExt;
     use std::sync::{Arc, Mutex};
@@ -295,7 +295,7 @@ mod tests {
     /// Build an empty `SendableRecordBatchStream` over an empty schema —
     /// the test only checks dispatch, not data flowing back.
     fn empty_stream() -> SendableRecordBatchStream {
-        let schema = Arc::new(Schema::new(vec![]).to_arrow());
+        let schema = Arc::new(Schema::empty());
         Box::pin(RecordBatchStreamAdapter::new(
             schema,
             futures::stream::empty::<Result<RecordBatch>>(),
@@ -357,7 +357,8 @@ mod tests {
 
         // SELECT state, SUM(salary) FROM employee GROUP BY state
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan = LogicalPlan::Scan(Scan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
+        let scan =
+            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
         let aggregate = LogicalPlan::Aggregate(Aggregate::new(
             scan,
             vec![col("state")],
@@ -365,7 +366,7 @@ mod tests {
         ));
 
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
-        let physical_plan = QueryPlanner::new()
+        let physical_plan = DefaultPhysicalPlanner::new()
             .create_physical_plan(&optimized)
             .unwrap();
 

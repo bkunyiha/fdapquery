@@ -10,7 +10,7 @@
 //!   Rust's `Drop` is also a no-op by default. Nothing to port.
 
 use crate::{FdapQueryError, Result};
-use crate::{column_vector::ColumnVector, scalar_value::ScalarValue};
+use crate::{ScalarValue, column_vector::ColumnVector};
 use arrow_schema::DataType;
 
 /// A column whose every row returns the same literal value.
@@ -53,11 +53,10 @@ impl ColumnVector for LiteralValueVector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow_types::INT32_TYPE;
 
     #[test]
     fn literal_returns_value_for_every_index() {
-        let v = LiteralValueVector::new(INT32_TYPE, ScalarValue::Int32(42), 5);
+        let v = LiteralValueVector::new(arrow_schema::DataType::Int32, ScalarValue::Int32(42), 5);
         assert_eq!(v.size(), 5);
         for i in 0..5 {
             assert_eq!(v.get_value(i).unwrap(), ScalarValue::Int32(42));
@@ -66,13 +65,13 @@ mod tests {
 
     #[test]
     fn literal_get_type_matches_constructor_arg() {
-        let v = LiteralValueVector::new(INT32_TYPE, ScalarValue::Int32(7), 3);
-        assert_eq!(v.get_type(), INT32_TYPE);
+        let v = LiteralValueVector::new(arrow_schema::DataType::Int32, ScalarValue::Int32(7), 3);
+        assert_eq!(v.get_type(), arrow_schema::DataType::Int32);
     }
 
     #[test]
     fn literal_index_out_of_bounds_returns_internal_error() {
-        let v = LiteralValueVector::new(INT32_TYPE, ScalarValue::Int32(1), 2);
+        let v = LiteralValueVector::new(arrow_schema::DataType::Int32, ScalarValue::Int32(1), 2);
         let err = v.get_value(2).expect_err("out-of-bounds index should fail");
         assert!(matches!(err, FdapQueryError::Internal(_)));
         assert!(err.to_string().contains("out of bounds"));

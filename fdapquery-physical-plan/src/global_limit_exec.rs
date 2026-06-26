@@ -15,22 +15,22 @@
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
-use crate::task_context::TaskContext;
 use async_stream::try_stream;
 use fdapquery_datatypes::{
     ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, Schema, record_batch,
 };
+use fdapquery_execution::TaskContext;
 use futures::StreamExt;
 use std::sync::Arc;
 
 /// Execute a limit. `limit` is a row count.
-pub struct LimitExec {
+pub struct GlobalLimitExec {
     pub input: Arc<dyn ExecutionPlan>,
     pub limit: usize,
     properties: PlanProperties,
 }
 
-impl LimitExec {
+impl GlobalLimitExec {
     pub fn new(input: Arc<dyn ExecutionPlan>, limit: usize) -> Self {
         let properties = PlanProperties::single_partition_unknown();
         Self {
@@ -41,9 +41,9 @@ impl LimitExec {
     }
 }
 
-impl ExecutionPlan for LimitExec {
+impl ExecutionPlan for GlobalLimitExec {
     fn name(&self) -> &str {
-        "LimitExec"
+        "GlobalLimitExec"
     }
 
     fn schema(&self) -> Schema {
@@ -65,11 +65,11 @@ impl ExecutionPlan for LimitExec {
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
             return Err(FdapQueryError::Internal(format!(
-                "LimitExec has 1 output partition; partition {partition} is out of range"
+                "GlobalLimitExec has 1 output partition; partition {partition} is out of range"
             )));
         }
         let schema = self.input.schema();
-        let arrow_schema = Arc::new(schema.to_arrow());
+        let arrow_schema = Arc::new(schema.clone());
         let limit = self.limit;
         let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
         let stream = try_stream! {
@@ -112,20 +112,20 @@ impl ExecutionPlan for LimitExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(FdapQueryError::Internal(format!(
-                "LimitExec::with_new_children expected 1 child, got {}",
+                "GlobalLimitExec::with_new_children expected 1 child, got {}",
                 children.len()
             )));
         }
-        Ok(Arc::new(LimitExec::new(
+        Ok(Arc::new(GlobalLimitExec::new(
             children.into_iter().next().unwrap(),
             self.limit,
         )))
     }
 }
 
-impl std::fmt::Display for LimitExec {
+impl std::fmt::Display for GlobalLimitExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LimitExec: limit={}", self.limit)
+        write!(f, "GlobalLimitExec: limit={}", self.limit)
     }
 }
 
@@ -150,15 +150,15 @@ fn truncate(batch: &RecordBatch, n: usize, schema: &Schema) -> Result<RecordBatc
 #[cfg(test)]
 mod tests {
     //! End-to-end pipeline verification: drives `ScanExec` →
-    //! `Projection`/`Selection`/`LimitExec` over the `employee.csv` fixture and
+    //! `Projection`/`Filter`/`GlobalLimitExec` over the `employee.csv` fixture and
     //! checks row/column counts. Uses `CsvDataSource` directly.
     use super::*;
-    use crate::ColumnExpression;
-    use crate::GtExpression;
-    use crate::LiteralLongExpression;
+    use crate::Column;
+    use crate::GtExpr;
+    use crate::LiteralLong;
+    use crate::filter_exec::FilterExec;
     use crate::projection_exec::ProjectionExec;
     use crate::scan_exec::ScanExec;
-    use crate::selection_exec::SelectionExec;
     use fdapquery_catalog::CsvDataSource;
     use fdapquery_catalog::TableProvider;
     use futures::TryStreamExt;
@@ -176,7 +176,11 @@ mod tests {
     /// All column names, in schema order: id, first_name, last_name, state,
     /// job_title, salary.
     fn all_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
-        ds.schema().fields.iter().map(|f| f.name.clone()).collect()
+        ds.schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
     }
 
     /// Single-node test context fixture.
@@ -208,7 +212,7 @@ mod tests {
     async fn limit_truncates_to_budget() {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        let limited: Arc<dyn ExecutionPlan> = Arc::new(LimitExec::new(Arc::new(scan), 3));
+        let limited: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(Arc::new(scan), 3));
         assert_eq!(total_rows(limited).await, 3);
     }
 
@@ -216,7 +220,7 @@ mod tests {
     async fn limit_above_total_keeps_everything() {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        let limited: Arc<dyn ExecutionPlan> = Arc::new(LimitExec::new(Arc::new(scan), 100));
+        let limited: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(Arc::new(scan), 100));
         assert_eq!(total_rows(limited).await, 4);
     }
 
@@ -225,12 +229,8 @@ mod tests {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         // Output schema is just the first column (id).
-        let schema = scan.schema().project(&[0]);
-        let proj = ProjectionExec::new(
-            Arc::new(scan),
-            schema,
-            vec![Arc::new(ColumnExpression::new(0))],
-        );
+        let schema = scan.schema().project(&[0]).unwrap();
+        let proj = ProjectionExec::new(Arc::new(scan), schema, vec![Arc::new(Column::new(0))]);
         let batches = proj
             .execute(0, test_ctx())
             .unwrap()
@@ -243,19 +243,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selection_filters_rows() {
+    async fn filter_drops_non_matching_rows() {
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
         // WHERE id > 2  →  ids 3 and 4  →  2 rows.
-        let predicate = GtExpression::new(
-            Arc::new(ColumnExpression::new(0)),
-            Arc::new(LiteralLongExpression::new(2)),
-        );
-        let selection: Arc<dyn ExecutionPlan> =
-            Arc::new(SelectionExec::new(Arc::new(scan), Arc::new(predicate)));
-        assert_eq!(total_rows(Arc::clone(&selection)).await, 2);
-        // Selection preserves the schema (all six columns).
-        assert_eq!(selection.schema().fields.len(), 6);
+        let predicate = GtExpr::new(Arc::new(Column::new(0)), Arc::new(LiteralLong::new(2)));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::new(Arc::new(scan), Arc::new(predicate)));
+        assert_eq!(total_rows(Arc::clone(&filter)).await, 2);
+        // Filter preserves the schema (all six columns).
+        assert_eq!(filter.schema().fields().len(), 6);
     }
 
     #[tokio::test]
@@ -263,20 +260,20 @@ mod tests {
         // End-to-end: scan → WHERE id > 2 → SELECT id → LIMIT 1.
         let ds = employee_ds();
         let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        let selection = SelectionExec::new(
+        let filter = FilterExec::new(
             Arc::new(scan),
-            Arc::new(GtExpression::new(
-                Arc::new(ColumnExpression::new(0)),
-                Arc::new(LiteralLongExpression::new(2)),
+            Arc::new(GtExpr::new(
+                Arc::new(Column::new(0)),
+                Arc::new(LiteralLong::new(2)),
             )),
         );
-        let project_schema = selection.schema().project(&[0]);
+        let project_schema = filter.schema().project(&[0]).unwrap();
         let projection = ProjectionExec::new(
-            Arc::new(selection),
+            Arc::new(filter),
             project_schema,
-            vec![Arc::new(ColumnExpression::new(0))],
+            vec![Arc::new(Column::new(0))],
         );
-        let limited = LimitExec::new(Arc::new(projection), 1);
+        let limited = GlobalLimitExec::new(Arc::new(projection), 1);
 
         let batches = limited
             .execute(0, test_ctx())

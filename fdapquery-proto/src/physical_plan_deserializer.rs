@@ -1,5 +1,5 @@
 //! `pb::PhysicalPlanNode` → `Arc<dyn PhysicalPlan>`,
-//! `pb::PhysicalExprNode` → `Arc<dyn Expression>`, and the inverses of every
+//! `pb::PhysicalExprNode` → `Arc<dyn PhysicalExpr>`, and the inverses of every
 //! conversion in `physical_plan_serializer.rs`.
 //!
 //! ## Shape — free functions, no `Deserializer` struct
@@ -31,15 +31,12 @@
 use crate::pb;
 use fdapquery_catalog::TableProvider;
 use fdapquery_catalog::{CsvDataSource, ParquetDataSource};
-use fdapquery_datatypes::arrow_types;
 use fdapquery_physical_plan::{
-    AddExpression, AggregateExpression, AggregateMode, AndExpression, AvgExpression,
-    CastExpression, ColumnExpression, CountExpression, DivideExpression, EqExpression,
-    ExecutionPlan, Expression, GtEqExpression, GtExpression, HashAggregateExec,
-    LiteralDateExpression, LiteralDoubleExpression, LiteralLongExpression, LiteralStringExpression,
-    LtEqExpression, LtExpression, MaxExpression, MinExpression, MultiplyExpression, NeqExpression,
-    OrExpression, ProjectionExec, ScanExec, SelectionExec, ShuffleLocation, ShuffleReaderExec,
-    ShuffleWriterExec, SubtractExpression, SumExpression, Task,
+    AddExpr, AggregateExec, AggregateExpr, AggregateMode, AndExpr, AvgExpr, CastExpr, Column,
+    CountExpr, DivideExpr, EqExpr, ExecutionPlan, FilterExec, GtEqExpr, GtExpr, LiteralDate,
+    LiteralDouble, LiteralLong, LiteralString, LtEqExpr, LtExpr, MaxExpr, MinExpr, MultiplyExpr,
+    NeqExpr, OrExpr, PhysicalExpr, ProjectionExec, ScanExec, ShuffleLocation, ShuffleReaderExec,
+    ShuffleWriterExec, SubtractExpr, SumExpr, Task,
 };
 
 use arrow_schema::DataType;
@@ -49,6 +46,9 @@ use std::sync::Arc;
 pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn ExecutionPlan> {
     use pb::physical_plan_node::PlanType;
     match node.plan_type.as_ref() {
+        // Wire variant name `Scan` is generated from the .proto field
+        // `ScanExecNode scan = 1;`. Stable across the Rust-side
+        // `Scan` → `TableScan` rename in Session 15d-1 #90.
         Some(PlanType::Scan(scan)) => {
             let schema =
                 crate::deserialize_schema(scan.schema.as_ref().expect("ScanExecNode.schema unset"));
@@ -76,13 +76,16 @@ pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn Executi
             let expr = proj.expr.iter().map(deserialize_physical_expr).collect();
             Arc::new(ProjectionExec::new(input, schema, expr))
         }
+        // Wire variant name `Selection` is generated from the .proto
+        // field `SelectionExecNode selection = 3;`. Stable across the
+        // Rust-side `Selection` → `Filter` rename in Session 15d-1 #89.
         Some(PlanType::Selection(sel)) => {
             let input = deserialize_physical_plan(
                 sel.input.as_deref().expect("SelectionExecNode.input unset"),
             );
             let expr =
                 deserialize_physical_expr(sel.expr.as_ref().expect("SelectionExecNode.expr unset"));
-            Arc::new(SelectionExec::new(input, expr))
+            Arc::new(FilterExec::new(input, expr))
         }
         Some(PlanType::HashAggregate(agg)) => {
             let input = deserialize_physical_plan(
@@ -106,7 +109,7 @@ pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn Executi
                     .expect("HashAggregateExecNode.schema unset"),
             );
             let mode = aggregate_mode_from_proto(agg.mode);
-            Arc::new(HashAggregateExec::new_with_mode(
+            Arc::new(AggregateExec::new_with_mode(
                 input,
                 group_expr,
                 aggregate_expr,
@@ -150,33 +153,33 @@ pub fn deserialize_physical_plan(node: &pb::PhysicalPlanNode) -> Arc<dyn Executi
     }
 }
 
-/// `pb::PhysicalExprNode` → `Arc<dyn Expression>`.
-pub fn deserialize_physical_expr(node: &pb::PhysicalExprNode) -> Arc<dyn Expression> {
+/// `pb::PhysicalExprNode` → `Arc<dyn PhysicalExpr>`.
+pub fn deserialize_physical_expr(node: &pb::PhysicalExprNode) -> Arc<dyn PhysicalExpr> {
     use pb::physical_expr_node::ExprType;
     match node.expr_type.as_ref() {
-        Some(ExprType::Column(i)) => Arc::new(ColumnExpression::new(*i as usize)),
-        Some(ExprType::LiteralString(s)) => Arc::new(LiteralStringExpression::new(s.clone())),
-        Some(ExprType::LiteralLong(n)) => Arc::new(LiteralLongExpression::new(*n)),
-        Some(ExprType::LiteralDouble(n)) => Arc::new(LiteralDoubleExpression::new(*n)),
-        Some(ExprType::LiteralDate(days)) => Arc::new(LiteralDateExpression::new(*days)),
+        Some(ExprType::Column(i)) => Arc::new(Column::new(*i as usize)),
+        Some(ExprType::LiteralString(s)) => Arc::new(LiteralString::new(s.clone())),
+        Some(ExprType::LiteralLong(n)) => Arc::new(LiteralLong::new(*n)),
+        Some(ExprType::LiteralDouble(n)) => Arc::new(LiteralDouble::new(*n)),
+        Some(ExprType::LiteralDate(days)) => Arc::new(LiteralDate::new(*days)),
         Some(ExprType::BinaryExpr(b)) => {
             let l =
                 deserialize_physical_expr(b.l.as_deref().expect("PhysicalBinaryExprNode.l unset"));
             let r =
                 deserialize_physical_expr(b.r.as_deref().expect("PhysicalBinaryExprNode.r unset"));
             match b.op.as_str() {
-                "eq" => Arc::new(EqExpression::new(l, r)),
-                "neq" => Arc::new(NeqExpression::new(l, r)),
-                "lt" => Arc::new(LtExpression::new(l, r)),
-                "lteq" => Arc::new(LtEqExpression::new(l, r)),
-                "gt" => Arc::new(GtExpression::new(l, r)),
-                "gteq" => Arc::new(GtEqExpression::new(l, r)),
-                "and" => Arc::new(AndExpression::new(l, r)),
-                "or" => Arc::new(OrExpression::new(l, r)),
-                "add" => Arc::new(AddExpression::new(l, r)),
-                "subtract" => Arc::new(SubtractExpression::new(l, r)),
-                "multiply" => Arc::new(MultiplyExpression::new(l, r)),
-                "divide" => Arc::new(DivideExpression::new(l, r)),
+                "eq" => Arc::new(EqExpr::new(l, r)),
+                "neq" => Arc::new(NeqExpr::new(l, r)),
+                "lt" => Arc::new(LtExpr::new(l, r)),
+                "lteq" => Arc::new(LtEqExpr::new(l, r)),
+                "gt" => Arc::new(GtExpr::new(l, r)),
+                "gteq" => Arc::new(GtEqExpr::new(l, r)),
+                "and" => Arc::new(AndExpr::new(l, r)),
+                "or" => Arc::new(OrExpr::new(l, r)),
+                "add" => Arc::new(AddExpr::new(l, r)),
+                "subtract" => Arc::new(SubtractExpr::new(l, r)),
+                "multiply" => Arc::new(MultiplyExpr::new(l, r)),
+                "divide" => Arc::new(DivideExpr::new(l, r)),
                 other => panic!("Unsupported binary operator: '{other}'"),
             }
         }
@@ -185,16 +188,16 @@ pub fn deserialize_physical_expr(node: &pb::PhysicalExprNode) -> Arc<dyn Express
                 c.expr.as_deref().expect("PhysicalCastExprNode.expr unset"),
             );
             let dt = from_proto_arrow_type(c.arrow_type);
-            Arc::new(CastExpression::new(expr, dt))
+            Arc::new(CastExpr::new(expr, dt))
         }
         None => panic!("Physical expression type not set in protobuf"),
     }
 }
 
-/// `pb::PhysicalAggregateExprNode` → `Arc<dyn AggregateExpression>`.
+/// `pb::PhysicalAggregateExprNode` → `Arc<dyn AggregateExpr>`.
 pub fn deserialize_physical_aggr_expr(
     node: &pb::PhysicalAggregateExprNode,
-) -> Arc<dyn AggregateExpression> {
+) -> Arc<dyn AggregateExpr> {
     let input = deserialize_physical_expr(
         node.input_expr
             .as_ref()
@@ -207,11 +210,11 @@ pub fn deserialize_physical_aggr_expr(
         )
     });
     match fn_kind {
-        pb::AggregateFunction::Sum => Arc::new(SumExpression::new(input)),
-        pb::AggregateFunction::Min => Arc::new(MinExpression::new(input)),
-        pb::AggregateFunction::Max => Arc::new(MaxExpression::new(input)),
-        pb::AggregateFunction::Avg => Arc::new(AvgExpression::new(input)),
-        pb::AggregateFunction::Count => Arc::new(CountExpression::new(input)),
+        pb::AggregateFunction::Sum => Arc::new(SumExpr::new(input)),
+        pb::AggregateFunction::Min => Arc::new(MinExpr::new(input)),
+        pb::AggregateFunction::Max => Arc::new(MaxExpr::new(input)),
+        pb::AggregateFunction::Avg => Arc::new(AvgExpr::new(input)),
+        pb::AggregateFunction::Count => Arc::new(CountExpr::new(input)),
         other => panic!("Unsupported aggregate function: {other:?}"),
     }
 }
@@ -264,26 +267,26 @@ fn aggregate_mode_from_proto(mode: i32) -> AggregateMode {
 
 /// `pb::ArrowType` (i32) → `arrow_schema::DataType`. Same shape as
 /// `protobuf_deserializer::from_proto_arrow_type`; duplicated here so the
-/// `CastExpression` arm doesn't need to reach across files. The two
+/// `CastExpr` arm doesn't need to reach across files. The two
 /// definitions are deliberately identical.
 fn from_proto_arrow_type(arrow_type: i32) -> DataType {
     let at = pb::ArrowType::try_from(arrow_type).unwrap_or_else(|_| {
         panic!("Cannot deserialize Arrow data type enum from protobuf: {arrow_type}")
     });
     match at {
-        pb::ArrowType::Bool => arrow_types::BOOLEAN_TYPE,
-        pb::ArrowType::Int8 => arrow_types::INT8_TYPE,
-        pb::ArrowType::Int16 => arrow_types::INT16_TYPE,
-        pb::ArrowType::Int32 => arrow_types::INT32_TYPE,
-        pb::ArrowType::Int64 => arrow_types::INT64_TYPE,
-        pb::ArrowType::Uint8 => arrow_types::UINT8_TYPE,
-        pb::ArrowType::Uint16 => arrow_types::UINT16_TYPE,
-        pb::ArrowType::Uint32 => arrow_types::UINT32_TYPE,
-        pb::ArrowType::Uint64 => arrow_types::UINT64_TYPE,
-        pb::ArrowType::Float => arrow_types::FLOAT_TYPE,
-        pb::ArrowType::Double => arrow_types::DOUBLE_TYPE,
-        pb::ArrowType::Utf8 => arrow_types::STRING_TYPE,
-        pb::ArrowType::Date32 => arrow_types::DATE_DAY_TYPE,
+        pb::ArrowType::Bool => arrow_schema::DataType::Boolean,
+        pb::ArrowType::Int8 => arrow_schema::DataType::Int8,
+        pb::ArrowType::Int16 => arrow_schema::DataType::Int16,
+        pb::ArrowType::Int32 => arrow_schema::DataType::Int32,
+        pb::ArrowType::Int64 => arrow_schema::DataType::Int64,
+        pb::ArrowType::Uint8 => arrow_schema::DataType::UInt8,
+        pb::ArrowType::Uint16 => arrow_schema::DataType::UInt16,
+        pb::ArrowType::Uint32 => arrow_schema::DataType::UInt32,
+        pb::ArrowType::Uint64 => arrow_schema::DataType::UInt64,
+        pb::ArrowType::Float => arrow_schema::DataType::Float32,
+        pb::ArrowType::Double => arrow_schema::DataType::Float64,
+        pb::ArrowType::Utf8 => arrow_schema::DataType::Utf8,
+        pb::ArrowType::Date32 => arrow_schema::DataType::Date32,
         other => panic!("Cannot deserialize Arrow type from protobuf: {other:?}"),
     }
 }

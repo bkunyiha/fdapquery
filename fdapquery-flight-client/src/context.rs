@@ -1,6 +1,6 @@
 //!
 //! Interactive Flight client: same API shape as
-//! [`fdapquery_execution::ExecutionContext`] and [`fdapquery_distributed::DistributedContext`]
+//! [`fdapquery::SessionContext`] and [`fdapquery_distributed::DistributedContext`]
 //! (`register_csv` / `register` / `sql` / `execute`), but the execution
 //! goes over the wire via an `arrow_flight::FlightServiceClient` instead of
 //! running locally or through the distributed scheduler.
@@ -8,7 +8,7 @@
 //! ## Where this fits in the workspace
 //!
 //! ```text
-//!   ExecutionContext       — single-process, runs the plan locally
+//!   SessionContext       — single-process, runs the plan locally
 //!   DistributedContext<C>  — distributed, routes via Scheduler<C>
 //!   Context (this file)    — interactive Flight, routes via a single Client
 //! ```
@@ -22,7 +22,7 @@ use crate::endpoint::Endpoint;
 use anyhow::Result;
 use fdapquery_catalog::CsvDataSource;
 use fdapquery_datatypes::RecordBatch;
-use fdapquery_expr::{DataFrame, LogicalPlan, Scan};
+use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
 use fdapquery_proto::{pb, serialize_logical_plan};
 use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 /// CSV batch size for tables registered through `register_csv`. Matches the
 /// workspace's other contexts (`fdapquery_distributed::DistributedContext`,
-/// `fdapquery_execution::ExecutionContext`).
+/// `fdapquery::SessionContext`).
 const CSV_BATCH_SIZE: usize = 1024;
 
 /// Interactive client-side context for executing queries via a single
@@ -58,15 +58,15 @@ impl Context {
     /// Register a CSV file as a table.
     ///
     /// Mirrors `DistributedContext::register_csv` line-for-line — same
-    /// `CsvDataSource::new(...)` construction, same `Scan` node, same
+    /// `CsvDataSource::new(...)` construction, same `TableScan` node, same
     /// `register(...)` delegation. The two contexts diverge only at
     /// `sql`/`execute`: one routes through a `Scheduler`, the other
     /// through a `Client`.
     pub fn register_csv(&mut self, table_name: &str, path: &str, has_header: bool) {
         let ds = CsvDataSource::new(path, None, has_header, CSV_BATCH_SIZE);
-        let scan = Scan::new(path, Arc::new(ds), vec![])
+        let scan = TableScan::new(path, Arc::new(ds), vec![])
             .expect("Context::register_csv: scan construction");
-        let df = DataFrame::new(LogicalPlan::Scan(scan));
+        let df = DataFrame::new(LogicalPlan::TableScan(scan));
         self.register(table_name, df);
     }
 

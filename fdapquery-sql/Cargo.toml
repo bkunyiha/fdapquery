@@ -11,12 +11,12 @@ rust-version.workspace = true
 arrow-schema = { workspace = true }
 chrono       = { workspace = true }      # NaiveDate::parse for SqlExpr::Date literal lowering
 
-fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
-fdapquery-expr = { path = "../fdapquery-expr" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
 
 # The hand-rolled Pratt parser is the pedagogical core of this module — do
 # not replace it with `sqlparser-rs` or another third-party parser.
 
 [dev-dependencies]
 # Used only by the SQL-planner test, which builds a Scan over a CsvDataSource.
-fdapquery-catalog = { path = "../fdapquery-catalog" }
+fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }

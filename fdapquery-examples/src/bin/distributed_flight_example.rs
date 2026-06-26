@@ -16,7 +16,7 @@
 //!    `FlightExecutorClient::execute_final_task` →
 //!    `Client::do_get(pb::Action.task = Some(...))` → tonic gRPC →
 //!    `FdapQueryFlightProducer::do_get` (distributed branch) →
-//!    `task.plan.execute(&self.ctx)` → `HashAggregateExec(Final)` →
+//!    `task.plan.execute(&self.ctx)` → `AggregateExec(Final)` →
 //!    `ShuffleReaderExec::execute(&ctx)` → batches streamed back through
 //!    `FlightDataEncoder`.
 //!

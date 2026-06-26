@@ -5,25 +5,25 @@
 //! this is the one accumulator that overrides `intermediate_value` to return an
 //! [`AccumulatorValue::AvgState`] rather than a scalar.
 
-use crate::aggregate_expression::AggregateExpression;
-use crate::expressions::{Accumulator, AccumulatorValue, Expression, number_to_f64};
+use crate::aggregate_expression::AggregateExpr;
+use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr, number_to_f64};
 use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `AVG(expr)`.
-pub struct AvgExpression {
-    expr: Arc<dyn Expression>,
+pub struct AvgExpr {
+    expr: Arc<dyn PhysicalExpr>,
 }
 
-impl AvgExpression {
-    pub fn new(expr: Arc<dyn Expression>) -> Self {
+impl AvgExpr {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self { expr }
     }
 }
 
-impl AggregateExpression for AvgExpression {
-    fn input_expression(&self) -> Arc<dyn Expression> {
+impl AggregateExpr for AvgExpr {
+    fn input_expression(&self) -> Arc<dyn PhysicalExpr> {
         Arc::clone(&self.expr)
     }
     fn create_accumulator(&self) -> Box<dyn Accumulator> {
@@ -34,7 +34,7 @@ impl AggregateExpression for AvgExpression {
     }
 }
 
-impl fmt::Display for AvgExpression {
+impl fmt::Display for AvgExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "AVG({})", self.expr)
     }

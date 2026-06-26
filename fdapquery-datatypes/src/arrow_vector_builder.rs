@@ -19,7 +19,7 @@
 //!   `Decimal128Array` / `Decimal256Array` with precision + scale in the
 //!   `DataType`; deferred until a downstream module needs them.
 
-use crate::{arrow_field_vector::ArrowFieldVector, scalar_value::ScalarValue};
+use crate::{ScalarValue, arrow_field_vector::ArrowFieldVector};
 use arrow_array::ArrayRef;
 use arrow_array::builder::{
     BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int8Builder,
@@ -191,7 +191,6 @@ impl ArrowVectorBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow_types::{INT32_TYPE, STRING_TYPE};
     use crate::column_vector::ColumnVector; // for v.size() / v.get_value()
 
     /// Constructs an `Int32` vector by populating it 0..10 via
@@ -199,7 +198,7 @@ mod tests {
     /// index.
     #[test]
     fn build_int_vector() {
-        let mut b = ArrowVectorBuilder::new(&INT32_TYPE, 10);
+        let mut b = ArrowVectorBuilder::new(&arrow_schema::DataType::Int32, 10);
         for i in 0..10_i32 {
             b.append_value(&ScalarValue::Int32(i));
         }
@@ -212,7 +211,7 @@ mod tests {
 
     #[test]
     fn build_string_vector_with_nulls() {
-        let mut b = ArrowVectorBuilder::new(&STRING_TYPE, 3);
+        let mut b = ArrowVectorBuilder::new(&arrow_schema::DataType::Utf8, 3);
         b.append_value(&ScalarValue::Utf8("hello".to_string()));
         b.append_null();
         b.append_value(&ScalarValue::Utf8("world".to_string()));
@@ -232,7 +231,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "cannot append")]
     fn type_mismatch_panics() {
-        let mut b = ArrowVectorBuilder::new(&INT32_TYPE, 1);
+        let mut b = ArrowVectorBuilder::new(&arrow_schema::DataType::Int32, 1);
         b.append_value(&ScalarValue::Utf8("nope".to_string()));
     }
 }

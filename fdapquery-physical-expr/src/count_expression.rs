@@ -2,25 +2,25 @@
 //! `COUNT(expr)` — number of non-null values. Always returns an `Int32` (the
 //! count is `0` for an empty/all-null group, never null).
 
-use crate::aggregate_expression::AggregateExpression;
-use crate::expressions::{Accumulator, AccumulatorValue, Expression, number_to_i64};
+use crate::aggregate_expression::AggregateExpr;
+use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr, number_to_i64};
 use fdapquery_datatypes::{Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `COUNT(expr)`.
-pub struct CountExpression {
-    expr: Arc<dyn Expression>,
+pub struct CountExpr {
+    expr: Arc<dyn PhysicalExpr>,
 }
 
-impl CountExpression {
-    pub fn new(expr: Arc<dyn Expression>) -> Self {
+impl CountExpr {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self { expr }
     }
 }
 
-impl AggregateExpression for CountExpression {
-    fn input_expression(&self) -> Arc<dyn Expression> {
+impl AggregateExpr for CountExpr {
+    fn input_expression(&self) -> Arc<dyn PhysicalExpr> {
         Arc::clone(&self.expr)
     }
     fn create_accumulator(&self) -> Box<dyn Accumulator> {
@@ -31,7 +31,7 @@ impl AggregateExpression for CountExpression {
     }
 }
 
-impl fmt::Display for CountExpression {
+impl fmt::Display for CountExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "COUNT({})", self.expr)
     }

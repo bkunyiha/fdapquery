@@ -11,7 +11,7 @@
 //!   Arrow type via `array.as_any().downcast_ref::<...>()`.
 
 use crate::{FdapQueryError, Result};
-use crate::{column_vector::ColumnVector, scalar_value::ScalarValue};
+use crate::{ScalarValue, column_vector::ColumnVector};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int8Array,
     Int16Array, Int32Array, Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array,

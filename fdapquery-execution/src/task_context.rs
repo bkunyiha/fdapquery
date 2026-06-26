@@ -22,7 +22,7 @@ use std::sync::Arc;
 /// tunable surfaces.
 ///
 /// Same shape as DataFusion's `SessionConfig`. v0.1 carries just the CSV
-/// batch-size setting from rquery's `ExecutionContext::settings`.
+/// batch-size setting from rquery's `SessionContext::settings`.
 #[derive(Debug, Clone, Default)]
 pub struct SessionConfig {
     pub settings: HashMap<String, String>,
@@ -34,7 +34,7 @@ impl SessionConfig {
     }
 
     /// CSV batch size — the one setting carried over from rquery's
-    /// `ExecutionContext`. Returns `1024` if unset.
+    /// `SessionContext`. Returns `1024` if unset.
     pub fn csv_batch_size(&self) -> usize {
         self.settings
             .get("rquery.csv.batchSize")

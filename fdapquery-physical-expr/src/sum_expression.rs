@@ -6,25 +6,25 @@
 //! which matches arrow's typed columns and avoids a per-row type change.
 //! `Int32`/`Int64`/`Float64` — the common cases for summation — are unaffected.
 
-use crate::aggregate_expression::AggregateExpression;
-use crate::expressions::{Accumulator, AccumulatorValue, Expression};
+use crate::aggregate_expression::AggregateExpr;
+use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr};
 use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `SUM(expr)`.
-pub struct SumExpression {
-    expr: Arc<dyn Expression>,
+pub struct SumExpr {
+    expr: Arc<dyn PhysicalExpr>,
 }
 
-impl SumExpression {
-    pub fn new(expr: Arc<dyn Expression>) -> Self {
+impl SumExpr {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self { expr }
     }
 }
 
-impl AggregateExpression for SumExpression {
-    fn input_expression(&self) -> Arc<dyn Expression> {
+impl AggregateExpr for SumExpr {
+    fn input_expression(&self) -> Arc<dyn PhysicalExpr> {
         Arc::clone(&self.expr)
     }
     fn create_accumulator(&self) -> Box<dyn Accumulator> {
@@ -35,7 +35,7 @@ impl AggregateExpression for SumExpression {
     }
 }
 
-impl fmt::Display for SumExpression {
+impl fmt::Display for SumExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SUM({})", self.expr)
     }

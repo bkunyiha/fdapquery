@@ -8,13 +8,13 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
-fdapquery-expr = { path = "../fdapquery-expr" }
-fdapquery-sql          = { path = "../fdapquery-sql" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
+fdapquery-sql = { version = "0.1.0", path = "../fdapquery-sql" }
 rand         = { workspace = true }
 arrow-schema = { workspace = true }   # for `DataType` in `create_values` dispatch
 
 [dev-dependencies]
 # Smoke test reads testdata/employee.csv through a `CsvDataSource` to drive
 # `create_plan()`; the data-source crate is only needed at test time.
-fdapquery-catalog   = { path = "../fdapquery-catalog" }
+fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }

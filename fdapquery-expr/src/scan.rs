@@ -4,13 +4,13 @@
 
 use crate::logical_plan::LogicalPlan;
 use fdapquery_catalog::TableProvider;
-use fdapquery_datatypes::{Result, Schema};
+use fdapquery_datatypes::{FdapQueryError, Result, Schema};
 use std::fmt;
 use std::sync::Arc;
 
 /// A scan of a [`DataSource`], optionally projecting a subset of columns.
 #[derive(Clone)]
-pub struct Scan {
+pub struct TableScan {
     pub path: String,
     pub data_source: Arc<dyn TableProvider>,
     pub projection: Vec<String>,
@@ -18,7 +18,7 @@ pub struct Scan {
     schema: Schema,
 }
 
-impl Scan {
+impl TableScan {
     pub fn new(
         path: impl Into<String>,
         data_source: Arc<dyn TableProvider>,
@@ -39,7 +39,22 @@ impl Scan {
         if projection.is_empty() {
             Ok(schema)
         } else {
-            schema.select(projection)
+            // Resolve names to indices, then use arrow's `Schema::project`.
+            let indices: Vec<usize> = projection
+                .iter()
+                .map(|name| {
+                    schema
+                        .fields()
+                        .iter()
+                        .position(|f| f.name() == name)
+                        .ok_or_else(|| {
+                            FdapQueryError::SchemaError(format!(
+                                "Scan::derive_schema: column '{name}' not in source schema"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<usize>>>()?;
+            Ok(schema.project(&indices)?)
         }
     }
 
@@ -53,14 +68,14 @@ impl Scan {
     }
 }
 
-impl fmt::Display for Scan {
+impl fmt::Display for TableScan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.projection.is_empty() {
-            write!(f, "Scan: {}; projection=None", self.path)
+            write!(f, "TableScan: {}; projection=None", self.path)
         } else {
             write!(
                 f,
-                "Scan: {}; projection=[{}]",
+                "TableScan: {}; projection=[{}]",
                 self.path,
                 self.projection.join(", ")
             )

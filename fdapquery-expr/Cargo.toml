@@ -10,5 +10,5 @@ rust-version.workspace = true
 [dependencies]
 arrow-schema = { workspace = true }
 chrono       = { workspace = true }      # NaiveDate for `LiteralDate`
-fdapquery-datatypes    = { path = "../fdapquery-datatypes" }
-fdapquery-catalog   = { path = "../fdapquery-catalog" }
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }

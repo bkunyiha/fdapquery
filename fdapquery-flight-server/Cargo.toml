@@ -27,14 +27,18 @@ futures          = { workspace = true }
 # uses directly.
 prost            = { workspace = true }
 
-# Internal — eight siblings.
-fdapquery-datatypes      = { path = "../fdapquery-datatypes" }
-fdapquery-catalog     = { path = "../fdapquery-catalog" }
-fdapquery-expr   = { path = "../fdapquery-expr" }
-fdapquery-physical-plan  = { path = "../fdapquery-physical-plan" }
-fdapquery-sql            = { path = "../fdapquery-sql" }
-fdapquery-proto       = { path = "../fdapquery-proto" }
-fdapquery-execution      = { path = "../fdapquery-execution" }
+# Internal siblings.
+# Session 15c — `ExecutionContext` moved to the `fdapquery` umbrella
+# crate; `fdap_query_flight_producer.rs` imports it via
+# `use fdapquery::ExecutionContext;`.
+fdapquery               = { version = "0.1.0", path = "../fdapquery" }
+fdapquery-datatypes     = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-catalog       = { version = "0.1.0", path = "../fdapquery-catalog" }
+fdapquery-expr          = { version = "0.1.0", path = "../fdapquery-expr" }
+fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
+fdapquery-sql           = { version = "0.1.0", path = "../fdapquery-sql" }
+fdapquery-proto         = { version = "0.1.0", path = "../fdapquery-proto" }
+fdapquery-execution     = { version = "0.1.0", path = "../fdapquery-execution" }
 
 # `tracing` for log macros (matches distributed/'s logging choice — both crates
 # emit `info!`/`debug!`/`warn!` so a reader graduating to DataFusion source sees

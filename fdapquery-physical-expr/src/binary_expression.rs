@@ -5,29 +5,29 @@
 //! that each concrete operator implements.
 //!
 //! ## Trait with a default method
-//! [`BinaryExpression`] supplies the template logic
-//! ([`BinaryExpression::evaluate_binary`]) as a default method and leaves
+//! [`BinaryExpr`] supplies the template logic
+//! ([`BinaryExpr::evaluate_binary`]) as a default method and leaves
 //! `evaluate_pair` for the concrete type to implement — a clean open/closed
 //! split. A concrete operator then writes a trivial
-//! `impl Expression { fn evaluate(..) { self.evaluate_binary(input) } }`
-//! to plug the template back into the root [`Expression`] trait. (A sub-trait
+//! `impl PhysicalExpr { fn evaluate(..) { self.evaluate_binary(input) } }`
+//! to plug the template back into the root [`PhysicalExpr`] trait. (A sub-trait
 //! cannot supply a *super*-trait's required method as a default, which is why the
 //! delegate line is written out explicitly at each leaf rather than being hidden
 //! by a blanket impl — blanket impls over multiple operator families would also
 //! collide under Rust's coherence rules.)
 
-use crate::expressions::Expression;
+use crate::expressions::PhysicalExpr;
 use arrow_schema::DataType;
 use fdapquery_datatypes::{ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue};
 use std::sync::Arc;
 
 /// A binary expression: left and right operands, with shared
 /// evaluate-both-then-coerce logic.
-pub trait BinaryExpression: Expression {
+pub trait BinaryExpr: PhysicalExpr {
     /// The left operand expression.
-    fn left(&self) -> &Arc<dyn Expression>;
+    fn left(&self) -> &Arc<dyn PhysicalExpr>;
     /// The right operand expression.
-    fn right(&self) -> &Arc<dyn Expression>;
+    fn right(&self) -> &Arc<dyn PhysicalExpr>;
 
     /// Operator-specific evaluation over two already-evaluated columns.
     fn evaluate_pair(
@@ -52,7 +52,7 @@ pub trait BinaryExpression: Expression {
 
         if ll.get_type() != rr.get_type() {
             // Attempt type coercion for numeric types (this fork's extension of
-            // the upstream BinaryExpression — the snippet-omitted block).
+            // the upstream BinaryExpr — the snippet-omitted block).
             let (cl, cr) = coerce_types(ll, rr)?;
             return self.evaluate_pair(cl.as_ref(), cr.as_ref());
         }

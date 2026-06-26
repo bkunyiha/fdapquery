@@ -29,4 +29,4 @@ pub mod table_provider;
 pub use csv_data_source::CsvDataSource;
 pub use in_memory_data_source::InMemoryDataSource;
 pub use parquet_data_source::ParquetDataSource;
-pub use table_provider::{BoxRecordBatchStream, TableProvider};
+pub use table_provider::{SendableRecordBatchStream, TableProvider};

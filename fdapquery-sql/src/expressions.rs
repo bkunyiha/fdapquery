@@ -1,5 +1,5 @@
 //! The SQL **AST** produced by the parser. This is distinct from the
-//! logical-plan `LogicalExpr`: `SqlPlanner` translates this untyped, pre-binding
+//! logical-plan `Expr`: `SqlPlanner` translates this untyped, pre-binding
 //! syntax tree into the schema-aware logical expressions.
 //!
 //! ## Notes
@@ -51,7 +51,7 @@ pub enum SqlExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SqlSelect {
     pub projection: Vec<SqlExpr>,
-    pub selection: Option<SqlExpr>,
+    pub filter: Option<SqlExpr>,
     pub group_by: Vec<SqlExpr>,
     pub order_by: Vec<SqlExpr>,
     pub having: Option<SqlExpr>,

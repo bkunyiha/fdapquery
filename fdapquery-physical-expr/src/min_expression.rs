@@ -1,25 +1,25 @@
 //!
 //! `MIN(expr)` — keeps the smallest non-null value seen.
 
-use crate::aggregate_expression::{AggregateExpression, scalar_lt};
-use crate::expressions::{Accumulator, AccumulatorValue, Expression};
+use crate::aggregate_expression::{AggregateExpr, scalar_lt};
+use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr};
 use fdapquery_datatypes::{Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `MIN(expr)`.
-pub struct MinExpression {
-    expr: Arc<dyn Expression>,
+pub struct MinExpr {
+    expr: Arc<dyn PhysicalExpr>,
 }
 
-impl MinExpression {
-    pub fn new(expr: Arc<dyn Expression>) -> Self {
+impl MinExpr {
+    pub fn new(expr: Arc<dyn PhysicalExpr>) -> Self {
         Self { expr }
     }
 }
 
-impl AggregateExpression for MinExpression {
-    fn input_expression(&self) -> Arc<dyn Expression> {
+impl AggregateExpr for MinExpr {
+    fn input_expression(&self) -> Arc<dyn PhysicalExpr> {
         Arc::clone(&self.expr)
     }
     fn create_accumulator(&self) -> Box<dyn Accumulator> {
@@ -30,7 +30,7 @@ impl AggregateExpression for MinExpression {
     }
 }
 
-impl fmt::Display for MinExpression {
+impl fmt::Display for MinExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "MIN({})", self.expr)
     }
