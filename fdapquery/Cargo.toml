@@ -8,14 +8,25 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
-# Session 15c — `ExecutionContext` / `ParallelContext` moved here
-# from `fdapquery-execution`, so the umbrella now needs `arrow`,
-# `futures`, and `rayon` directly.
+# The `arrow` umbrella mirrors DataFusion-core's per-file usage pattern
+# (`use arrow::datatypes::DataType`, `use arrow::array::ArrayRef`, etc.).
+# Sub-crate imports still work for the paths where fdapquery diverges
+# (`arrow-schema` re-exported by `fdapquery-datatypes` for example),
+# but new code inside this umbrella crate should reach for
+# `arrow::datatypes::*` / `arrow::array::*` to match DataFusion-core.
 arrow                         = { workspace = true }
+# `futures` and `rayon` — `SessionContext` / `ParallelContext` reach
+# for the `Stream` trait and rayon's work-stealing pool respectively.
 futures                       = { workspace = true }
 rayon                         = { workspace = true }
+# `DefaultPhysicalPlanner::create_physical_plan` (in
+# `src/physical_planner.rs`) is `async fn`; the trait impl desugars via
+# `async-trait` for dyn-safety. The recursive inherent method body uses
+# a manual `Box::pin(async move { ... })` future.
+async-trait                   = { workspace = true }
 fdapquery-catalog             = { version = "0.1.0", path = "../fdapquery-catalog" }
 fdapquery-common              = { version = "0.1.0", path = "../fdapquery-common" }
+fdapquery-datasource          = { version = "0.1.0", path = "../fdapquery-datasource" }
 fdapquery-datatypes           = { version = "0.1.0", path = "../fdapquery-datatypes" }
 fdapquery-execution           = { version = "0.1.0", path = "../fdapquery-execution" }
 fdapquery-expr                = { version = "0.1.0", path = "../fdapquery-expr" }
@@ -24,6 +35,12 @@ fdapquery-functions-aggregate = { version = "0.1.0", path = "../fdapquery-functi
 fdapquery-optimizer           = { version = "0.1.0", path = "../fdapquery-optimizer" }
 fdapquery-physical-expr       = { version = "0.1.0", path = "../fdapquery-physical-expr" }
 fdapquery-physical-plan       = { version = "0.1.0", path = "../fdapquery-physical-plan" }
+# Session 15d-1 #121 — physical-optimizer crate hosts the
+# `PhysicalOptimizerRule` trait and the `PhysicalOptimizer` driver.
+# The umbrella re-exports both at the crate root and uses the driver
+# as the `physical_optimizers` field of `SessionState`. Mirrors
+# DataFusion's `datafusion::physical_optimizer` re-export.
+fdapquery-physical-optimizer  = { version = "0.1.0", path = "../fdapquery-physical-optimizer" }
 fdapquery-sql                 = { version = "0.1.0", path = "../fdapquery-sql" }
 
 [dev-dependencies]
@@ -36,3 +53,6 @@ tokio            = { workspace = true }
 # (now that the `arrow_types` re-export module is gone) for constructing
 # test `Field`s and `cast(...)` arguments.
 arrow-schema     = { workspace = true }
+
+[lints]
+workspace = true

@@ -3,11 +3,12 @@
 
 use crate::aggregate_expression::{AggregateExpr, scalar_gt};
 use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr};
-use fdapquery_datatypes::{Result, ScalarValue};
+use fdapquery_common::{Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `MAX(expr)`.
+#[derive(Debug)]
 pub struct MaxExpr {
     expr: Arc<dyn PhysicalExpr>,
 }

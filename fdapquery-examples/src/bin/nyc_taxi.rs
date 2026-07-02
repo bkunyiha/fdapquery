@@ -63,7 +63,10 @@ async fn main() {
         .expect("nyc_taxi: optimize");
     println!("Optimized Plan:\t{}", format(&optimized_plan));
 
-    let stream = ctx.execute(df.logical_plan()).expect("nyc_taxi: execute");
+    let stream = ctx
+        .execute(df.logical_plan())
+        .await
+        .expect("nyc_taxi: execute");
     let batches: Vec<RecordBatch> = stream.try_collect().await.expect("nyc_taxi: drain stream");
     for batch in batches {
         // Print each batch's schema (arrow-rs `Schema`'s `Debug` form) and

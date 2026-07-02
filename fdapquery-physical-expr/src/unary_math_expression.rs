@@ -9,8 +9,11 @@
 //! required `apply` kernel. Each concrete function implements
 //! `UnaryMathExpr` and a one-line `PhysicalExpr` delegate.
 
+use crate::columnar_value::ColumnarValue;
 use crate::expressions::{PhysicalExpr, number_to_f64};
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, Result, ScalarValue};
+use arrow_schema::{DataType, Schema};
+use fdapquery_common::{ArrowVectorBuilder, Result, ScalarValue};
+use fdapquery_datatypes::{RecordBatch, record_batch};
 use std::fmt;
 use std::sync::Arc;
 
@@ -24,23 +27,24 @@ pub trait UnaryMathExpr: PhysicalExpr {
 
     /// Template method: evaluate the input, then map
     /// each non-null value through `apply`, producing a `Float64` column.
-    fn evaluate_unary(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
-        let n = self.input().evaluate(input)?;
-        let mut builder = ArrowVectorBuilder::new(&arrow_schema::DataType::Float64, n.size());
-        for i in 0..n.size() {
-            let value = n.get_value(i)?;
+    fn evaluate_unary(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let num_rows = record_batch::row_count(batch);
+        let n = self.input().evaluate(batch)?.into_array(num_rows)?;
+        let mut builder = ArrowVectorBuilder::new(&arrow_schema::DataType::Float64, n.len());
+        for i in 0..n.len() {
+            let value = ScalarValue::try_from_array(&n, i)?;
             if value.is_null() {
                 builder.append_null();
             } else {
                 builder.append_value(&ScalarValue::Float64(self.apply(number_to_f64(&value)?)));
             }
         }
-        builder.set_value_count(n.size());
-        Ok(Box::new(builder.build()))
+        Ok(ColumnarValue::Array(builder.build()))
     }
 }
 
 /// Square root.
+#[derive(Debug)]
 pub struct Sqrt {
     expr: Arc<dyn PhysicalExpr>,
 }
@@ -61,8 +65,16 @@ impl UnaryMathExpr for Sqrt {
 }
 
 impl PhysicalExpr for Sqrt {
-    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
-        self.evaluate_unary(input)
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        self.evaluate_unary(batch)
+    }
+
+    /// `sqrt(x)` is always evaluated in `Float64` — the runtime builds a
+    /// `Float64` result column in [`UnaryMathExpr::evaluate_unary`].
+    /// DataFusion exposes `sqrt` as a scalar UDF whose declared
+    /// `return_type` is also `Float64`.
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Float64)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -77,6 +89,7 @@ impl fmt::Display for Sqrt {
 }
 
 /// Natural logarithm.
+#[derive(Debug)]
 pub struct Log {
     expr: Arc<dyn PhysicalExpr>,
 }
@@ -97,8 +110,15 @@ impl UnaryMathExpr for Log {
 }
 
 impl PhysicalExpr for Log {
-    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
-        self.evaluate_unary(input)
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        self.evaluate_unary(batch)
+    }
+
+    /// `ln(x)` is always evaluated in `Float64` — the runtime builds a
+    /// `Float64` result column in [`UnaryMathExpr::evaluate_unary`].
+    /// DataFusion's `ln` scalar UDF declares `return_type` `Float64`.
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Float64)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -109,5 +129,27 @@ impl PhysicalExpr for Log {
 impl fmt::Display for Log {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "log({})", self.expr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::Literal;
+    use fdapquery_common::ScalarValue;
+
+    /// `Sqrt` and `Log` always produce a `Float64` column —
+    /// `data_type` returns `Float64` regardless of input schema or inner
+    /// expression's type. Matches DataFusion's `sqrt`/`ln` UDFs.
+    #[test]
+    fn data_type_is_float64() {
+        let schema = arrow_schema::Schema::empty();
+        let inner = Arc::new(Literal::new(ScalarValue::Int64(4))) as Arc<dyn PhysicalExpr>;
+
+        let sqrt = Sqrt::new(inner.clone());
+        assert_eq!(sqrt.data_type(&schema).unwrap(), DataType::Float64);
+
+        let log = Log::new(inner);
+        assert_eq!(log.data_type(&schema).unwrap(), DataType::Float64);
     }
 }

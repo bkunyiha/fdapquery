@@ -10,7 +10,7 @@
 //! `FlightExecutorClient::execute_task` ships the intermediate stage's
 //! `ShuffleWriterExec` task via `do_action`,
 //! `FlightExecutorClient::execute_final_task` ships the final stage's
-//! plan via `do_get` with the `pb::Action.task` payload. The server
+//! plan via `do_get` with the `protobuf::Action.task` payload. The server
 //! runs `task.plan.execute(&self.ctx)` and the context flows through
 //! every operator including `ShuffleReaderExec` because the
 //! `PhysicalPlan::execute` trait method takes `&ExecutorContext` as a
@@ -29,7 +29,7 @@
 //! ## Threading model — async test, server in a background thread
 //!
 //! `Client::connect`, `FlightExecutorClient::connect`, and the scheduler's
-//! `execute()` are all `async fn` after Phase B, so the test runs on a
+//! `execute` are all `async fn`, so the test runs on a
 //! tokio runtime via `#[tokio::test]`. The server still runs in a
 //! `std::thread::spawn`ed background thread that owns its own tokio
 //! runtime so the test and server runtimes don't share workers; an
@@ -51,32 +51,40 @@ fn unique_shuffle_dir(tag: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!("/tmp/rquery-shuffle-distributed-{tag}-{nanos}")
+    format!("/tmp/fdapquery-shuffle-distributed-{tag}-{nanos}")
 }
 
 /// Spawn an in-process flight-server in a background thread with its own
-/// tokio runtime. Returns the bound `SocketAddr` and the path to its
-/// shuffle directory (for cleanup at the end of the test).
-fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) {
+/// tokio runtime. Takes a `DistributedConfig` so the server's `RuntimeEnv`
+/// — and therefore its `ShuffleManager.base_dir` — is derived from
+/// `config.shuffle_dir` via `config.build_runtime_env()`. This is the
+/// wiring point: the cluster config is the single source of truth for
+/// where shuffle files land.
+fn spawn_in_process_server(
+    executor_id: &str,
+    config: &DistributedConfig,
+) -> std::net::SocketAddr {
     use arrow_flight::flight_service_server::FlightServiceServer;
     use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
-    use fdapquery_physical_plan::{RuntimeEnv, SessionConfig, ShuffleManager, TaskContext};
+    use fdapquery_physical_plan::{SessionConfig, TaskContext};
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::transport::Server;
 
-    let shuffle_dir = unique_shuffle_dir("server");
-    let shuffle_dir_for_thread = shuffle_dir.clone();
+    // Build the executor-side runtime from the config. `build_runtime_env()`
+    // reads `config.shuffle_dir` and constructs a `ShuffleManager` keyed on
+    // it — this is the wire-up that proves the field is actually consumed.
+    let runtime = Arc::new(config.build_runtime_env());
     let executor_id_owned = executor_id.to_string();
     let (tx, rx) = mpsc::channel();
 
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .expect("build server runtime");
-        runtime.block_on(async move {
+        tokio_runtime.block_on(async move {
             let listener = TcpListener::bind("127.0.0.1:0")
                 .await
                 .expect("bind random port");
@@ -86,15 +94,12 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
             // shuffle reads see locations with `executor_id != ctx.executor_id`
             // and the cross-executor fetch path (currently unimplemented)
             // would fire.
-            let env = Arc::new(RuntimeEnv::new(Arc::new(ShuffleManager::new(
-                shuffle_dir_for_thread,
-            ))));
             let ctx = Arc::new(TaskContext::new(
                 executor_id_owned,
                 "127.0.0.1",
                 addr.port(),
                 SessionConfig::new(),
-                env,
+                runtime,
             ));
             let producer = FdapQueryFlightProducer::new(ctx);
 
@@ -108,8 +113,7 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
         });
     });
 
-    let addr = rx.recv().expect("server thread sent addr");
-    (addr, shuffle_dir)
+    rx.recv().expect("server thread sent addr")
 }
 
 /// **The Phase 1 payoff test.** Run a real `SELECT state, SUM(salary) FROM
@@ -119,14 +123,22 @@ fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) 
 /// match what the in-process `SessionContext` would produce.
 #[tokio::test]
 async fn distributed_aggregate_query_end_to_end_via_flight() {
-    let (addr, shuffle_dir) = spawn_in_process_server("exec-test");
+    // Pick a shuffle dir and bake it into a placeholder config first. The
+    // server is spawned using this config's `build_runtime_env()` — proving
+    // that `config.shuffle_dir` flows into the executor's `ShuffleManager.base_dir`.
+    // We need a separate placeholder because the executor's port isn't known
+    // until the server binds; the final cluster config is built below once
+    // `addr` is known, with the same `shuffle_dir`.
+    let shuffle_dir = unique_shuffle_dir("server");
+    let server_config = DistributedConfig::new(vec![]).with_shuffle_dir(&shuffle_dir);
+    let addr = spawn_in_process_server("exec-test", &server_config);
 
     // Build the FlightExecutorClient pointed at the in-process server.
     // ExecutorConfig.port is i32; SocketAddr.port() is u16.
     let executors = vec![ExecutorConfig::new(
         "exec-test",
         "127.0.0.1",
-        addr.port() as i32,
+        i32::from(addr.port()),
     )];
     let flight_client = FlightExecutorClient::connect(&executors)
         .await
@@ -134,9 +146,17 @@ async fn distributed_aggregate_query_end_to_end_via_flight() {
 
     // Build the scheduler stack with a non-default partition count so the
     // shuffle is real. (Default partition_count = executor count = 1, which
-    // wouldn't exercise any redistribution.)
-    let config = DistributedConfig::new(executors).with_default_partitions(3);
-    let mut ctx = DistributedContext::new(config, flight_client);
+    // wouldn't exercise any redistribution.) Pin `shuffle_dir` so the
+    // planner-side config matches what the executor is actually using.
+    let config = DistributedConfig::new(executors)
+        .with_default_partitions(3)
+        .with_shuffle_dir(&shuffle_dir);
+
+    // Sanity check that the wiring holds: planner-side config and the
+    // string we passed to the executor at spawn time agree.
+    assert_eq!(config.shuffle_dir, shuffle_dir);
+
+    let mut ctx = DistributedContext::new(config.clone(), flight_client);
     ctx.register_csv("employee", EMPLOYEE_CSV, true);
 
     // Run the query. The scheduler awaits every Flight call on the
@@ -150,7 +170,6 @@ async fn distributed_aggregate_query_end_to_end_via_flight() {
 
     // Sanity check: at least one output batch and total row count matches
     // the number of distinct states in employee.csv.
-    //
     // employee.csv has 4 data rows with states: CA, CO, CO, "" (empty)
     // → 3 distinct groups → 3 output rows.
     let total_output_rows: usize = results.iter().map(|b| b.num_rows()).sum();
@@ -174,6 +193,7 @@ async fn distributed_aggregate_query_end_to_end_via_flight() {
         );
     }
 
-    // Clean up shuffle files.
-    fdapquery_physical_plan::ShuffleManager::new(shuffle_dir).cleanup_all();
+    // Clean up shuffle files via `config.shuffle_dir` — the same source of
+    // truth the executor used at write time.
+    fdapquery_physical_plan::ShuffleManager::new(&config.shuffle_dir).cleanup_all();
 }

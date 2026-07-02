@@ -1,41 +1,41 @@
-//! # sql
+//! # fdapquery-sql
 //!
-//! Hand-rolled Pratt parser and SQL → LogicalPlan compiler.
+//! SQL → `LogicalPlan` compiler. Strict mirror of `datafusion-sql`: consumes
+//! the [`sqlparser`] crate's AST directly and lowers it to fdapquery's
+//! `DataFrame`/`LogicalPlan` types via [`SqlToRel`].
 //!
 //! ## Design
+//! - Parsing is delegated to [`sqlparser`] — same version and feature set
+//!   DataFusion pins (`0.62.0`, `std` + `visitor`).
+//! - [`SqlToRel`] is the sole planner type. It lowers
+//!   `sqlparser::ast::Statement::Query(_)` (i.e. `SELECT`) into a
+//!   `DataFrame`; every other `Statement::*` returns
+//!   `FdapQueryError::NotImplemented(_)`.
+//! - File layout mirrors `datafusion/sql/src/`:
+//!   - [`planner`] — `SqlToRel` struct + `sql_statement_to_plan` entry.
+//!   - [`query`] — `Query` (SELECT + ORDER BY + LIMIT) lowering.
+//!   - [`select`] — `Select` body lowering (projection, FROM, WHERE,
+//!     GROUP BY, HAVING).
+//!   - [`relation`] — FROM-source lowering (`TableFactor::Table`).
+//!   - [`expr`] — expression dispatcher plus per-family submodules
+//!     (`binary_op`, `function`, `identifier`, `value`).
 //!
-//! - [`SqlTokenizer`](sql_tokenizer::SqlTokenizer) — lexes a SQL string
-//!   into a stream of [`Token`](tokens::Token)s.
-//! - [`PrattParser`](pratt_parser::PrattParser) trait + concrete
-//!   [`SqlParser`](sql_parser::SqlParser) — parses the token stream into
-//!   the [`SqlExpr`](expressions::SqlExpr) AST using a Pratt
-//!   precedence-climbing parser.
-//! - [`SqlPlanner`](sql_planner::SqlPlanner) — lowers `SqlExpr::Select`
-//!   into a [`fdapquery_expr::DataFrame`].
-//!
-//! ## ⚠ Design directive
-//! **The Pratt parser is the pedagogical core of this module.** Do not
-//! replace it with `sqlparser-rs` or another third-party parser without
-//! revisiting the project's stated invariants.
+//! ## What v0.1 does NOT ship
+//! - `parser.rs` (custom-dialect `Statement` extensions), `statement.rs`
+//!   (DDL/DML), `cte.rs` (WITH), `set_expr.rs` (UNION/INTERSECT/EXCEPT),
+//!   `values.rs` (VALUES), `resolve.rs`, `stack.rs`, `utils.rs`, and
+//!   `unparser/`. Those arrive with their features in future sessions.
 
-// ==============================================================
-// Per-file modules.
-// ==============================================================
-pub mod expressions;
-pub mod pratt_parser;
-pub mod sql_parser;
-pub mod sql_planner;
-pub mod sql_tokenizer;
-pub mod token_stream;
-pub mod tokens;
+pub mod expr;
+pub mod planner;
+pub mod query;
+pub mod relation;
+pub mod select;
 
-// ==============================================================
-// Re-exports for ergonomic `use sql::*;`. The Pratt parser trait must
-// be re-exported alongside `SqlParser` because parse() lives on the
-// trait — anyone calling `parser.parse(0)` needs both in scope.
-// ==============================================================
-pub use expressions::SqlExpr;
-pub use pratt_parser::PrattParser;
-pub use sql_parser::SqlParser;
-pub use sql_planner::SqlPlanner;
-pub use sql_tokenizer::SqlTokenizer;
+pub use planner::SqlToRel;
+
+/// Re-export of the underlying `sqlparser` crate so downstream code can
+/// use its AST types (`Statement`, `Expr`, etc.) without adding its own
+/// dep. Matches DataFusion's `datafusion_sql::sqlparser` re-export at
+/// `datafusion_sql::sqlparser`.
+pub use sqlparser;

@@ -20,18 +20,19 @@
 //! ```
 //!
 //! The generated Rust types land in `OUT_DIR` and are re-exposed through the
-//! `pb` module below.
+//! `protobuf` module below.
 
 // =============================================================================
 // Generated prost types from `../proto/rquery.proto`.
 //
-// The `.proto`'s `package rquery.protobuf;` line tells prost to emit a single
-// file named `rquery.protobuf.rs` in `OUT_DIR`. We include it under the local
-// `pb` module so the rest of the crate writes `pb::LogicalPlanNode` rather than
-// the longer qualified `rquery.protobuf.LogicalPlanNode`.
+// The `.proto`'s `package fdapquery.protobuf;` line tells prost to emit a single
+// file named `fdapquery.protobuf.rs` in `OUT_DIR`. We include it under the local
+// `protobuf` module so the rest of the crate writes `protobuf::LogicalPlanNode`
+// rather than the longer qualified `fdapquery.protobuf.LogicalPlanNode`.
+// Mirrors DataFusion's `datafusion-proto::protobuf` exactly.
 // =============================================================================
-pub mod pb {
-    include!(concat!(env!("OUT_DIR"), "/rquery.protobuf.rs"));
+pub mod protobuf {
+    include!(concat!(env!("OUT_DIR"), "/fdapquery.protobuf.rs"));
 }
 
 // =============================================================================
@@ -48,9 +49,9 @@ pub mod protobuf_serializer;
 // Physical-plan ser/de: free functions per DataFusion convention (see
 // file-level docs). Serializer-side leaf conversions
 // (`Schema`/`Field`/`ShuffleLocation`) live in `physical_plan_serializer.rs`
-// as `impl From<&T> for pb::T` and are used at call sites as `.into()` — no
-// explicit re-export needed. Deserializer-side leaf conversions stay as
-// free functions because the orphan rule rejects `impl From<&pb::T> for T`
+// as `impl From<&T> for protobuf::T` and are used at call sites as `.into()` —
+// no explicit re-export needed. Deserializer-side leaf conversions stay as
+// free functions because the orphan rule rejects `impl From<&protobuf::T> for T`
 // when `T` is in a foreign crate.
 pub use physical_plan_deserializer::{
     deserialize_physical_aggr_expr, deserialize_physical_expr, deserialize_physical_plan,

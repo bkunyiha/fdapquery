@@ -4,17 +4,24 @@
 //! - **Do not reinvent `RecordBatch`.** arrow-rs already provides
 //!   `arrow_array::RecordBatch` — an immutable batch of columns sharing a
 //!   schema. We re-export the arrow-rs type rather than wrapping it.
-//! - **Helpers** (`row_count`, `column_count`, `field(i)`, `to_csv`) are
-//!   free functions in this module that operate on the arrow-rs type.
+//! - **Helpers** (`row_count`, `column_count`, `to_csv`) are free functions
+//!   in this module that operate on the arrow-rs type.
 //! - **No `close()` method** — arrow-rs's `RecordBatch` is `Arc`-backed and
 //!   self-releasing.
+//!
+//! The old `field(batch, i) -> ArrowFieldVector` and
+//! `column_to_array(&dyn ColumnVector) -> ArrayRef` helpers were dropped
+//! along with the `ColumnVector` trait. Code that used to write
+//! `record_batch::field(batch, i)` now writes `batch.column(i).clone()`
+//! directly (cheap — `ArrayRef` is an `Arc<dyn Array>`).
+//! The `create(schema, Vec<Box<dyn ColumnVector>>)` builder was reshaped
+//! to take `Vec<ArrayRef>` directly; callers that previously built
+//! `ColumnVector`s now build `ArrayRef`s via [`fdapquery_common::ArrowVectorBuilder`].
 
 use crate::Result;
-use crate::ScalarValue;
-use crate::arrow_vector_builder::ArrowVectorBuilder;
 use crate::schema::Schema;
-use crate::{arrow_field_vector::ArrowFieldVector, column_vector::ColumnVector};
 use arrow_array::ArrayRef;
+use fdapquery_common::ScalarValue;
 use std::sync::Arc;
 
 /// Re-export of arrow-rs's `RecordBatch`. This *is* the type the engine
@@ -22,59 +29,22 @@ use std::sync::Arc;
 pub use arrow_array::RecordBatch;
 
 /// Number of rows in the batch.
-///
 pub fn row_count(batch: &RecordBatch) -> usize {
     batch.num_rows()
 }
 
 /// Number of columns in the batch.
-///
 pub fn column_count(batch: &RecordBatch) -> usize {
     batch.num_columns()
 }
 
-/// Access one column by index, returning it as a [`ColumnVector`].
-///
-/// allocates a new [`ArrowFieldVector`] wrapper around the existing
-/// `ArrayRef` — cheap because `ArrayRef` is `Arc<dyn Array>` and is cloned
-/// by reference.
-pub fn field(batch: &RecordBatch, i: usize) -> ArrowFieldVector {
-    ArrowFieldVector::new(batch.column(i).clone()) // batch.column(i) returns an &ArrayRef, and ArrayRef(Arc<dyn Array>), so clone is cheap and just clones the Arc 
-}
-
-/// Materialize a [`ColumnVector`] into an arrow `ArrayRef` by copying each value
-/// through the typed [`ArrowVectorBuilder`].
-///
-/// Most operator outputs are already [`ArrowFieldVector`]s (which wrap an
-/// `ArrayRef`), but *virtual* columns — [`crate::LiteralValueVector`] and the
-/// coercion wrappers in the physical-plan crate — have no backing array. arrow's
-/// `RecordBatch` stores `ArrayRef`s, so building one from evaluated columns means
-/// materializing every column uniformly. (A future rewrite could fast-path the
-/// already-materialized case via a downcast; this faithful port keeps it simple.)
-pub fn column_to_array(col: &dyn ColumnVector) -> Result<ArrayRef> {
-    let mut builder = ArrowVectorBuilder::new(&col.get_type(), col.size());
-    for i in 0..col.size() {
-        builder.append_value(&col.get_value(i)?);
-    }
-    Ok(builder.build().field)
-}
-
-/// Build a [`RecordBatch`] from a [`Schema`] and a set of evaluated columns.
-///
-/// Because we re-export arrow's `RecordBatch` (which holds `ArrayRef`s rather
-/// than `ColumnVector`s — see the file-level note), each column is
-/// materialized via [`column_to_array`] and the `Schema` is converted with
-/// [`Schema::to_arrow`]. Returns `Err(FdapQueryError::ArrowError(_))` if the
-/// columns don't match the schema (arrow's `RecordBatch::try_new` enforces
-/// that, and the `#[from]` derive on `FdapQueryError::ArrowError` lifts the
-/// arrow error into the workspace error type).
-pub fn create(schema: &Schema, columns: Vec<Box<dyn ColumnVector>>) -> Result<RecordBatch> {
-    let arrays = columns
-        .iter()
-        .map(|c| column_to_array(c.as_ref()))
-        .collect::<Result<Vec<ArrayRef>>>()?;
+/// Build a [`RecordBatch`] from a [`Schema`] and a set of evaluated arrow
+/// columns. Mirror of `arrow_array::RecordBatch::try_new` with `Schema`
+/// auto-wrapped in `Arc`, kept for source-compatibility with callers that
+/// used to pass `Vec<Box<dyn ColumnVector>>`.
+pub fn create(schema: &Schema, columns: Vec<ArrayRef>) -> Result<RecordBatch> {
     let arrow_schema = Arc::new(schema.clone());
-    RecordBatch::try_new(arrow_schema, arrays).map_err(Into::into)
+    RecordBatch::try_new(arrow_schema, columns).map_err(Into::into)
 }
 
 /// Render the batch as CSV, one row per line, comma-separated values.
@@ -89,11 +59,8 @@ pub fn to_csv(batch: &RecordBatch) -> Result<String> {
             if col_index > 0 {
                 out.push(',');
             }
-            // Wrap each column as an ArrowFieldVector so we can use the
-            // ColumnVector trait's get_value method — same path the rest of
-            // the engine uses.
-            let v = ArrowFieldVector::new(batch.column(col_index).clone());
-            match v.get_value(row_index)? {
+            let column = batch.column(col_index);
+            match ScalarValue::try_from_array(column, row_index)? {
                 ScalarValue::Null => out.push_str("null"),
                 ScalarValue::Boolean(b) => out.push_str(&b.to_string()),
                 ScalarValue::Int8(n) => out.push_str(&n.to_string()),
@@ -141,18 +108,6 @@ mod tests {
     }
 
     #[test]
-    fn field_by_index_round_trips() {
-        let b = sample_batch();
-        let id = field(&b, 0);
-        assert_eq!(id.get_value(0).unwrap(), ScalarValue::Int32(1));
-        let name = field(&b, 1);
-        assert_eq!(
-            name.get_value(2).unwrap(),
-            ScalarValue::Utf8("c".to_string())
-        );
-    }
-
-    #[test]
     fn csv_round_trip() {
         let b = sample_batch();
         let csv = to_csv(&b).expect("to_csv over a well-formed batch");
@@ -160,34 +115,17 @@ mod tests {
     }
 
     #[test]
-    fn create_materializes_columns_including_a_literal() {
+    fn create_matches_try_new() {
         use crate::Field;
-        use crate::literal_value_vector::LiteralValueVector;
-
-        // One real column (id) and one *virtual* literal column — the literal has
-        // no backing array, so `create` must materialize it.
-        let id = ArrowFieldVector::new(Arc::new(Int32Array::from(vec![1, 2, 3])));
-        let lit = LiteralValueVector::new(arrow_schema::DataType::Int32, ScalarValue::Int32(7), 3);
+        let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let name: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
         let schema = Schema::new(vec![
             Field::new("id", arrow_schema::DataType::Int32, true),
-            Field::new("seven", arrow_schema::DataType::Int32, true),
+            Field::new("name", arrow_schema::DataType::Utf8, true),
         ]);
 
-        let batch = create(&schema, vec![Box::new(id), Box::new(lit)])
-            .expect("create with matching schema and columns");
-
+        let batch = create(&schema, vec![id, name]).expect("create with matching schema");
         assert_eq!(row_count(&batch), 3);
         assert_eq!(column_count(&batch), 2);
-        assert_eq!(
-            field(&batch, 0).get_value(2).unwrap(),
-            ScalarValue::Int32(3)
-        );
-        // every row of the literal column materialized to 7
-        for i in 0..3 {
-            assert_eq!(
-                field(&batch, 1).get_value(i).unwrap(),
-                ScalarValue::Int32(7)
-            );
-        }
     }
 }

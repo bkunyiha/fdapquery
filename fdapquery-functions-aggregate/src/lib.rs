@@ -1,7 +1,7 @@
 //! # functions-aggregate
 //!
 //! Built-in aggregate-expression types. v0.1 re-exports the existing
-//! types from `fdapquery-physical-expr`; Phase D introduces the
+//! types from `fdapquery-physical-expr`; Future work introduces the
 //! `AggregateUDF` shape (matching DataFusion's `AggregateUDF`) and
 //! moves the real implementations here.
 

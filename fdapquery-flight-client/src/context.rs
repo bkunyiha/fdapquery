@@ -1,6 +1,6 @@
 //!
 //! Interactive Flight client: same API shape as
-//! [`fdapquery::SessionContext`] and [`fdapquery_distributed::DistributedContext`]
+//! `fdapquery::SessionContext` and [`fdapquery_distributed::DistributedContext`]
 //! (`register_csv` / `register` / `sql` / `execute`), but the execution
 //! goes over the wire via an `arrow_flight::FlightServiceClient` instead of
 //! running locally or through the distributed scheduler.
@@ -20,11 +20,13 @@
 use crate::client::Client;
 use crate::endpoint::Endpoint;
 use anyhow::Result;
-use fdapquery_catalog::CsvDataSource;
+use fdapquery_catalog::{CsvDataSource, provider_as_source};
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
-use fdapquery_proto::{pb, serialize_logical_plan};
-use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_proto::{protobuf, serialize_logical_plan};
+use fdapquery_sql::SqlToRel;
+use fdapquery_sql::sqlparser::dialect::GenericDialect;
+use fdapquery_sql::sqlparser::parser::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -64,7 +66,9 @@ impl Context {
     /// through a `Client`.
     pub fn register_csv(&mut self, table_name: &str, path: &str, has_header: bool) {
         let ds = CsvDataSource::new(path, None, has_header, CSV_BATCH_SIZE);
-        let scan = TableScan::new(path, Arc::new(ds), vec![])
+        // Wrap the provider as a `TableSource` for
+        // the logical plan; the planner unwraps it at the seam.
+        let scan = TableScan::new(path, provider_as_source(Arc::new(ds)), vec![])
             .expect("Context::register_csv: scan construction");
         let df = DataFrame::new(LogicalPlan::TableScan(scan));
         self.register(table_name, df);
@@ -78,22 +82,20 @@ impl Context {
     /// Parse + execute a SQL query via the Flight server. Async — call
     /// from within a tokio runtime and `.await`.
     ///
-    /// Identical parse pipeline to `DistributedContext::sql`: Pratt-parse
-    /// the SQL, lower to `DataFrame` via `SqlPlanner`, take its logical
-    /// plan. The execution step then delegates to [`Self::execute`].
+    /// Parses with `sqlparser` (same crate DataFusion uses), lowers via
+    /// [`SqlToRel`], and delegates execution to [`Self::execute`].
     pub async fn sql(&self, sql: &str) -> Result<Vec<RecordBatch>> {
-        let tokens = SqlTokenizer::new(sql)
-            .tokenize()
-            .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
-        let parsed = SqlParser::new(tokens)
-            .parse(0)
+        let dialect = GenericDialect {};
+        let mut statements = Parser::parse_sql(&dialect, sql)
             .map_err(|e| anyhow::anyhow!("parse: {e}"))?;
-        let select = match parsed {
-            Some(SqlExpr::Select(select)) => *select,
-            other => anyhow::bail!("Expected a SELECT statement, found {other:?}"),
-        };
-        let df = SqlPlanner::new()
-            .create_data_frame(&select, &self.tables)
+        if statements.len() > 1 {
+            anyhow::bail!("multiple SQL statements per call are not supported at v0.1");
+        }
+        let statement = statements
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("empty SQL input"))?;
+        let df = SqlToRel::new(&self.tables)
+            .sql_statement_to_plan(&statement)
             .map_err(|e| anyhow::anyhow!("plan: {e}"))?;
         self.execute(df.logical_plan()).await
     }
@@ -102,9 +104,9 @@ impl Context {
     /// within a tokio runtime and `.await`.
     ///
     /// The wire shape:
-    /// 1. Serialise the [`LogicalPlan`] to a [`pb::LogicalPlanNode`] via
+    /// 1. Serialise the [`LogicalPlan`] to a [`protobuf::LogicalPlanNode`] via
     ///    [`fdapquery_proto::serialize_logical_plan`].
-    /// 2. Wrap it in a [`pb::Action`] (the protobuf message the
+    /// 2. Wrap it in a [`protobuf::Action`] (the protobuf message the
     ///    `flight-server`'s `do_get` handler expects in its `Ticket` body).
     /// 3. Encode via `prost::Message::encode_to_vec`.
     /// 4. Hand the bytes to [`Client::do_get`], which makes the gRPC
@@ -112,8 +114,8 @@ impl Context {
     ///    `RecordBatch`es via `FlightRecordBatchStream`, and returns the
     ///    collected vector.
     pub async fn execute(&self, plan: &LogicalPlan) -> Result<Vec<RecordBatch>> {
-        let plan_node: pb::LogicalPlanNode = serialize_logical_plan(plan);
-        let action = pb::Action {
+        let plan_node: protobuf::LogicalPlanNode = serialize_logical_plan(plan);
+        let action = protobuf::Action {
             query: Some(plan_node),
             task: None,
             settings: vec![],

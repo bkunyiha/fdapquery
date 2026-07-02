@@ -723,8 +723,10 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "arrow-schema",
+ "async-trait",
  "fdapquery-catalog",
  "fdapquery-common",
+ "fdapquery-datasource",
  "fdapquery-datatypes",
  "fdapquery-execution",
  "fdapquery-expr",
@@ -733,6 +735,7 @@ dependencies = [
  "fdapquery-fuzzer",
  "fdapquery-optimizer",
  "fdapquery-physical-expr",
+ "fdapquery-physical-optimizer",
  "fdapquery-physical-plan",
  "fdapquery-sql",
  "futures",
@@ -744,7 +747,6 @@ dependencies = [
 name = "fdapquery-benchmarks"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "env_logger",
  "fdapquery",
  "fdapquery-catalog",
@@ -763,8 +765,13 @@ dependencies = [
  "arrow",
  "arrow-array",
  "arrow-schema",
+ "async-trait",
+ "fdapquery-common",
+ "fdapquery-datasource",
  "fdapquery-datatypes",
  "fdapquery-execution",
+ "fdapquery-expr",
+ "fdapquery-physical-plan",
  "futures",
  "parquet",
  "tokio",
@@ -774,10 +781,23 @@ dependencies = [
 name = "fdapquery-common"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "arrow-data",
  "arrow-schema",
+ "chrono",
  "parquet",
  "pretty_assertions",
  "thiserror",
+]
+
+[[package]]
+name = "fdapquery-datasource"
+version = "0.1.0"
+dependencies = [
+ "fdapquery-common",
+ "fdapquery-datatypes",
+ "fdapquery-execution",
+ "fdapquery-physical-plan",
 ]
 
 [[package]]
@@ -795,6 +815,7 @@ name = "fdapquery-distributed"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "fdapquery",
  "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-expr",
@@ -811,13 +832,13 @@ dependencies = [
 name = "fdapquery-examples"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "arrow-flight",
  "arrow-schema",
  "async-trait",
  "env_logger",
  "fdapquery",
  "fdapquery-catalog",
+ "fdapquery-common",
  "fdapquery-datatypes",
  "fdapquery-distributed",
  "fdapquery-expr",
@@ -840,6 +861,7 @@ dependencies = [
  "arrow-array",
  "arrow-ipc",
  "arrow-schema",
+ "fdapquery-common",
  "fdapquery-datatypes",
  "futures",
  "pin-project-lite",
@@ -852,7 +874,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-schema",
  "chrono",
- "fdapquery-catalog",
+ "fdapquery-common",
  "fdapquery-datatypes",
 ]
 
@@ -884,17 +906,16 @@ dependencies = [
 name = "fdapquery-flight-server"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "arrow",
  "arrow-flight",
  "fdapquery",
  "fdapquery-catalog",
  "fdapquery-datatypes",
+ "fdapquery-distributed",
  "fdapquery-execution",
  "fdapquery-expr",
  "fdapquery-physical-plan",
  "fdapquery-proto",
- "fdapquery-sql",
  "futures",
  "prost",
  "tokio",
@@ -924,11 +945,12 @@ dependencies = [
 name = "fdapquery-fuzzer"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
  "arrow-schema",
  "fdapquery-catalog",
+ "fdapquery-common",
  "fdapquery-datatypes",
  "fdapquery-expr",
- "fdapquery-sql",
  "rand",
 ]
 
@@ -945,28 +967,41 @@ dependencies = [
 name = "fdapquery-physical-expr"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "arrow-array",
+ "arrow-data",
  "arrow-schema",
- "chrono",
+ "fdapquery-common",
  "fdapquery-datatypes",
+ "fdapquery-expr",
+]
+
+[[package]]
+name = "fdapquery-physical-optimizer"
+version = "0.1.0"
+dependencies = [
+ "fdapquery-common",
+ "fdapquery-datatypes",
+ "fdapquery-execution",
+ "fdapquery-physical-plan",
 ]
 
 [[package]]
 name = "fdapquery-physical-plan"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "arrow-array",
  "arrow-schema",
  "async-stream",
+ "async-trait",
  "chrono",
- "fdapquery-catalog",
+ "fdapquery-common",
  "fdapquery-datatypes",
  "fdapquery-execution",
  "fdapquery-expr",
- "fdapquery-optimizer",
  "fdapquery-physical-expr",
  "futures",
- "pin-project-lite",
  "tokio",
 ]
 
@@ -975,8 +1010,9 @@ name = "fdapquery-proto"
 version = "0.1.0"
 dependencies = [
  "arrow-schema",
- "chrono",
  "fdapquery-catalog",
+ "fdapquery-common",
+ "fdapquery-datasource",
  "fdapquery-datatypes",
  "fdapquery-expr",
  "fdapquery-physical-plan",
@@ -992,8 +1028,10 @@ dependencies = [
  "arrow-schema",
  "chrono",
  "fdapquery-catalog",
+ "fdapquery-common",
  "fdapquery-datatypes",
  "fdapquery-expr",
+ "sqlparser",
 ]
 
 [[package]]
@@ -2107,6 +2145,27 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "sqlparser"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13c6d1b651dc4edf07eead2a0c6c78016ce971bc2c10da5266861b13f25e7cec"
+dependencies = [
+ "log",
+ "sqlparser_derive",
+]
+
+[[package]]
+name = "sqlparser_derive"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6dd45d8fc1c79299bfbb7190e42ccbbdf6a5f52e4a6ad98d92357ea965bd289"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

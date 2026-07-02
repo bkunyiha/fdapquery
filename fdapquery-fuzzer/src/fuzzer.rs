@@ -19,9 +19,9 @@
 //!   that owns the underlying `StdRng` and exposes both the biased helpers
 //!   (`next_byte`, `next_double`, …) and a raw [`EnhancedRandom::rng`] accessor
 //!   for the call sites that need `gen_range(..)` directly.
-//! - **Per-type column builders.** [`fdapquery_datatypes::ArrowVectorBuilder::append_value`]
-//!   performs per-type variant dispatch internally (see `arrow_vector_builder.rs`),
-//!   so the batch-construction loop is one line per column.
+//! - **Per-type column builders.** [`fdapquery_common::ArrowVectorBuilder::append_value`]
+//!   performs per-type variant dispatch internally, so the batch-construction
+//!   loop is one line per column.
 //! - **`self.rng.random::<T>()` / `random_range(..)`.** As of rand 0.9 the
 //!   value/range helpers are named `random()` and `random_range()` (the old
 //!   `gen()` / `gen_range()` names — `gen` being a reserved keyword in the
@@ -29,10 +29,10 @@
 //!   [`rand::RngExt`] extension trait rather than `Rng`, so that is what the
 //!   call sites import.
 
-use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, RecordBatch, ScalarValue, Schema, record_batch,
-};
-use fdapquery_expr::{DataFrame, Expr};
+use arrow_array::ArrayRef;
+use fdapquery_common::{ArrowVectorBuilder, ScalarValue};
+use fdapquery_datatypes::{RecordBatch, Schema, record_batch};
+use fdapquery_expr::{DataFrame, Expr, Operator};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
@@ -109,7 +109,7 @@ impl Fuzzer {
             "Fuzzer::create_record_batch: columns is empty"
         );
         let row_count = columns[0].len();
-        let field_vectors: Vec<Box<dyn ColumnVector>> = schema
+        let arrays: Vec<ArrayRef> = schema
             .fields()
             .iter()
             .zip(columns)
@@ -126,11 +126,10 @@ impl Fuzzer {
                 for v in &col {
                     builder.append_value(v);
                 }
-                builder.set_value_count(row_count);
-                Box::new(builder.build()) as Box<dyn ColumnVector>
+                builder.build()
             })
             .collect();
-        record_batch::create(schema, field_vectors)
+        record_batch::create(schema, arrays)
             .expect("fuzzer: schema/column mismatch building random batch")
     }
 
@@ -151,28 +150,26 @@ impl Fuzzer {
         // Build the child plan first, then layer either a projection or a
         // filter on top of it.
         let child = self.create_plan(input, depth + 1, max_depth, max_expr_depth);
-        match self.rng.rng().random_range(0..2) {
-            0 => {
-                let expr_count = self.rng.rng().random_range(1..5);
-                let exprs: Vec<Expr> = (0..expr_count)
-                    .map(|_| self.create_expression(&child, 0, max_expr_depth))
-                    .collect();
-                child.project(exprs)
-            }
-            _ => {
-                // Note: the filter predicate is generated against `input`'s
-                // schema (not `child`'s), so column indices reference the
-                // original schema. This is intentional and matches the
-                // historical generator behaviour.
-                let pred = self.create_expression(input, 0, max_expr_depth);
-                child.filter(pred)
-            }
+        if self.rng.rng().random_range(0..2) == 0 {
+            let expr_count = self.rng.rng().random_range(1..5);
+            let exprs: Vec<Expr> = (0..expr_count)
+                .map(|_| self.create_expression(&child, 0, max_expr_depth))
+                .collect();
+            child.project(exprs)
+        } else {
+            // Note: the filter predicate is generated against `input`'s
+            // schema (not `child`'s), so column indices reference the
+            // original schema. This is intentional and matches the
+            // historical generator behaviour.
+            let pred = self.create_expression(input, 0, max_expr_depth);
+            child.filter(pred)
         }
     }
 
     /// Recursively build a random binary expression tree. Leaves at
-    /// `depth == max_depth` are one of `ColumnIndex` / `LiteralDouble` /
-    /// `LiteralLong` / `LiteralString`; internal nodes are one of the eight
+    /// `depth == max_depth` are one of `ColumnIndex` /
+    /// `Literal(ScalarValue::Float64)` / `Literal(ScalarValue::Int64)` /
+    /// `Literal(ScalarValue::Utf8)`; internal nodes are one of the eight
     /// binary operators (`Eq` / `Neq` / `Lt` / `LtEq` / `Gt` / `GtEq` / `And` /
     /// `Or`).
     pub fn create_expression(&mut self, input: &DataFrame, depth: usize, max_depth: usize) -> Expr {
@@ -185,26 +182,36 @@ impl Fuzzer {
                 .len();
             return match self.rng.rng().random_range(0..4) {
                 0 => Expr::ColumnIndex(self.rng.rng().random_range(0..fields_len)),
-                1 => Expr::LiteralDouble(self.rng.next_double()),
-                2 => Expr::LiteralLong(self.rng.next_long()),
+                // Single `Expr::Literal(ScalarValue)`
+                // variant mirrors DataFusion. Typed branching is recovered
+                // by matching on the inner `ScalarValue` variant downstream.
+                1 => Expr::Literal(ScalarValue::Float64(self.rng.next_double())),
+                2 => Expr::Literal(ScalarValue::Int64(self.rng.next_long())),
                 _ => {
                     let len = self.rng.rng().random_range(0..64);
-                    Expr::LiteralString(self.rng.next_string(len))
+                    Expr::Literal(ScalarValue::Utf8(self.rng.next_string(len)))
                 }
             };
         }
         // Internal node: binary op over two recursive subtrees.
         let l = Box::new(self.create_expression(input, depth + 1, max_depth));
         let r = Box::new(self.create_expression(input, depth + 1, max_depth));
-        match self.rng.rng().random_range(0..8) {
-            0 => Expr::Eq { l, r },
-            1 => Expr::Neq { l, r },
-            2 => Expr::Lt { l, r },
-            3 => Expr::LtEq { l, r },
-            4 => Expr::Gt { l, r },
-            5 => Expr::GtEq { l, r },
-            6 => Expr::And { l, r },
-            _ => Expr::Or { l, r },
+        // Pick an [`Operator`] for the unified
+        // `Expr::BinaryExpr { left, op, right }`.
+        let op = match self.rng.rng().random_range(0..8) {
+            0 => Operator::Eq,
+            1 => Operator::NotEq,
+            2 => Operator::Lt,
+            3 => Operator::LtEq,
+            4 => Operator::Gt,
+            5 => Operator::GtEq,
+            6 => Operator::And,
+            _ => Operator::Or,
+        };
+        Expr::BinaryExpr {
+            left: l,
+            op,
+            right: r,
         }
     }
 }
@@ -310,7 +317,7 @@ impl EnhancedRandom {
     }
 
     /// Random ASCII alphanumeric string of length `len`. `len == 0` returns
-    /// the empty string. Bytes are pulled from [`CHAR_POOL`] (`a-z` + `A-Z` +
+    /// the empty string. Bytes are pulled from `CHAR_POOL` (`a-z` + `A-Z` +
     /// `0-9`, 62 chars).
     pub fn next_string(&mut self, len: usize) -> String {
         (0..len)
@@ -328,7 +335,7 @@ mod tests {
     //! The test loops 50 times and asserts that `create_plan` returns without
     //! panicking — i.e. random plan generation is stable across runs.
     use super::*;
-    use fdapquery_catalog::CsvDataSource;
+    use fdapquery_catalog::{CsvDataSource, provider_as_source};
     use fdapquery_expr::{LogicalPlan, TableScan};
     use std::sync::Arc;
 
@@ -337,7 +344,7 @@ mod tests {
         let path = "../testdata/employee.csv";
         let csv = CsvDataSource::new(path, None, true, 10);
         let input = DataFrame::new(LogicalPlan::TableScan(
-            TableScan::new("employee.csv", Arc::new(csv), vec![]).unwrap(),
+            TableScan::new("employee.csv", provider_as_source(Arc::new(csv)), vec![]).unwrap(),
         ));
         let mut fuzzer = Fuzzer::new();
         for _ in 0..50 {

@@ -1,50 +1,81 @@
 //! `TableProvider` — the catalog-side trait every concrete table source
-//! implements. Replaces the pre-Session-13b `DataSource` trait.
+//! implements. Strict mirror of `datafusion_catalog::TableProvider`.
 //!
-//! ## Trait surface (Session 13b, minimal)
+//! ## the planning-surface flip
 //!
-//! Session 13b ships a **minimal** `TableProvider` — the trait gets a
-//! DataFusion-matching name and a modernized stream return type, but
-//! does **not** yet have the async `scan` planning surface that
-//! returns `Arc<dyn ExecutionPlan>`. The reason is a dep-graph cycle:
-//! `LogicalPlan::TableScan` in `fdapquery-expr` holds `Arc<dyn TableProvider>`,
-//! so catalog → physical-plan would close the loop
-//! catalog → physical-plan → expr → catalog. Breaking that cycle
-//! cleanly requires DataFusion's two-trait split (a lightweight
-//! `TableSource` in expr, a heavyweight `TableProvider` in catalog
-//! that physical-planning converts to). That split is Phase D work.
+//! The `TableSource` / `TableProvider` two-trait split lets the planner
+//! hold `Arc<dyn TableSource>` in the logical plan and unwrap it via
+//! `source_as_provider` at the physical seam. The catalog crate is free
+//! to depend on `fdapquery-physical-plan` — there is no `expr → catalog`
+//! back-edge to create a cycle. This file therefore adopts the
+//! DataFusion-canonical `scan` signature: **async**, taking an optional
+//! list of column **indices**, and returning `Arc<dyn ExecutionPlan>`.
 //!
-//! In the meantime the trait has three methods:
+//! ### Method surface
 //!
-//! - `schema(&self) -> Schema`: the table's full schema.
-//! - `fn scan(&self, projection: &[String]) -> Result<...Stream<Item = Result<RecordBatch>>...>`:
-//!   produce the actual record-batch stream. Modern `Stream` return
-//!   (vs the pre-13b `Iterator`), but does NOT yet plan-and-return an
-//!   `ExecutionPlan`. Internally this is what
-//!   `physical-plan::ScanExec::execute` calls; the planning-surface
-//!   wrapping (`Arc::new(ScanExec::new(...))`) lands in Phase D.
-//! - `as_any(&self) -> &dyn Any`: runtime downcasting to the concrete
+//! - `schema(&self) -> Schema` — the table's full (pre-projection)
+//!   schema.
+//! - `async fn scan(&self, projection: Option<&Vec<usize>>) -> Result<Arc<dyn ExecutionPlan>>`
+//!   — plan a scan. The returned plan typically wraps a
+//!   [`DataSourceExec`](fdapquery_datasource::DataSourceExec) that holds
+//!   the actual `DataSource`. `projection` is `None` for "all columns"
+//!   or `Some(indices)` for the projected subset, in the order specified
+//!   by the indices.
+//! - `as_any(&self) -> &dyn Any` — runtime downcasting to the concrete
 //!   provider, matching `ExecutionPlan::as_any`. The protobuf
 //!   serializer uses this to branch on concrete type.
 //!
-//! Mirrors `datafusion_catalog::TableProvider`'s NAME exactly; the
-//! method shapes converge in Phase D.
+//! ### DataFusion-divergence (tracked as follow-up tasks)
+//!
+//! DataFusion's `TableProvider::scan` signature also takes:
+//! - `state: &dyn Session` — fdapquery has no `Session` trait yet
+//!   (#120). Omit for now; introduce when `SessionStateBuilder` lands.
+//! - `filters: &[Expr]` — predicate pushdown. fdapquery does not yet
+//!   push filters into the scan; omit and add a follow-up task when
+//!   wiring pushdown through the planner.
+//! - `limit: Option<usize>` — limit pushdown. Same status as filters.
+//!
+//! Each omission is intentional; expanding the signature in a later
+//! pass adds parameters rather than reshaping the return type.
 
 use fdapquery_datatypes::{Result, Schema};
-// Session 15d-1 #92 — `SendableRecordBatchStream` now lives at its
+use fdapquery_physical_plan::physical_plan::ExecutionPlan;
+use std::sync::Arc;
+
+// `SendableRecordBatchStream` now lives at its
 // DataFusion-canonical location (`fdapquery-execution::stream`); the
-// previous local `BoxRecordBatchStream` alias is removed.
+// previous local `BoxRecordBatchStream` alias is removed. Re-exported
+// here for backwards-compat with `use fdapquery_catalog::SendableRecordBatchStream;`
+// imports in test code that still drives streams directly off
+// `DataSource::open` / `ExecutionPlan::execute`.
 pub use fdapquery_execution::SendableRecordBatchStream;
 
-pub trait TableProvider: Send + Sync {
+/// A catalog-side table source. Strict mirror of
+/// `datafusion_catalog::TableProvider`.
+///
+/// Every concrete table source (CSV file, Parquet file, in-memory
+/// batches, …) implements this trait. The planner reaches the provider
+/// via [`crate::source_as_provider`] at the `LogicalPlan::TableScan`
+/// arm, then asks the provider to **plan** a scan (rather than directly
+/// produce a stream). The plan it returns — typically
+/// `Arc::new(DataSourceExec::new(Arc::new(per_format_config)))` — is
+/// then folded into the rest of the physical plan.
+#[async_trait::async_trait]
+pub trait TableProvider: std::fmt::Debug + Send + Sync {
     /// The table's full schema (no projection applied).
     fn schema(&self) -> Schema;
 
-    /// Produce the record-batch stream for the given projection
-    /// (column names). An empty projection slice means "all columns".
-    /// A projection naming a column not in the schema returns
-    /// `Err(SchemaError(_))`.
-    fn scan(&self, projection: &[String]) -> Result<SendableRecordBatchStream>;
+    /// Plan a scan over this table. Returns an `ExecutionPlan` that,
+    /// when executed, emits the table's rows.
+    ///
+    /// `projection` is an optional list of column **indices** into the
+    /// full schema. `None` means "all columns in schema order"; `Some`
+    /// means "exactly these columns in this order". An invalid index
+    /// surfaces as `Err(_)`.
+    ///
+    /// The returned plan typically wraps a `DataSourceExec` holding the
+    /// per-format `DataSource` (CSV/Parquet/InMemory).
+    async fn scan(&self, projection: Option<&Vec<usize>>) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Runtime downcasting to the concrete provider type.
     fn as_any(&self) -> &dyn std::any::Any;

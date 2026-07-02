@@ -21,8 +21,8 @@ tokio            = { workspace = true }
 # `SendableRecordBatchStream` directly into the Flight encoder without a
 # `spawn_blocking` bridge.
 futures          = { workspace = true }
-# `prost` for direct `Message::decode` / `encode_to_vec` calls on `pb::TaskInfo`
-# and `pb::TaskResult` inside `do_action`. arrow-flight already depends on
+# `prost` for direct `Message::decode` / `encode_to_vec` calls on `protobuf::TaskInfo`
+# and `protobuf::TaskResult` inside `do_action`. arrow-flight already depends on
 # prost transitively; declaring it here is the public-API surface our code
 # uses directly.
 prost            = { workspace = true }
@@ -36,16 +36,21 @@ fdapquery-datatypes     = { version = "0.1.0", path = "../fdapquery-datatypes" }
 fdapquery-catalog       = { version = "0.1.0", path = "../fdapquery-catalog" }
 fdapquery-expr          = { version = "0.1.0", path = "../fdapquery-expr" }
 fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
-fdapquery-sql           = { version = "0.1.0", path = "../fdapquery-sql" }
 fdapquery-proto         = { version = "0.1.0", path = "../fdapquery-proto" }
 fdapquery-execution     = { version = "0.1.0", path = "../fdapquery-execution" }
+# Used by the `flight-server` binary entry point to construct the
+# executor-side `RuntimeEnv` via `DistributedConfig::build_runtime_env()`.
+# This keeps the cluster-config-to-shuffle-dir wire-up uniform across the
+# binary, the integration test, and any future deployment glue — there
+# is one place that turns a `shuffle_dir` into a runtime. No cycle:
+# `fdapquery-distributed` does not depend on `fdapquery-flight-server`.
+fdapquery-distributed   = { version = "0.1.0", path = "../fdapquery-distributed" }
 
 # `tracing` for log macros (matches distributed/'s logging choice — both crates
 # emit `info!`/`debug!`/`warn!` so a reader graduating to DataFusion source sees
 # the same surface). `tracing-subscriber` only consumed by the bin.
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
-anyhow             = { workspace = true }
 
 [dev-dependencies]
 # `tokio-stream::wrappers::TcpListenerStream` wraps the bound
@@ -58,3 +63,6 @@ tokio-stream = "0.1"
 [[bin]]
 name = "fdapquery-flight-server"
 path = "src/bin/flight_server.rs"
+
+[lints]
+workspace = true

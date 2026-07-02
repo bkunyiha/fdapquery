@@ -4,16 +4,18 @@
 # "How Query Engines Work" (2nd edition). See README.md for the full context.
 [workspace]
 resolver = "2"
-# 19 crates. Build order matches the listing order below.
+# 20 crates. Build order matches the listing order below.
 members = [
     "fdapquery-common",
     "fdapquery-datatypes",
+    "fdapquery-datasource",
     "fdapquery-catalog",
     "fdapquery-expr",
     "fdapquery-sql",
     "fdapquery-optimizer",
     "fdapquery-physical-expr",
     "fdapquery-physical-plan",
+    "fdapquery-physical-optimizer",
     "fdapquery-execution",
     "fdapquery-functions",
     "fdapquery-functions-aggregate",
@@ -39,6 +41,11 @@ rust-version  = "1.85"
 # arrow-rs and parquet — pin the major; let cargo update the minor.
 arrow         = "59"
 arrow-array   = "59"
+# arrow-data exposes `ArrayData`, used by
+# `fdapquery_common::utils::memory::get_record_batch_memory_size` to walk
+# a `RecordBatch`'s buffers and compute its physical memory footprint
+# (strict mirror of `datafusion_common::utils::memory`).
+arrow-data    = "59"
 arrow-schema  = "59"
 arrow-flight  = "59"
 # Arrow IPC reader/writer — used by `physical-plan::ShuffleManager` to
@@ -67,9 +74,11 @@ sysinfo       = { version = "0.36", default-features = false, features = ["syste
 prost         = "0.14"
 tonic         = "0.14"
 
-# SQL parser — DO NOT enable. The Pratt parser is hand-rolled in the `sql`
-# crate; replacing it with `sqlparser-rs` is out of scope here.
-# sqlparser   = "0.50"
+# SQL parser — `sqlparser-rs` powers the `fdapquery-sql` crate's frontend.
+# Same version and feature set as DataFusion pins at
+# `datafusion/Cargo.toml:197` so fdapquery-sql accepts exactly the SQL surface
+# DataFusion accepts (see `SESSION-17-PLAN.md`, `DESIGN.md:1043`).
+sqlparser     = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
 
 # Error handling.
 anyhow        = "1"
@@ -126,3 +135,57 @@ uuid          = { version = "1", features = ["v4"] }
 
 # Testing helpers
 pretty_assertions = "1"
+
+# =============================================================================
+# Workspace-wide lints.
+#
+# We start with rustc's `warn`-by-default plus `clippy::pedantic` to surface
+# every idiomatic-Rust improvement opportunity at workspace scope. Lints that
+# either (a) conflict with the strict-mirror-DataFusion discipline, (b) produce
+# noise without finding real bugs in this domain, or (c) we'd accept on a
+# per-site basis but not workspace-wide, are explicitly allowed below.
+#
+# Once the workspace is clean under this configuration, every PR is auto-
+# protected against regressions on these lints via `cargo clippy --workspace
+# --all-targets -- -D warnings`.
+#
+# Members opt in via:
+#     [lints]
+#     workspace = true
+# in each crate's `Cargo.toml`.
+# =============================================================================
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+
+# Domain-style allowances — these pedantic lints fire on patterns we
+# deliberately use throughout the codebase.
+
+# Module name in type name is fine for domain types (e.g. `expressions::Expr`).
+module_name_repetitions = "allow"
+# `#[must_use]` on every constructor/getter is noisy and doesn't catch bugs.
+must_use_candidate = "allow"
+# Casts that can lose precision are often deliberate in numeric/Arrow paths.
+# Each cast site is still subject to review during code review.
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# Float comparisons in tests are usually fine.
+float_cmp = "allow"
+# `arrow::compute::*` style wildcard imports are idiomatic in the engine.
+wildcard_imports = "allow"
+# Domain types reasonably share name stems (e.g. `Expr`, `Expression`).
+similar_names = "allow"
+# Doc nits — not worth gating CI on.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+# A function with many branches in a tree-walking lowering is fine.
+too_many_lines = "allow"
+# Closures of one line for `.map(|x| Foo::new(x))` are common.
+redundant_closure_for_method_calls = "allow"
+# 68 sites — builder/setter methods that return `Self`. Marking each with
+# `#[must_use]` is mechanical noise without finding real bugs in this codebase's
+# chain-immediately call patterns; DataFusion's equivalent builders aren't
+# marked either.
+return_self_not_must_use = "allow"

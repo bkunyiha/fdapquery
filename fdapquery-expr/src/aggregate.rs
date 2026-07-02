@@ -1,8 +1,17 @@
 //!
 //! Logical plan representing an aggregate query against an input. Its schema is
 //! the group expressions followed by the aggregate expressions.
+//!
+//! ## aggregate slot is `Vec<Expr>`
+//!
+//! Aggregates are folded into `Expr::AggregateFunction`, so this slot is
+//! `Vec<Expr>` — byte-for-byte the shape DataFusion uses for
+//! `LogicalPlan::Aggregate.aggr_expr` (see
+//! `datafusion/expr/src/logical_plan/plan.rs`'s `Aggregate` struct).
+//! Every element is expected to be `Expr::AggregateFunction(...)`; the
+//! SQL planner enforces this by construction, and `Aggregate::schema`
+//! / the optimizer walk both pattern-match on the inner variant.
 
-use crate::expressions::AggregateExpr;
 use crate::logical_expr::Expr;
 use crate::logical_plan::LogicalPlan;
 use fdapquery_datatypes::{Field, Result, Schema};
@@ -12,18 +21,14 @@ use std::fmt;
 pub struct Aggregate {
     pub input: Box<LogicalPlan>,
     pub group_expr: Vec<Expr>,
-    /// The aggregate expressions, typed as the narrow `AggregateExpr` family
-    ///. Aggregates bridge into `Expr` only
-    /// when they need to nest inside another expression (see `expressions.rs`).
-    pub aggregate_expr: Vec<AggregateExpr>,
+    /// The aggregate expressions. Every element MUST be
+    /// `Expr::AggregateFunction(...)`; mirrors DataFusion's
+    /// `LogicalPlan::Aggregate.aggr_expr: Vec<Expr>` invariant.
+    pub aggregate_expr: Vec<Expr>,
 }
 
 impl Aggregate {
-    pub fn new(
-        input: LogicalPlan,
-        group_expr: Vec<Expr>,
-        aggregate_expr: Vec<AggregateExpr>,
-    ) -> Self {
+    pub fn new(input: LogicalPlan, group_expr: Vec<Expr>, aggregate_expr: Vec<Expr>) -> Self {
         Self {
             input: Box::new(input),
             group_expr,

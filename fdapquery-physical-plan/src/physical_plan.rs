@@ -1,12 +1,10 @@
-//! The central physical-plan trait — `ExecutionPlan` — plus the tree-printer
-//! free function `format`.
+//! The central physical-plan trait — `ExecutionPlan`.
 //!
-//! ## `ExecutionPlan`, formerly `PhysicalPlan` (renamed in Phase B)
+//! ## `ExecutionPlan`, formerly `PhysicalPlan` (renamed )
 //! Every operator implements `ExecutionPlan`. The trait name matches
 //! DataFusion's exactly so an `Arc<dyn ExecutionPlan>` in fdapquery is a
 //! drop-in shape for the equivalent in DataFusion. The old `PhysicalPlan`
-//! name is kept as a `#[deprecated]` type alias for the duration of the
-//! Phase B red window; Phase C (Session 11) deletes the alias.
+//! name is kept as a `#[deprecated]` type alias; future work deletes the alias.
 //!
 //! ## Trait, not enum
 //! Elsewhere in this workspace, an interface with a closed implementor set
@@ -20,7 +18,7 @@
 //! `Arc<dyn ExecutionPlan>`.
 //!
 //! ## `execute` returns an async stream
-//! As of Session 8 (Phase B opens), `execute` returns
+//! `execute` returns
 //! `Result<SendableRecordBatchStream>` — an async `Stream<Item =
 //! Result<RecordBatch>>` that also carries the output schema. The
 //! per-partition argument lets the engine ask for one output partition at
@@ -43,6 +41,8 @@
 //! The bound is also a prerequisite for the distributed/Flight surface,
 //! which serves batches across threads.
 
+use crate::display::DisplayAs;
+use crate::metrics::MetricsSet;
 use crate::plan_properties::PlanProperties;
 use crate::stream::SendableRecordBatchStream;
 use fdapquery_datatypes::{Result, Schema};
@@ -61,11 +61,24 @@ use std::sync::Arc;
 /// `partition == 0` is valid; passing anything else surfaces as
 /// `Err(Internal(_))`.
 ///
-/// `ExecutionPlan: fmt::Display` because [`format`] prints the operator
-/// tree by calling each node's `Display`; every operator supplies its
-/// own one-line label. `Send + Sync` lets `ParallelContext` hand plans
-/// to rayon workers.
-pub trait ExecutionPlan: fmt::Display + Send + Sync {
+/// `ExecutionPlan: fmt::Display + DisplayAs` so the
+/// [`displayable`](crate::display::displayable)`(plan).indent(verbose)`
+/// builder can render the operator tree. The indent walker calls each
+/// node's [`DisplayAs::fmt_as`] (which lets a single operator produce
+/// different output for `Default` / `Verbose` / `TreeRender`); the
+/// `fmt::Display` supertrait keeps the operator usable in `format!("{plan}")`
+/// contexts (existing callers, error messages, debug printouts) by
+/// delegating to `fmt_as(DisplayFormatType::Default, f)`. Same shape as
+/// DataFusion's `ExecutionPlan: Debug + DisplayAs` — fdapquery keeps
+/// the `Display` bound additionally because pre-Session-15 callers
+/// rely on it.
+/// `Send + Sync` lets `ParallelContext` hand plans to rayon workers.
+///
+/// `Debug` is also a supertrait so any struct containing an
+/// `Arc<dyn ExecutionPlan>` (e.g. `DisplayableExecutionPlan`, `Task`, every
+/// `*Exec` operator with a child input field) can `#[derive(Debug)]`
+/// directly. Mirrors DataFusion's `ExecutionPlan: Debug + DisplayAs + Send + Sync`.
+pub trait ExecutionPlan: fmt::Debug + fmt::Display + DisplayAs + Send + Sync {
     /// Operator-kind name for diagnostics ("ScanExec", "ProjectionExec", …).
     ///
     /// Used by the optimiser's logging and by the operator-level tracing
@@ -135,31 +148,74 @@ pub trait ExecutionPlan: fmt::Display + Send + Sync {
     /// overrides with `fn as_any(&self) -> &dyn Any { self }`.
     fn as_any(&self) -> &dyn std::any::Any;
 
-    /// Human-readable, indented rendering of this plan and its subtree.
-    fn pretty(&self) -> String
-    where
-        Self: Sized,
-    {
-        format(self)
+    /// Per-operator metrics, if any. Default `None`.
+    ///
+    /// Mirrors DataFusion's `ExecutionPlan::metrics()`. The default
+    /// returns `None`; operators that collect metrics override to
+    /// return `Some(MetricsSet::clone_inner())`. The
+    /// [`displayable(plan).with_metrics()`](crate::display::DisplayableExecutionPlan::with_metrics)
+    /// path reads this; the default path (`displayable(plan).indent(false)`)
+    /// does not.
+    fn metrics(&self) -> Option<MetricsSet> {
+        None
     }
 }
 
-/// Format a physical plan in human-readable form: one line per node,
-/// indented by depth with tabs.
-pub fn format(plan: &dyn ExecutionPlan) -> String {
-    fn go(plan: &dyn ExecutionPlan, indent: usize, out: &mut String) {
-        for _ in 0..indent {
-            out.push('\t');
-        }
-        out.push_str(&plan.to_string());
-        out.push('\n');
-        for child in plan.children() {
-            // `child` is `&Arc<dyn ExecutionPlan>`; `as_ref()` gives
-            // `&dyn ExecutionPlan`.
-            go(child.as_ref(), indent + 1, out);
-        }
+// =============================================================================
+// ExecutionPlanVisitor + accept — strict mirror of DataFusion's walker.
+// =============================================================================
+
+/// A visitor for the operator tree, invoked once per node with
+/// `pre_visit` then `post_visit`. Mirrors DataFusion's
+/// `ExecutionPlanVisitor`.
+///
+/// `Error` is the error type each impl produces; the display module's
+/// `IndentVisitor` uses `fmt::Error`. Returning `Ok(false)` from
+/// `pre_visit` aborts the traversal at that subtree (matches DataFusion).
+pub trait ExecutionPlanVisitor {
+    /// Error type propagated through `pre_visit` / `post_visit`.
+    type Error;
+
+    /// Called once per node, before its children are walked.
+    ///
+    /// Return `Ok(true)` to descend into children, `Ok(false)` to skip
+    /// them, `Err(_)` to abort the walk.
+    ///
+    /// Fully-qualified `std::result::Result` because the workspace
+    /// `Result<T>` alias (one type arg, fixed `FdapQueryError`) would
+    /// otherwise shadow the std two-type-arg `Result`.
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> std::result::Result<bool, Self::Error>;
+
+    /// Called once per node, after its children have been walked. The
+    /// default does nothing and returns `Ok(true)`.
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> std::result::Result<bool, Self::Error> {
+        Ok(true)
     }
-    let mut out = String::new();
-    go(plan, 0, &mut out);
-    out
 }
+
+/// Walk the operator tree depth-first, invoking `visitor.pre_visit` on
+/// the way down and `visitor.post_visit` on the way back up. Mirrors
+/// DataFusion's `accept` free function. The walk follows
+/// [`ExecutionPlan::children`] order.
+pub fn accept<V: ExecutionPlanVisitor>(
+    plan: &dyn ExecutionPlan,
+    visitor: &mut V,
+) -> std::result::Result<(), V::Error> {
+    if !visitor.pre_visit(plan)? {
+        return Ok(());
+    }
+    for child in plan.children() {
+        accept(child.as_ref(), visitor)?;
+    }
+    visitor.post_visit(plan)?;
+    Ok(())
+}
+
+// The rquery-DNA `pub fn format(plan: &dyn
+// ExecutionPlan) -> String` free function (and its follow-on rename to
+// `pretty`, plus the parallel `ExecutionPlan::pretty(&self) -> String`
+// trait method) have been removed. DataFusion has neither — plan
+// dumping goes exclusively through the `displayable(plan).indent(verbose)`
+// builder defined in [`crate::display`]. Callers that previously wrote
+// `format!("{}", pretty(plan))` now write
+// `format!("{}", displayable(plan).indent(false))`.

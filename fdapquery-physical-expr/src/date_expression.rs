@@ -4,12 +4,16 @@
 //! since the Unix epoch / a count of days), so the arithmetic is plain integer
 //! add/subtract on the day counts, with a null in either operand yielding null.
 
+use crate::columnar_value::ColumnarValue;
 use crate::expressions::{PhysicalExpr, number_to_i64};
-use fdapquery_datatypes::{ArrowVectorBuilder, ColumnVector, RecordBatch, Result, ScalarValue};
+use arrow_schema::{DataType, Schema};
+use fdapquery_common::{ArrowVectorBuilder, Result, ScalarValue};
+use fdapquery_datatypes::{RecordBatch, record_batch};
 use std::fmt;
 use std::sync::Arc;
 
 /// `date - interval` → date.
+#[derive(Debug)]
 pub struct DateSubtractIntervalExpr {
     pub date_expr: Arc<dyn PhysicalExpr>,
     pub interval_expr: Arc<dyn PhysicalExpr>,
@@ -25,8 +29,20 @@ impl DateSubtractIntervalExpr {
 }
 
 impl PhysicalExpr for DateSubtractIntervalExpr {
-    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
-        date_interval(&self.date_expr, &self.interval_expr, input, |d, i| d - i)
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        date_interval(&self.date_expr, &self.interval_expr, batch, |d, i| d - i)
+    }
+
+    /// `date - interval(days)` → `Date32`. fdapquery only models the
+    /// `Date32 - Days → Date32` form (the runtime builds a `Date32` result
+    /// column in `date_interval`), so the data type is always `Date32`
+    /// regardless of the input schema. DataFusion's general date-arithmetic
+    /// path runs through `BinaryExpr` + `BinaryTypeCoercer`; the
+    /// fdapquery-specific `DateSubtractIntervalExpr` is the narrower
+    /// strict-mirror shape, and `Date32` matches DataFusion's result type
+    /// for the `Date32 - Interval(YearMonth/DayTime) → Date32` arm.
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Date32)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -41,6 +57,7 @@ impl fmt::Display for DateSubtractIntervalExpr {
 }
 
 /// `date + interval` → date.
+#[derive(Debug)]
 pub struct DateAddIntervalExpr {
     pub date_expr: Arc<dyn PhysicalExpr>,
     pub interval_expr: Arc<dyn PhysicalExpr>,
@@ -56,8 +73,15 @@ impl DateAddIntervalExpr {
 }
 
 impl PhysicalExpr for DateAddIntervalExpr {
-    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
-        date_interval(&self.date_expr, &self.interval_expr, input, |d, i| d + i)
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        date_interval(&self.date_expr, &self.interval_expr, batch, |d, i| d + i)
+    }
+
+    /// `date + interval(days)` → `Date32`. Symmetric counterpart of
+    /// [`DateSubtractIntervalExpr::data_type`] above; the runtime builds a
+    /// `Date32` result column in `date_interval`.
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Date32)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -76,15 +100,16 @@ impl fmt::Display for DateAddIntervalExpr {
 fn date_interval(
     date_expr: &Arc<dyn PhysicalExpr>,
     interval_expr: &Arc<dyn PhysicalExpr>,
-    input: &RecordBatch,
+    batch: &RecordBatch,
     op: impl Fn(i32, i32) -> i32,
-) -> Result<Box<dyn ColumnVector>> {
-    let date_col: Box<dyn ColumnVector> = date_expr.evaluate(input)?;
-    let interval_col: Box<dyn ColumnVector> = interval_expr.evaluate(input)?;
-    let mut builder = ArrowVectorBuilder::new(&arrow_schema::DataType::Date32, date_col.size());
-    for i in 0..date_col.size() {
-        let date_value = date_col.get_value(i)?;
-        let interval_value = interval_col.get_value(i)?;
+) -> Result<ColumnarValue> {
+    let num_rows = record_batch::row_count(batch);
+    let date_col = date_expr.evaluate(batch)?.into_array(num_rows)?;
+    let interval_col = interval_expr.evaluate(batch)?.into_array(num_rows)?;
+    let mut builder = ArrowVectorBuilder::new(&arrow_schema::DataType::Date32, date_col.len());
+    for i in 0..date_col.len() {
+        let date_value = ScalarValue::try_from_array(&date_col, i)?;
+        let interval_value = ScalarValue::try_from_array(&interval_col, i)?;
         if date_value.is_null() || interval_value.is_null() {
             builder.append_null();
         } else {
@@ -93,6 +118,27 @@ fn date_interval(
             builder.append_value(&ScalarValue::Date32(op(date_days, interval_days)));
         }
     }
-    builder.set_value_count(date_col.size());
-    Ok(Box::new(builder.build()))
+    Ok(ColumnarValue::Array(builder.build()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::Literal;
+    use fdapquery_common::ScalarValue;
+
+    /// Both date-arithmetic expressions produce a `Date32` column —
+    /// `data_type` returns that unconditionally (no schema dependency).
+    #[test]
+    fn data_type_is_date32() {
+        let schema = arrow_schema::Schema::empty();
+        let date = Arc::new(Literal::new(ScalarValue::Date32(0))) as Arc<dyn PhysicalExpr>;
+        let interval = Arc::new(Literal::new(ScalarValue::Int32(1))) as Arc<dyn PhysicalExpr>;
+
+        let sub = DateSubtractIntervalExpr::new(date.clone(), interval.clone());
+        assert_eq!(sub.data_type(&schema).unwrap(), DataType::Date32);
+
+        let add = DateAddIntervalExpr::new(date, interval);
+        assert_eq!(add.data_type(&schema).unwrap(), DataType::Date32);
+    }
 }

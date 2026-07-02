@@ -1,25 +1,26 @@
-//! Builds an arrow-rs `ArrayRef` value by value, then wraps it in an
-//! [`ArrowFieldVector`]. arrow-rs uses an *append*-based builder pattern:
-//! typed builders like `Int32Builder::new()` accumulate values, then
-//! `.finish()` seals them into an immutable `ArrayRef`.
+//! Typed [`arrow_array::ArrayRef`] builder driven by [`ScalarValue`].
+//!
+//! arrow-rs uses an *append*-based builder pattern: typed builders like
+//! `Int32Builder::new()` accumulate values, then `.finish()` seals them into
+//! an immutable `ArrayRef`. This enum hides the per-type dispatch behind a
+//! single `append_value(&ScalarValue)` / `build() -> ArrayRef` surface.
+//!
+//! Lives in `fdapquery-common` alongside [`ScalarValue`] (mirrors DataFusion's
+//! `datafusion_common` home for value-construction helpers).
 //!
 //! ## Notes
 //! - **`append_value(value)` / `append_null()`.** Columns are built strictly
 //!   in row order; there is no indexed mutation. Skipped indices are modeled
 //!   as `append_null()`.
-//! - **`set_value_count(_n)` is a no-op.** arrow-rs builders track length
-//!   automatically as `.len()` and `.finish()` writes it into the output
-//!   array. The method is exposed for source compatibility but does nothing.
 //! - **Runtime type-dispatch** lives in the [`ArrowVectorBuilder`] enum, with
-//!   one variant per supported builder type. `set` accepts a [`ScalarValue`]
-//!   which the builder dispatches against its own variant.
-//! - **`build()` returns an [`ArrowFieldVector`]** wrapping the finished
-//!   `ArrayRef`.
+//!   one variant per supported builder type. `append_value` accepts a
+//!   [`ScalarValue`] which the builder dispatches against its own variant.
+//! - **`build()` returns an [`ArrayRef`]** wrapping the finished arrow array.
 //! - **Decimal / Decimal256 not yet supported.** arrow-rs's equivalents are
 //!   `Decimal128Array` / `Decimal256Array` with precision + scale in the
 //!   `DataType`; deferred until a downstream module needs them.
 
-use crate::{ScalarValue, arrow_field_vector::ArrowFieldVector};
+use crate::ScalarValue;
 use arrow_array::ArrayRef;
 use arrow_array::builder::{
     BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int8Builder,
@@ -68,10 +69,7 @@ impl ArrowVectorBuilder {
             DataType::Utf8 => Self::Utf8(StringBuilder::with_capacity(capacity, 0)),
             DataType::Binary => Self::Binary(BinaryBuilder::with_capacity(capacity, 0)),
             DataType::Date32 => Self::Date32(Date32Builder::with_capacity(capacity)),
-            other => panic!(
-                "ArrowVectorBuilder::new: unsupported data type: {:?}",
-                other
-            ),
+            other => panic!("ArrowVectorBuilder::new: unsupported data type: {other:?}"),
         }
     }
 
@@ -83,7 +81,7 @@ impl ArrowVectorBuilder {
     ///
     /// Panics if the value's type doesn't match the builder's type.
     pub fn append_value(&mut self, value: &ScalarValue) {
-        use ArrowVectorBuilder::*;
+        use ArrowVectorBuilder::{Boolean, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64, Utf8, Binary, Date32};
         use ScalarValue as V;
 
         // Null in the input → null in the output, for any builder type.
@@ -117,7 +115,7 @@ impl ArrowVectorBuilder {
 
     /// Append a null.
     pub fn append_null(&mut self) {
-        use ArrowVectorBuilder::*;
+        use ArrowVectorBuilder::{Boolean, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64, Utf8, Binary, Date32};
         match self {
             Boolean(b) => b.append_null(),
             Int8(b) => b.append_null(),
@@ -138,7 +136,7 @@ impl ArrowVectorBuilder {
 
     /// The Arrow data type this builder produces.
     pub fn data_type(&self) -> DataType {
-        use ArrowVectorBuilder::*;
+        use ArrowVectorBuilder::{Boolean, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64, Utf8, Binary, Date32};
         match self {
             Boolean(_) => DataType::Boolean,
             Int8(_) => DataType::Int8,
@@ -157,18 +155,10 @@ impl ArrowVectorBuilder {
         }
     }
 
-    /// No-op shim for setting an explicit value count. arrow-rs builders
-    /// track length automatically; this method is kept for source
-    /// compatibility but does nothing.
-    pub fn set_value_count(&mut self, _n: usize) {
-        // Intentionally empty. See file-level translation note.
-    }
-
-    /// Seal the builder and return an [`ArrowFieldVector`] wrapping the
-    /// finished `ArrayRef`.
-    pub fn build(mut self) -> ArrowFieldVector {
-        use ArrowVectorBuilder::*;
-        let array: ArrayRef = match &mut self {
+    /// Seal the builder and return the finished [`ArrayRef`].
+    pub fn build(mut self) -> ArrayRef {
+        use ArrowVectorBuilder::{Boolean, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64, Utf8, Binary, Date32};
+        match &mut self {
             Boolean(b) => Arc::new(b.finish()),
             Int8(b) => Arc::new(b.finish()),
             Int16(b) => Arc::new(b.finish()),
@@ -183,47 +173,51 @@ impl ArrowVectorBuilder {
             Utf8(b) => Arc::new(b.finish()),
             Binary(b) => Arc::new(b.finish()),
             Date32(b) => Arc::new(b.finish()),
-        };
-        ArrowFieldVector::new(array)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::column_vector::ColumnVector; // for v.size() / v.get_value()
 
-    /// Constructs an `Int32` vector by populating it 0..10 via
-    /// `append_value`, then asserts size==10 and each value matches its
+    /// Constructs an `Int32` array by populating it 0..10 via
+    /// `append_value`, then asserts length==10 and each value matches its
     /// index.
     #[test]
     fn build_int_vector() {
-        let mut b = ArrowVectorBuilder::new(&arrow_schema::DataType::Int32, 10);
+        let mut b = ArrowVectorBuilder::new(&DataType::Int32, 10);
         for i in 0..10_i32 {
             b.append_value(&ScalarValue::Int32(i));
         }
         let v = b.build();
-        assert_eq!(v.size(), 10);
-        for i in 0..v.size() {
-            assert_eq!(v.get_value(i).unwrap(), ScalarValue::Int32(i as i32));
+        assert_eq!(v.len(), 10);
+        for i in 0..v.len() {
+            assert_eq!(
+                ScalarValue::try_from_array(&v, i).unwrap(),
+                ScalarValue::Int32(i as i32)
+            );
         }
     }
 
     #[test]
     fn build_string_vector_with_nulls() {
-        let mut b = ArrowVectorBuilder::new(&arrow_schema::DataType::Utf8, 3);
+        let mut b = ArrowVectorBuilder::new(&DataType::Utf8, 3);
         b.append_value(&ScalarValue::Utf8("hello".to_string()));
         b.append_null();
         b.append_value(&ScalarValue::Utf8("world".to_string()));
         let v = b.build();
-        assert_eq!(v.size(), 3);
+        assert_eq!(v.len(), 3);
         assert_eq!(
-            v.get_value(0).unwrap(),
+            ScalarValue::try_from_array(&v, 0).unwrap(),
             ScalarValue::Utf8("hello".to_string())
         );
-        assert_eq!(v.get_value(1).unwrap(), ScalarValue::Null);
         assert_eq!(
-            v.get_value(2).unwrap(),
+            ScalarValue::try_from_array(&v, 1).unwrap(),
+            ScalarValue::Null
+        );
+        assert_eq!(
+            ScalarValue::try_from_array(&v, 2).unwrap(),
             ScalarValue::Utf8("world".to_string())
         );
     }
@@ -231,7 +225,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "cannot append")]
     fn type_mismatch_panics() {
-        let mut b = ArrowVectorBuilder::new(&arrow_schema::DataType::Int32, 1);
+        let mut b = ArrowVectorBuilder::new(&DataType::Int32, 1);
         b.append_value(&ScalarValue::Utf8("nope".to_string()));
     }
 }

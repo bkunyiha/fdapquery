@@ -8,14 +8,16 @@
 //! not code.
 
 use crate::{DistributedConfig, DistributedPlanner, ExecutorClient, Scheduler};
-use fdapquery_catalog::CsvDataSource;
+use fdapquery::DefaultPhysicalPlanner;
+use fdapquery_catalog::{CsvDataSource, provider_as_source};
 use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
 use fdapquery_optimizer::Optimizer;
-use fdapquery_physical_plan::DefaultPhysicalPlanner;
 use fdapquery_physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-// `PrattParser` trait must be in scope for `SqlParser::parse()`.
-use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_sql::SqlToRel;
+use fdapquery_sql::sqlparser::ast::Statement;
+use fdapquery_sql::sqlparser::dialect::GenericDialect;
+use fdapquery_sql::sqlparser::parser::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,7 +45,8 @@ impl<C: ExecutorClient> DistributedContext<C> {
     /// Register a CSV file as a table.
     pub fn register_csv(&mut self, table_name: &str, path: &str, has_header: bool) {
         let ds = CsvDataSource::new(path, None, has_header, CSV_BATCH_SIZE);
-        let scan = TableScan::new(path, Arc::new(ds), vec![])
+        // Wrap as `TableSource` for the logical plan.
+        let scan = TableScan::new(path, provider_as_source(Arc::new(ds)), vec![])
             .expect("DistributedContext::register_csv: scan construction");
         let df = DataFrame::new(LogicalPlan::TableScan(scan));
         self.register(table_name, df);
@@ -58,17 +61,18 @@ impl<C: ExecutorClient> DistributedContext<C> {
     /// `SendableRecordBatchStream` — the caller drains it on the active
     /// tokio runtime via `try_collect().await` / `try_next().await`.
     pub async fn sql(&self, sql: &str) -> Result<SendableRecordBatchStream> {
-        let tokens = SqlTokenizer::new(sql).tokenize()?;
-        let parsed = SqlParser::new(tokens).parse(0)?;
-        let select = match parsed {
-            Some(SqlExpr::Select(select)) => *select,
-            other => {
-                return Err(FdapQueryError::Plan(format!(
-                    "expected SELECT, found {other:?}"
-                )));
-            }
-        };
-        let df = SqlPlanner::new().create_data_frame(&select, &self.tables)?;
+        let dialect = GenericDialect {};
+        let mut statements: Vec<Statement> = Parser::parse_sql(&dialect, sql)
+            .map_err(|e| FdapQueryError::SqlParse(format!("{e}")))?;
+        if statements.len() > 1 {
+            return Err(FdapQueryError::Plan(
+                "multiple SQL statements per call are not supported at v0.1".into(),
+            ));
+        }
+        let statement: Statement = statements
+            .pop()
+            .ok_or_else(|| FdapQueryError::Plan("empty SQL input".into()))?;
+        let df = SqlToRel::new(&self.tables).sql_statement_to_plan(&statement)?;
         self.execute(df.logical_plan()).await
     }
 
@@ -77,8 +81,9 @@ impl<C: ExecutorClient> DistributedContext<C> {
     /// inside this function — driving the stream is the caller's job.
     pub async fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
         let optimized: LogicalPlan = Optimizer::new().optimize(plan)?;
-        let physical: Arc<dyn ExecutionPlan> =
-            DefaultPhysicalPlanner::new().create_physical_plan(&optimized)?;
+        let physical: Arc<dyn ExecutionPlan> = DefaultPhysicalPlanner::new()
+            .create_physical_plan(&optimized)
+            .await?;
         self.scheduler.execute(physical).await
     }
 }

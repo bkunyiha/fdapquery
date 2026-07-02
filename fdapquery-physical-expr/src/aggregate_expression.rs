@@ -5,19 +5,23 @@
 //! helpers shared by `MinExpr` / `MaxExpr`.
 
 use crate::expressions::{Accumulator, PhysicalExpr};
-use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
+use fdapquery_common::{FdapQueryError, Result, ScalarValue};
 use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
 /// Physical aggregate expression.
 ///
-/// `: fmt::Display` so `AggregateExec`'s `Display` impl can print its
-/// aggregates (e.g. `"MIN(#0)"`). `Send + Sync` lets
-/// `Arc<dyn AggregateExpr>` be shared with rayon workers in
-/// `ParallelContext` (see the `PhysicalPlan` module note); each concrete
-/// aggregate holds only an `Arc<dyn PhysicalExpr>` input plus plain data.
-pub trait AggregateExpr: fmt::Display + Send + Sync {
+/// `: fmt::Debug + fmt::Display` so `AggregateExec`'s `Display` impl can
+/// print its aggregates (e.g. `"MIN(salary@5)"` — after
+/// `Column` Display mirror DataFusion's `{name}@{index}`). The `Debug`
+/// supertrait mirrors DataFusion's `AggregateExpr: Debug + ...` and lets
+/// `AggregateExec` (which holds `Vec<Arc<dyn AggregateExpr>>`)
+/// `#[derive(Debug)]` directly. `Send + Sync` lets `Arc<dyn AggregateExpr>`
+/// be shared with rayon workers in `ParallelContext` (see the
+/// `PhysicalPlan` module note); each concrete aggregate holds only an
+/// `Arc<dyn PhysicalExpr>` input plus plain data.
+pub trait AggregateExpr: fmt::Debug + fmt::Display + Send + Sync {
     /// The expression whose values are aggregated.
     fn input_expression(&self) -> Arc<dyn PhysicalExpr>;
 
@@ -36,8 +40,13 @@ pub trait AggregateExpr: fmt::Display + Send + Sync {
 /// (e.g. involving `NaN`), so `scalar_lt`/`scalar_gt` treat `NaN` comparisons
 /// as always false. Unsupported type combinations surface as
 /// `Err(NotImplemented(_))`.
+// Arms look textually identical but bind values of distinct concrete types
+// (`i8` vs `i16` vs `f32` etc.) — they cannot be merged via `|` because the
+// bindings would no longer share a single type. Mirrors DataFusion's typed
+// dispatch in `compare_scalar`.
+#[allow(clippy::match_same_arms)]
 fn cmp_scalar(a: &ScalarValue, b: &ScalarValue) -> Result<Option<Ordering>> {
-    use ScalarValue::*;
+    use ScalarValue::{Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64, Utf8, Date32};
     Ok(match (a, b) {
         (Int8(x), Int8(y)) => Some(x.cmp(y)),
         (Int16(x), Int16(y)) => Some(x.cmp(y)),

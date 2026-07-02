@@ -70,14 +70,20 @@ async fn main() -> ExitCode {
     // Execute and time via `Instant::now()` + `elapsed()`.
     let df = ctx.sql(&sql).expect("tpch_runner: sql plan");
     let start = Instant::now();
-    let stream = ctx.execute_data_frame(&df).expect("tpch_runner: execute");
+    let stream = ctx
+        .execute_data_frame(&df)
+        .await
+        .expect("tpch_runner: execute");
     let batches: Vec<RecordBatch> = stream
         .try_collect()
         .await
         .expect("tpch_runner: drain stream");
     for batch in batches {
-        // Same shape as `nyc_taxi`: print schema then CSV row data.
-        println!("{:?}", batch.schema());
+        // Same shape as `nyc_taxi`: log schema at INFO, print CSV row data
+        // unconditionally. Mirrors DataFusion tpch/run.rs's pattern where
+        // pretty-formatted result output rides on `log::info!` and the
+        // primary result output rides on `println!`.
+        log::info!("output schema: {:?}", batch.schema());
         print!(
             "{}",
             to_csv(&batch).expect("tpch_runner: to_csv over result batch")

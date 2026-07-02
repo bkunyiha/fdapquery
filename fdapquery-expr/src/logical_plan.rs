@@ -2,7 +2,7 @@
 //! The six logical operator variants — `TableScan`, `Projection`, `Filter`,
 //! `Aggregate`, `Join`, `Limit` — are collected into the `LogicalPlan` enum
 //! below; `schema` / `children` / `Display` dispatch to the per-operator
-//! structs that live in their own files. The free function [`format`]
+//! structs that live in their own files. The free function [`format()`]
 //! produces an indented tree rendering.
 
 use crate::aggregate::Aggregate;
@@ -58,7 +58,7 @@ impl LogicalPlan {
 
 impl fmt::Display for LogicalPlan {
     /// Single-line description of this node; the tree form is produced by
-    /// [`format`].
+    /// [`format()`].
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LogicalPlan::TableScan(p) => write!(f, "{p}"),
@@ -93,23 +93,64 @@ fn format_indent(plan: &LogicalPlan, indent: usize) -> String {
 mod tests {
     use super::*;
     use crate::aggregate::Aggregate;
-    use crate::expressions::{cast, col, lit_string, max};
+    use crate::expr_fn::lit;
+    use crate::expressions::{cast, col, max};
     use crate::filter::Filter;
     use crate::projection::Projection;
     use crate::scan::TableScan;
-    use fdapquery_catalog::CsvDataSource;
+    use crate::table_source::TableSource;
+    use arrow_schema::DataType;
+    use fdapquery_datatypes::{Field, Schema};
     use std::sync::Arc;
 
-    fn employee_scan() -> TableScan {
-        let path = "../testdata/employee.csv";
-        let csv = Arc::new(CsvDataSource::new(path, None, true, 10));
-        TableScan::new("employee", csv, vec![]).unwrap()
+    /// Minimal `TableSource` mock for logical-plan tests.
+    ///
+    /// fdapquery-expr deliberately does not depend on fdapquery-catalog
+    /// (The two-trait split). Tests that need a
+    /// `TableSource` build this in-file mock instead of pulling
+    /// `CsvDataSource` in as a dev-dep. Mirrors DataFusion's
+    /// `datafusion_expr::test::test_table_source` pattern.
+    #[derive(Debug)]
+    struct MockTableSource {
+        schema: Schema,
     }
+
+    impl MockTableSource {
+        fn employee() -> Arc<dyn TableSource> {
+            Arc::new(Self {
+                schema: Schema::new(vec![
+                    Field::new("id", DataType::Int64, true),
+                    Field::new("first_name", DataType::Utf8, true),
+                    Field::new("last_name", DataType::Utf8, true),
+                    Field::new("state", DataType::Utf8, true),
+                    Field::new("job_title", DataType::Utf8, true),
+                    Field::new("salary", DataType::Int64, true),
+                ]),
+            })
+        }
+    }
+
+    impl TableSource for MockTableSource {
+        fn schema(&self) -> Schema {
+            self.schema.clone()
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn employee_scan() -> TableScan {
+        TableScan::new("employee", MockTableSource::employee(), vec![]).unwrap()
+    }
+
+    // `Expr::Literal(ScalarValue::Utf8("CO"))` displays
+    // bare `CO` (mirrors DataFusion's `ScalarValue::Display`), not the old
+    // quoted `'CO'`.
 
     #[test]
     fn build_logical_plan_manually() {
         let scan = LogicalPlan::TableScan(employee_scan());
-        let filter = LogicalPlan::Filter(Filter::new(scan, col("state").eq(lit_string("CO"))));
+        let filter = LogicalPlan::Filter(Filter::new(scan, col("state").eq(lit("CO"))));
         let plan = LogicalPlan::Projection(Projection::new(
             filter,
             vec![col("id"), col("first_name"), col("last_name")],
@@ -118,7 +159,7 @@ mod tests {
         assert_eq!(
             format(&plan),
             "Projection: #id, #first_name, #last_name\n\
-             \tFilter: #state = 'CO'\n\
+             \tFilter: #state = CO\n\
              \t\tTableScan: employee; projection=None\n"
         );
     }
@@ -128,7 +169,7 @@ mod tests {
         let plan = LogicalPlan::Projection(Projection::new(
             LogicalPlan::Filter(Filter::new(
                 LogicalPlan::TableScan(employee_scan()),
-                col("state").eq(lit_string("CO")),
+                col("state").eq(lit("CO")),
             )),
             vec![col("id"), col("first_name"), col("last_name")],
         ));
@@ -136,7 +177,7 @@ mod tests {
         assert_eq!(
             format(&plan),
             "Projection: #id, #first_name, #last_name\n\
-             \tFilter: #state = 'CO'\n\
+             \tFilter: #state = CO\n\
              \t\tTableScan: employee; projection=None\n"
         );
     }

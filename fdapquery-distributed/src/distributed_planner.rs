@@ -45,22 +45,34 @@ impl DistributedPlanner {
     /// Takes the aggregate by reference and Arc-clones the fields we need.
     /// The original aggregate's Arc-reference stays valid for the duration of
     /// this method; if the caller doesn't retain it, it drops cleanly.
+    ///
+    /// `AggregateExec` now strict-mirrors DataFusion: the
+    /// constructor is `try_new(mode, group_by, aggr_expr, filter_expr, input,
+    /// input_schema, schema)` and grouping uses the `PhysicalGroupBy`
+    /// struct accessed via `group_expr()`.
     fn plan_aggregate(&self, aggregate: &AggregateExec, job_uuid: &str) -> Vec<QueryStage> {
         let partition_count = self.config.partition_count();
+        let n_aggrs = aggregate.aggr_expr().len();
+        // Partition-by-group-keys: pull the flat expression list out of the
+        // PhysicalGroupBy (the shuffle layer is pre-grouping-set and only
+        // needs the simple shape today).
+        let partition_expr = aggregate.group_expr().input_exprs();
 
         // Stage 0: partial aggregate → shuffle writer.
-        // Arc-clone the input + group/aggregate exprs to share them with the
-        // partial aggregate. Schema is `Clone`.
-        let partial_aggregate = AggregateExec::new_with_mode(
-            Arc::clone(&aggregate.input),
-            aggregate.group_expr.clone(),
-            aggregate.aggregate_expr.clone(),
-            aggregate.schema.clone(),
+        // Share the input + group/aggregate exprs via Arc-clone.
+        let partial_aggregate = AggregateExec::try_new(
             AggregateMode::Partial,
-        );
+            Arc::new(aggregate.group_expr().clone()),
+            aggregate.aggr_expr().to_vec(),
+            vec![None; n_aggrs],
+            Arc::clone(aggregate.input()),
+            aggregate.input_schema(),
+            aggregate.schema(),
+        )
+        .expect("AggregateExec::try_new for Partial stage");
         let shuffle_writer = ShuffleWriterExec::new(
             Arc::new(partial_aggregate),
-            aggregate.group_expr.clone(), // partition by group keys
+            partition_expr,
             job_uuid.to_string(),
             0, // stage_id
             partition_count,
@@ -71,14 +83,18 @@ impl DistributedPlanner {
         // Stage 1: shuffle read → final aggregate. Locations are filled in by
         // `Scheduler::execute` after stage 0 completes
         // (see `update_shuffle_locations` below).
-        let shuffle_reader = ShuffleReaderExec::new(aggregate.schema.clone(), vec![]);
-        let final_aggregate = AggregateExec::new_with_mode(
-            Arc::new(shuffle_reader),
-            aggregate.group_expr.clone(),
-            aggregate.aggregate_expr.clone(),
-            aggregate.schema.clone(),
+        let shuffle_reader = ShuffleReaderExec::new(aggregate.schema(), vec![]);
+        let shuffle_reader_arc: Arc<dyn ExecutionPlan> = Arc::new(shuffle_reader);
+        let final_aggregate = AggregateExec::try_new(
             AggregateMode::Final,
-        );
+            Arc::new(aggregate.group_expr().clone()),
+            aggregate.aggr_expr().to_vec(),
+            vec![None; n_aggrs],
+            shuffle_reader_arc,
+            aggregate.input_schema(),
+            aggregate.schema(),
+        )
+        .expect("AggregateExec::try_new for Final stage");
         let stage1 = QueryStage::new(1, Arc::new(final_aggregate))
             .with_dependencies(vec![0]) // stage 0 is a dependency of stage 1
             .as_final_stage();
@@ -99,9 +115,9 @@ impl DistributedPlanner {
     pub fn update_shuffle_locations(
         &self,
         stage: QueryStage,
-        locations: Vec<ShuffleLocation>,
+        locations: &[ShuffleLocation],
     ) -> QueryStage {
-        let new_plan = substitute_shuffle_reader(stage.plan, &locations);
+        let new_plan = substitute_shuffle_reader(stage.plan, locations);
         QueryStage {
             stage_id: stage.stage_id,
             plan: new_plan,
@@ -131,7 +147,6 @@ fn substitute_shuffle_reader(
     // In the aggregate case, stage 1’s plan is not just a ShuffleReaderExec. It is:
     //   AggregateExec
     //     input: ShuffleReaderExec
-    //
     // Stage roots are often parents like AggregateExec; walk down to find
     // the ShuffleReaderExec leaf that actually needs the locations.
     // Otherwise: recurse into children, then rebuild this node with the
@@ -150,10 +165,10 @@ fn substitute_shuffle_reader(
 mod tests {
     use super::*;
     use crate::ExecutorConfig;
-    use fdapquery_catalog::CsvDataSource;
+    use fdapquery::DefaultPhysicalPlanner;
+    use fdapquery_catalog::{CsvDataSource, provider_as_source};
     use fdapquery_expr::{Aggregate, LogicalPlan, TableScan, col, sum};
     use fdapquery_optimizer::Optimizer;
-    use fdapquery_physical_plan::DefaultPhysicalPlanner;
     use std::sync::Arc;
 
     const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
@@ -167,11 +182,12 @@ mod tests {
     }
 
     /// `SELECT state, SUM(salary) FROM employee GROUP BY state` → 2 stages.
-    #[test]
-    fn plan_aggregate_query_into_two_stages() {
+    #[tokio::test]
+    async fn plan_aggregate_query_into_two_stages() {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan =
-            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
+        let scan = LogicalPlan::TableScan(
+            TableScan::new(EMPLOYEE_CSV, provider_as_source(Arc::new(csv)), vec![]).unwrap(),
+        );
         let aggregate = LogicalPlan::Aggregate(Aggregate::new(
             scan,
             vec![col("state")],
@@ -181,6 +197,7 @@ mod tests {
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
         let physical_plan = DefaultPhysicalPlanner::new()
             .create_physical_plan(&optimized)
+            .await
             .unwrap();
 
         let planner = DistributedPlanner::new(three_executor_config());
@@ -204,7 +221,7 @@ mod tests {
             .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("ShuffleWriter input should be AggregateExec");
-        assert_eq!(partial.mode, AggregateMode::Partial);
+        assert_eq!(*partial.mode(), AggregateMode::Partial);
 
         // Stage 1: final aggregate, depends on stage 0, is the final stage.
         let stage1 = &stages[1];
@@ -216,17 +233,19 @@ mod tests {
             .as_any()
             .downcast_ref::<AggregateExec>()
             .expect("stage 1 plan should be AggregateExec");
-        assert_eq!(final_agg.mode, AggregateMode::Final);
+        assert_eq!(*final_agg.mode(), AggregateMode::Final);
     }
 
     /// Plans with no aggregate become a single final stage.
-    #[test]
-    fn non_aggregate_query_produces_single_stage() {
+    #[tokio::test]
+    async fn non_aggregate_query_produces_single_stage() {
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan =
-            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
+        let scan = LogicalPlan::TableScan(
+            TableScan::new(EMPLOYEE_CSV, provider_as_source(Arc::new(csv)), vec![]).unwrap(),
+        );
         let physical_plan = DefaultPhysicalPlanner::new()
             .create_physical_plan(&scan)
+            .await
             .unwrap();
 
         let planner = DistributedPlanner::new(three_executor_config());

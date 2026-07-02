@@ -11,9 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // and Arrow-type message definitions.
     let protos: &[&str] = &["../proto/rquery.proto"];
 
-    // `build_client(false)` / `build_server(false)` — module 12 only needs the
-    // generated *message* types; the actual gRPC service surface lives in
-    // module 13 (`flight-server`), which calls `tonic-prost-build` on its own.
+    // `build_client(false)` / `build_server(false)` — the `fdapquery-distributed`
+    // crate only needs the generated *message* types; the actual gRPC service
+    // surface lives in the `fdapquery-flight-server` crate, which calls
+    // `tonic-prost-build` on its own.
     tonic_prost_build::configure()
         .build_client(false)
         .build_server(false)

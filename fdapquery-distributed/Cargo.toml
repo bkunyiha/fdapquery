@@ -33,7 +33,7 @@ uuid           = { workspace = true }
 #     ShuffleReaderExec / HashAggregateExec / AggregateMode — used by DistributedPlanner)
 #   - optimizer (Optimizer in DistributedContext.execute)
 #   - query-planner (QueryPlanner in DistributedContext.execute)
-#   - sql (SqlParser / SqlPlanner / SqlSelect / SqlTokenizer in DistributedContext.sql)
+#   - sql (SqlToRel + re-exported sqlparser in DistributedContext.sql)
 # `execution` is intentionally NOT a dependency — `DistributedContext`
 # re-implements the registry / SQL parse pipeline rather than reusing
 # `ExecutionContext`.
@@ -43,8 +43,18 @@ fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
 fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
 fdapquery-optimizer = { version = "0.1.0", path = "../fdapquery-optimizer" }
 fdapquery-sql = { version = "0.1.0", path = "../fdapquery-sql" }
+# `DefaultPhysicalPlanner` lives in the umbrella `fdapquery` crate
+# (matching DataFusion's split), not in `fdapquery-physical-plan`. The
+# concrete planner is the only thing this crate pulls from the umbrella —
+# `DistributedContext::execute` and the `DistributedPlanner` tests both
+# construct one. Verified non-cyclic: `fdapquery` does NOT depend on
+# `fdapquery-distributed` (the umbrella's `Cargo.toml` does not list it).
+fdapquery = { version = "0.1.0", path = "../fdapquery" }
 
 [dev-dependencies]
 # Tokio runtime for `#[tokio::test]` — the scheduler-against-mock test
 # drives the async `execute()` future on the test runtime.
 tokio          = { workspace = true }
+
+[lints]
+workspace = true

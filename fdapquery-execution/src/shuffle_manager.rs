@@ -11,7 +11,7 @@
 //! `ShuffleWriterExec::execute` and `ShuffleReaderExec::execute` are still
 //! stubbed with `unimplemented!()` — they need an executor context
 //! (`ExecutorContext`-style type carrying the per-executor `ShuffleManager`
-//! instance and identity) that lives in `flight-server` (module 13). The
+//! instance and identity) that lives in the `fdapquery-flight-server` crate. The
 //! manager itself is fully functional and unit-tested standalone.
 
 use arrow_ipc::reader::FileReader;
@@ -30,7 +30,7 @@ pub struct ShuffleManager {
 impl Default for ShuffleManager {
     fn default() -> Self {
         // Default shuffle-spill directory.
-        Self::new("/tmp/rquery-shuffle")
+        Self::new("/tmp/fdapquery-shuffle")
     }
 }
 
@@ -142,7 +142,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
+        format!("/tmp/fdapquery-shuffle-test-{tag}-{nanos}")
     }
 
     #[test]

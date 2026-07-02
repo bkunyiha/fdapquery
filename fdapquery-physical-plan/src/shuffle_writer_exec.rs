@@ -10,7 +10,7 @@
 //!   executor id/host/port) and where on local disk the shuffle storage is.
 //!   The "produces RecordBatches" shape doesn't fit either — writers produce
 //!   `Vec<ShuffleLocation>`.
-//! - [`Self::write_shuffle`] is the real entry point. It takes an
+//! - [`ShuffleWriterExec::write_shuffle`] is the real entry point. It takes an
 //!   `Arc<TaskContext>` (built once per executor binary in `flight-server`)
 //!   and returns the [`ShuffleLocation`]s the upstream stage can read from.
 //!   This stays sync because the caller (`flight-server::do_action`) runs
@@ -18,7 +18,7 @@
 //!
 //! ## Hash-partition algorithm
 //! For each input batch, evaluate the partition expressions row-by-row, hash
-//! the resulting tuple via [`crate::row_key::RowKey`] (the same float-aware
+//! the resulting tuple via `crate::row_key::RowKey` (the same float-aware
 //! hasher `HashJoinExec`/`AggregateExec` use for join/group keys), take
 //! modulo `partition_count` to pick a target partition, then filter the batch
 //! into per-partition sub-batches. After all input is consumed, every
@@ -35,10 +35,9 @@ use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::row_key::RowKey;
 use crate::stream::SendableRecordBatchStream;
-use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue, Schema,
-    record_batch,
-};
+use arrow_array::ArrayRef;
+use fdapquery_common::{ArrowVectorBuilder, FdapQueryError, Result, ScalarValue};
+use fdapquery_datatypes::{RecordBatch, Schema, record_batch};
 use fdapquery_execution::ShuffleLocation;
 use fdapquery_execution::TaskContext;
 use futures::TryStreamExt;
@@ -47,6 +46,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Partitions input by hash and writes shuffle output.
+#[derive(Debug)]
 pub struct ShuffleWriterExec {
     pub input: Arc<dyn ExecutionPlan>,
     pub partition_expr: Vec<Arc<dyn PhysicalExpr>>,
@@ -98,9 +98,9 @@ impl ShuffleWriterExec {
     /// The caller (`flight-server::do_action("execute_task")`) already runs
     /// this method on a `spawn_blocking` thread, so blocking on the input
     /// stream is fine. We use `futures::executor::block_on` to drain the
-    /// async input stream synchronously. Phase C may revisit if the
+    /// async input stream synchronously. Future work may revisit if the
     /// distributed module's call sites benefit from an async flavour.
-    pub fn write_shuffle(&self, ctx: Arc<TaskContext>) -> Result<Vec<ShuffleLocation>> {
+    pub fn write_shuffle(&self, ctx: &Arc<TaskContext>) -> Result<Vec<ShuffleLocation>> {
         let partition_count = self.partition_count as usize;
         // Captured once — output schema equals input schema.
         let schema = self.input.schema();
@@ -109,17 +109,17 @@ impl ShuffleWriterExec {
         let mut buffers: Vec<Vec<RecordBatch>> = (0..partition_count).map(|_| Vec::new()).collect();
 
         // Drain the input stream synchronously via `block_on`.
-        let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
+        let input_stream = self.input.execute(0, Arc::clone(ctx))?;
         let batches: Vec<RecordBatch> = futures::executor::block_on(input_stream.try_collect())?;
 
         for batch in batches {
-            let key_columns: Vec<Box<dyn ColumnVector>> = self
+            let row_count = batch.num_rows();
+            let key_columns: Vec<ArrayRef> = self
                 .partition_expr
                 .iter()
-                .map(|e| e.evaluate(&batch))
+                .map(|e| e.evaluate(&batch)?.into_array(row_count))
                 .collect::<Result<Vec<_>>>()?;
 
-            let row_count = batch.num_rows();
             let targets = compute_targets(&key_columns, row_count, partition_count)?;
 
             for (partition_id, buffer) in buffers.iter_mut().enumerate() {
@@ -159,7 +159,7 @@ impl ShuffleWriterExec {
 /// the row's partition-key tuple. Floats hash by bit pattern — same shape as
 /// [`crate::row_key::RowKey`].
 fn compute_targets(
-    key_columns: &[Box<dyn ColumnVector>],
+    key_columns: &[ArrayRef],
     row_count: usize,
     partition_count: usize,
 ) -> Result<Vec<usize>> {
@@ -167,7 +167,7 @@ fn compute_targets(
     for row in 0..row_count {
         let key: Vec<ScalarValue> = key_columns
             .iter()
-            .map(|c| c.get_value(row))
+            .map(|c| ScalarValue::try_from_array(c, row))
             .collect::<Result<Vec<_>>>()?;
         let mut hasher = DefaultHasher::new();
         RowKey(key).hash(&mut hasher);
@@ -180,25 +180,24 @@ fn compute_targets(
 /// `take[i]` is true.
 fn select_rows(batch: &RecordBatch, schema: &Schema, take: &[bool]) -> Result<RecordBatch> {
     let count = take.iter().filter(|&&b| b).count();
-    let columns: Vec<Box<dyn ColumnVector>> = (0..batch.num_columns())
-        .map(|col_idx| -> Result<Box<dyn ColumnVector>> {
-            let source = record_batch::field(batch, col_idx);
-            let mut builder = ArrowVectorBuilder::new(&source.get_type(), count);
+    let columns: Vec<ArrayRef> = (0..batch.num_columns())
+        .map(|col_idx| -> Result<ArrayRef> {
+            let source = batch.column(col_idx).clone();
+            let mut builder = ArrowVectorBuilder::new(source.data_type(), count);
             for (row, &t) in take.iter().enumerate() {
                 if t {
-                    let value = source.get_value(row)?;
+                    let value = ScalarValue::try_from_array(&source, row)?;
                     builder.append_value(&value);
                 }
             }
-            builder.set_value_count(count);
-            Ok(Box::new(builder.build()) as Box<dyn ColumnVector>)
+            Ok(builder.build())
         })
         .collect::<Result<Vec<_>>>()?;
     record_batch::create(schema, columns)
 }
 
 impl ExecutionPlan for ShuffleWriterExec {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "ShuffleWriterExec"
     }
 
@@ -257,8 +256,12 @@ impl ExecutionPlan for ShuffleWriterExec {
     }
 }
 
-impl std::fmt::Display for ShuffleWriterExec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl crate::display::DisplayAs for ShuffleWriterExec {
+    fn fmt_as(
+        &self,
+        _t: crate::display::DisplayFormatType,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         let exprs: Vec<String> = self.partition_expr.iter().map(|e| e.to_string()).collect();
         write!(
             f,
@@ -271,6 +274,16 @@ impl std::fmt::Display for ShuffleWriterExec {
     }
 }
 
+impl std::fmt::Display for ShuffleWriterExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <Self as crate::display::DisplayAs>::fmt_as(
+            self,
+            crate::display::DisplayFormatType::Default,
+            f,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests for `write_shuffle`. Each test uses a per-test tempdir keyed by
@@ -278,32 +291,16 @@ mod tests {
 
     use super::*;
     use crate::Column;
-    use crate::scan_exec::ScanExec;
-    use fdapquery_catalog::CsvDataSource;
-    use fdapquery_catalog::TableProvider;
+    use crate::test_util::employee_source;
     use fdapquery_execution::ShuffleManager;
     use fdapquery_execution::{RuntimeEnv, SessionConfig};
-
-    const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 
     fn temp_dir(tag: &str) -> String {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
-    }
-
-    fn employee_ds() -> Arc<dyn TableProvider> {
-        Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024))
-    }
-
-    fn employee_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
-        ds.schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect()
+        format!("/tmp/fdapquery-shuffle-test-{tag}-{nanos}")
     }
 
     fn make_ctx(executor_id: &str, host: &str, port: u16, base: &str) -> Arc<TaskContext> {
@@ -321,12 +318,10 @@ mod tests {
 
     #[test]
     fn writes_partitions_and_reports_locations_tagged_with_executor() {
-        // 4-row employee.csv → partition by `id` into 3 buckets.
-        let ds = employee_ds();
-        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
+        // 4-row employee fixture → partition by `id` into 3 buckets.
         let writer = ShuffleWriterExec::new(
-            scan,
-            vec![Arc::new(Column::new(0))], // partition by `id`
+            employee_source(),
+            vec![Arc::new(Column::new("id", 0))], // partition by `id`
             "test-job-shuffle-writer",
             0, // stage_id
             3, // partition_count
@@ -335,7 +330,7 @@ mod tests {
         let base = temp_dir("writer-happy");
         let ctx = make_ctx("exec-test", "127.0.0.1", 50099, &base);
 
-        let locations = writer.write_shuffle(Arc::clone(&ctx)).unwrap();
+        let locations = writer.write_shuffle(&ctx).unwrap();
 
         assert!(!locations.is_empty());
         assert!(locations.len() <= 3);
@@ -369,6 +364,7 @@ mod tests {
     #[test]
     fn empty_input_produces_no_locations_and_no_files() {
         // A tiny stub operator that yields no batches.
+        #[derive(Debug)]
         struct EmptyInput {
             schema: Schema,
             properties: PlanProperties,
@@ -382,7 +378,7 @@ mod tests {
             }
         }
         impl ExecutionPlan for EmptyInput {
-            fn name(&self) -> &str {
+            fn name(&self) -> &'static str {
                 "EmptyInput"
             }
             fn schema(&self) -> Schema {
@@ -414,16 +410,28 @@ mod tests {
                 self
             }
         }
-        impl std::fmt::Display for EmptyInput {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        impl crate::display::DisplayAs for EmptyInput {
+            fn fmt_as(
+                &self,
+                _t: crate::display::DisplayFormatType,
+                f: &mut std::fmt::Formatter<'_>,
+            ) -> std::fmt::Result {
                 write!(f, "EmptyInput")
             }
         }
+        impl std::fmt::Display for EmptyInput {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                <Self as crate::display::DisplayAs>::fmt_as(
+                    self,
+                    crate::display::DisplayFormatType::Default,
+                    f,
+                )
+            }
+        }
 
-        let ds = employee_ds();
         let writer = ShuffleWriterExec::new(
-            Arc::new(EmptyInput::new(ds.schema())),
-            vec![Arc::new(Column::new(0))],
+            Arc::new(EmptyInput::new(crate::test_util::employee_schema())),
+            vec![Arc::new(Column::new("id", 0))],
             "test-job-shuffle-writer-empty",
             0,
             3,
@@ -432,7 +440,7 @@ mod tests {
         let base = temp_dir("writer-empty");
         let ctx = make_ctx("exec-test", "127.0.0.1", 50099, &base);
 
-        let locations = writer.write_shuffle(Arc::clone(&ctx)).unwrap();
+        let locations = writer.write_shuffle(&ctx).unwrap();
 
         assert!(
             locations.is_empty(),
@@ -458,11 +466,9 @@ mod tests {
     #[test]
     fn single_partition_collects_all_rows_into_one_bucket() {
         // partition_count = 1 → every row must land in partition 0.
-        let ds = employee_ds();
-        let scan = Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
         let writer = ShuffleWriterExec::new(
-            scan,
-            vec![Arc::new(Column::new(0))],
+            employee_source(),
+            vec![Arc::new(Column::new("id", 0))],
             "test-job-shuffle-writer-one",
             0,
             1, // single partition
@@ -471,7 +477,7 @@ mod tests {
         let base = temp_dir("writer-one");
         let ctx = make_ctx("exec-test", "127.0.0.1", 50099, &base);
 
-        let locations = writer.write_shuffle(Arc::clone(&ctx)).unwrap();
+        let locations = writer.write_shuffle(&ctx).unwrap();
 
         assert_eq!(locations.len(), 1);
         assert_eq!(locations[0].partition_id, 0);

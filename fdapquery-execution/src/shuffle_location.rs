@@ -1,7 +1,8 @@
 //!
 //! Describes where the shuffle output for one partition lives, so a downstream
 //! stage can fetch it (locally or via Arrow Flight). Pure data — distributed
-//! execution (modules 12–14) consumes it.
+//! execution (the `fdapquery-distributed`, `fdapquery-flight-server`, and
+//! `fdapquery-flight-client` crates) consumes it.
 //!
 //! Note: there is also a `fdapquery_datatypes::ShuffleLocation` (a smaller 3-field variant);
 //! this is the richer 6-field physical-plan version.

@@ -7,11 +7,12 @@
 
 use crate::aggregate_expression::AggregateExpr;
 use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr, number_to_f64};
-use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
+use fdapquery_common::{FdapQueryError, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `AVG(expr)`.
+#[derive(Debug)]
 pub struct AvgExpr {
     expr: Arc<dyn PhysicalExpr>,
 }
@@ -72,7 +73,7 @@ impl Accumulator for AvgAccumulator {
         Ok(if self.count == 0 {
             ScalarValue::Null
         } else {
-            ScalarValue::Float64(self.sum / self.count as f64)
+            ScalarValue::Float64(self.sum / f64::from(self.count))
         })
     }
 
@@ -98,7 +99,7 @@ impl Accumulator for AvgAccumulator {
             }
             // A null partial (empty group) contributes nothing.
             AccumulatorValue::Scalar(ScalarValue::Null) => {}
-            other => {
+            other @ AccumulatorValue::Scalar(_) => {
                 return Err(FdapQueryError::Internal(format!(
                     "AvgAccumulator::merge: cannot merge AVG with: {other:?}"
                 )));

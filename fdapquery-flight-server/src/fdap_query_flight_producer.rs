@@ -6,8 +6,8 @@
 //!
 //! | Method                       | State |
 //! |------------------------------|-------|
-//! | `do_action("execute_task")`  | **real** — drives intermediate-stage task execution; downcasts to `ShuffleWriterExec`, calls `write_shuffle(Arc<TaskContext>)`, returns `pb::TaskResult` with shuffle locations |
-//! | `do_get`                     | **real** — streams `RecordBatch`es directly off the async `SendableRecordBatchStream` returned by `task.plan.execute(0, ctx)` (distributed final-stage path) or `SessionContext::execute(&logical_plan)` (interactive path). No `spawn_blocking` bridge — operators are async-native after Phase B. The async stream is piped into `FlightDataEncoderBuilder` and mapped to `tonic::Status` for the response item type. |
+//! | `do_action("execute_task")`  | **real** — drives intermediate-stage task execution; downcasts to `ShuffleWriterExec`, calls `write_shuffle(Arc<TaskContext>)`, returns `protobuf::TaskResult` with shuffle locations |
+//! | `do_get` | **real** — streams `RecordBatch`es directly off the async `SendableRecordBatchStream` returned by `task.plan.execute(0, ctx)` (distributed final-stage path) or `SessionContext::execute(&logical_plan)` (interactive path). No `spawn_blocking` bridge — operators are async-native. The async stream is piped into `FlightDataEncoderBuilder` and mapped to `tonic::Status` for the response item type. |
 //! | `handshake`, `list_flights`, `get_flight_info`, `poll_flight_info`, `get_schema`, `do_put`, `do_exchange`, `list_actions` | stub — `Status::unimplemented` |
 //!
 //! ## Task context
@@ -27,11 +27,11 @@ use arrow_flight::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
 };
-// Session 15c — `SessionContext` moved from `fdapquery-execution` to
+// `SessionContext` moved from `fdapquery-execution` to
 // the `fdapquery` umbrella crate.
 use fdapquery::SessionContext;
 use fdapquery_physical_plan::{ShuffleWriterExec, TaskContext};
-use fdapquery_proto::{deserialize_logical_plan, deserialize_task, pb};
+use fdapquery_proto::{deserialize_logical_plan, deserialize_task, protobuf};
 use futures::{Stream, StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -139,7 +139,7 @@ impl FlightService for FdapQueryFlightProducer {
     /// task as Arrow Flight data.
     ///
     /// ### Wire dispatch
-    /// The `pb::Action` carries either `query` (an interactive logical plan)
+    /// The `protobuf::Action` carries either `query` (an interactive logical plan)
     /// or `task` (a distributed final task). `do_get` checks `task` first
     /// and falls back to `query`:
     ///
@@ -149,15 +149,15 @@ impl FlightService for FdapQueryFlightProducer {
     ///   plan tree containing a `ShuffleReaderExec` because the
     ///   `ExecutionPlan::execute` trait method takes
     ///   `Arc<TaskContext>` and every operator threads it through. This
-    ///   is what `FlightExecutorClient::execute_final_task` in module 14
-    ///   calls.
+    ///   is what `FlightExecutorClient::execute_final_task` in the
+    ///   `fdapquery-flight-client` crate calls.
     /// - **`action.query` set** — interactive path. Deserialise to a
     ///   `LogicalPlan`, run via a fresh `SessionContext`. The
     ///   `Context::sql` API in this crate uses this path.
     /// - **Neither set** — `Status::invalid_argument`.
     ///
     /// ### Async-native — no `spawn_blocking` bridge
-    /// After Phase B every operator's `execute(0, ctx)` returns a
+    /// Every operator's `execute(0, ctx)` returns a
     /// `SendableRecordBatchStream`, so the producer pipes that stream
     /// directly into `FlightDataEncoderBuilder` and maps the per-frame
     /// `FlightError` to `tonic::Status::internal` for the response item
@@ -178,7 +178,7 @@ impl FlightService for FdapQueryFlightProducer {
         let ticket: Ticket = request.into_inner();
 
         // 1 — decode Action from ticket bytes
-        let action: pb::Action = prost::Message::decode(ticket.ticket.as_ref())
+        let action: protobuf::Action = prost::Message::decode(ticket.ticket.as_ref())
             .map_err(|e| Status::invalid_argument(format!("failed to decode Action: {e}")))?;
 
         // 2 — dispatch on which payload is set. `task` (distributed final
@@ -218,6 +218,7 @@ impl FlightService for FdapQueryFlightProducer {
                 let exec_ctx = SessionContext::new(HashMap::new());
                 exec_ctx
                     .execute(&logical_plan)
+                    .await
                     .map_err(|e| Status::internal(format!("execution context error: {e}")))?
             } else {
                 return Err(Status::invalid_argument(
@@ -268,11 +269,11 @@ impl FlightService for FdapQueryFlightProducer {
     }
 
     /// Dispatch on `action.type`. Only `"execute_task"` is implemented;
-    /// returns a [`pb::TaskResult`] protobuf carrying the shuffle locations
+    /// returns a [`protobuf::TaskResult`] protobuf carrying the shuffle locations
     /// the task produced.
     ///
     /// ### Wire flow
-    /// 1. `action.body` (bytes) is decoded as [`pb::TaskInfo`] via `prost::Message::decode`.
+    /// 1. `action.body` (bytes) is decoded as [`protobuf::TaskInfo`] via `prost::Message::decode`.
     /// 2. [`fdapquery_proto::deserialize_task`] converts it to a `fdapquery_physical_plan::Task`
     ///    (which carries `Arc<dyn PhysicalPlan>`).
     /// 3. Dispatch on the plan's concrete type via `as_any().downcast_ref::<ShuffleWriterExec>()`:
@@ -280,7 +281,7 @@ impl FlightService for FdapQueryFlightProducer {
     ///      get back `Vec<ShuffleLocation>`.
     ///    - Any other operator → drain `execute(&ctx)` for side effects and
     ///      return no locations.
-    /// 4. Build a [`pb::TaskResult`] tagged with the task identity and the
+    /// 4. Build a [`protobuf::TaskResult`] tagged with the task identity and the
     ///    location list, encode via `prost::Message::encode_to_vec`, wrap as
     ///    `arrow_flight::Result { body: bytes }`, return a one-element stream.
     ///
@@ -300,7 +301,7 @@ impl FlightService for FdapQueryFlightProducer {
         match action.r#type.as_str() {
             "execute_task" => {
                 // 1 — decode TaskInfo from the action body
-                let task_info: pb::TaskInfo = prost::Message::decode(action.body.as_ref())
+                let task_info: protobuf::TaskInfo = prost::Message::decode(action.body.as_ref())
                     .map_err(|e| {
                         Status::invalid_argument(format!("failed to decode TaskInfo: {e}"))
                     })?;
@@ -320,7 +321,7 @@ impl FlightService for FdapQueryFlightProducer {
                 let locations =
                     if let Some(writer) = task.plan.as_any().downcast_ref::<ShuffleWriterExec>() {
                         writer
-                            .write_shuffle(Arc::clone(&self.ctx))
+                            .write_shuffle(&self.ctx)
                             .map_err(|e| Status::internal(format!("write_shuffle failed: {e}")))?
                     } else {
                         // Non-shuffle tasks only make sense here if the plan is a sink
@@ -351,12 +352,15 @@ impl FlightService for FdapQueryFlightProducer {
                 debug!("Task produced {} shuffle location(s)", locations.len());
 
                 // 4 — build TaskResult, encode, wrap
-                let task_result = pb::TaskResult {
+                let task_result = protobuf::TaskResult {
                     job_uuid: task.job_uuid,
                     stage_id: task.stage_id,
                     task_id: task.task_id,
                     partition_id: task.partition_id,
-                    shuffle_locations: locations.iter().map(pb::ShuffleLocation::from).collect(),
+                    shuffle_locations: locations
+                        .iter()
+                        .map(protobuf::ShuffleLocation::from)
+                        .collect(),
                 };
                 let body: Vec<u8> = prost::Message::encode_to_vec(&task_result);
                 let result = arrow_flight::Result { body: body.into() };
@@ -385,16 +389,16 @@ mod tests {
     //! Direct method-level tests for `do_action`. We don't spin up a real
     //! tonic server here — that's `tests/integration_test.rs`.
     //! Instead we construct a `FdapQueryFlightProducer`, build an `Action` with a
-    //! serialised `pb::TaskInfo` body, call `do_action(Request::new(action))`,
-    //! collect the response stream, and assert on the decoded `pb::TaskResult`.
+    //! serialised `protobuf::TaskInfo` body, call `do_action(Request::new(action))`,
+    //! collect the response stream, and assert on the decoded `protobuf::TaskResult`.
 
     use super::*;
     use arrow_flight::Action;
     use fdapquery_catalog::CsvDataSource;
     use fdapquery_catalog::TableProvider;
+    use fdapquery_catalog::provider_as_source;
     use fdapquery_physical_plan::{
-        Column, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager,
-        ShuffleWriterExec, Task,
+        Column, ExecutionPlan, RuntimeEnv, SessionConfig, ShuffleManager, ShuffleWriterExec, Task,
     };
     use fdapquery_proto::serialize_task;
     use futures::StreamExt;
@@ -407,7 +411,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
+        format!("/tmp/fdapquery-shuffle-test-{tag}-{nanos}")
     }
 
     /// Build an `Arc<TaskContext>` for a flight-server test: a per-test
@@ -425,20 +429,15 @@ mod tests {
         ))
     }
 
-    fn build_task() -> Task {
+    /// The returned `Task` carries an `Arc<dyn ExecutionPlan>` whose
+    /// concrete type is `DataSourceExec` wrapping a `CsvDataSourceConfig`.
+    async fn build_task() -> Task {
         let ds: Arc<dyn TableProvider> =
             Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-        let columns: Vec<String> = ds
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect();
-        let scan: Arc<dyn ExecutionPlan> =
-            Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
+        let scan = ds.scan(None).await.unwrap();
         let writer: Arc<dyn ExecutionPlan> = Arc::new(ShuffleWriterExec::new(
             scan,
-            vec![Arc::new(Column::new(0))],
+            vec![Arc::new(Column::new("id", 0))],
             "test-job-do-action",
             0,
             3,
@@ -447,9 +446,9 @@ mod tests {
     }
 
     /// Encode a `Task` as `Action` body bytes via the protobuf round-trip the
-    /// real client (module 14) will use.
+    /// real client (in the `fdapquery-flight-client` crate) will use.
     fn build_execute_task_action(task: &Task) -> Action {
-        let task_info: pb::TaskInfo = serialize_task(task);
+        let task_info: protobuf::TaskInfo = serialize_task(task);
         let body: Vec<u8> = prost::Message::encode_to_vec(&task_info);
         Action {
             r#type: "execute_task".to_string(),
@@ -463,7 +462,7 @@ mod tests {
         let ctx = build_test_ctx("exec-test", 50099, &base);
         let producer = FdapQueryFlightProducer::new(ctx);
 
-        let task = build_task();
+        let task = build_task().await;
         let action = build_execute_task_action(&task);
 
         let response = producer
@@ -480,7 +479,7 @@ mod tests {
         assert_eq!(results.len(), 1, "exactly one result expected");
 
         // Decode the body as TaskResult and verify identity + locations.
-        let task_result: pb::TaskResult = prost::Message::decode(results[0].body.as_ref())
+        let task_result: protobuf::TaskResult = prost::Message::decode(results[0].body.as_ref())
             .expect("body should decode as TaskResult");
 
         assert_eq!(task_result.job_uuid, "test-job-do-action");
@@ -542,12 +541,14 @@ mod tests {
         // Build a LogicalPlan: scan employee.csv with all columns.
         let ds: Arc<dyn TableProvider> =
             Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-        let logical_plan =
-            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, ds, vec![]).unwrap());
+        // Wrap as `TableSource` for the logical plan.
+        let logical_plan = LogicalPlan::TableScan(
+            TableScan::new(EMPLOYEE_CSV, provider_as_source(ds), vec![]).unwrap(),
+        );
 
         // Serialise as Action protobuf and wrap in a Ticket.
         let plan_node = serialize_logical_plan(&logical_plan);
-        let action = pb::Action {
+        let action = protobuf::Action {
             query: Some(plan_node),
             task: None,
             settings: vec![],
@@ -572,7 +573,7 @@ mod tests {
             items.len()
         );
         for (i, item) in items.iter().enumerate() {
-            assert!(item.is_ok(), "stream item {i} was Err: {:?}", item);
+            assert!(item.is_ok(), "stream item {i} was Err: {item:?}");
         }
     }
 
@@ -606,7 +607,7 @@ mod tests {
         let producer = FdapQueryFlightProducer::new(ctx);
 
         // Valid Action protobuf bytes but with no query/task field.
-        let action = pb::Action {
+        let action = protobuf::Action {
             query: None,
             task: None,
             settings: vec![],

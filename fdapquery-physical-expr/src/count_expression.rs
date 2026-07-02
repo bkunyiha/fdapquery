@@ -4,11 +4,12 @@
 
 use crate::aggregate_expression::AggregateExpr;
 use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr, number_to_i64};
-use fdapquery_datatypes::{Result, ScalarValue};
+use fdapquery_common::{Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `COUNT(expr)`.
+#[derive(Debug)]
 pub struct CountExpr {
     expr: Arc<dyn PhysicalExpr>,
 }

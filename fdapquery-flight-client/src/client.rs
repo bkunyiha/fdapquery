@@ -13,7 +13,7 @@
 //! scheduler awaits each `execute_task` call on the caller's tokio
 //! runtime), so the entire dispatch path is async end-to-end. `Client`
 //! holds only the `Channel` and an `Endpoint` — no `Runtime` —
-//! eliminating the `block_on` bridge the Phase A client carried.
+//! eliminating the `block_on` bridge the client carried.
 
 use crate::endpoint::Endpoint;
 use anyhow::{Result, anyhow};
@@ -77,9 +77,9 @@ impl Client {
     /// custom handler broke the contract), we surface that as an error
     /// rather than silently returning empty bytes.
     ///
-    /// `body` is the protobuf payload — typically `pb::TaskInfo` encoded
+    /// `body` is the protobuf payload — typically `protobuf::TaskInfo` encoded
     /// via `prost::Message::encode_to_vec(&task_info)`. The returned
-    /// `Vec<u8>` is the response payload — typically a `pb::TaskResult`
+    /// `Vec<u8>` is the response payload — typically a `protobuf::TaskResult`
     /// the caller decodes via `prost::Message::decode(&bytes)`.
     pub async fn do_action(
         &self,
@@ -106,8 +106,8 @@ impl Client {
     /// the full collected vector.
     ///
     /// `ticket_body` is the protobuf payload that goes inside the Flight
-    /// `Ticket` message — typically a `pb::Action` (with `Action.query`
-    /// = `pb::LogicalPlanNode`) encoded via
+    /// `Ticket` message — typically a `protobuf::Action` (with `Action.query`
+    /// = `protobuf::LogicalPlanNode`) encoded via
     /// `prost::Message::encode_to_vec`. The server runs the plan, streams
     /// the result batches as `FlightData` messages, and this helper
     /// reassembles them.

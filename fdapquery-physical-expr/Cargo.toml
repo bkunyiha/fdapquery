@@ -8,17 +8,41 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+# `arrow::compute::{filter_record_batch, SlicesIterator}` are used by
+# the default `PhysicalExpr::evaluate_selection` impl and the
+# `utils::scatter` helper (strict mirror of DataFusion's
+# `evaluate_selection` / `scatter` in `physical-expr-common`).
+arrow         = { workspace = true }
+# `ArrayRef` is used by `ColumnarValue::Array`, the new return type
+# of `PhysicalExpr::evaluate` (Session 15d-2 #107). `BooleanArray`,
+# `new_empty_array`, `new_null_array`, and `make_array` are used by
+# the default `PhysicalExpr::evaluate_selection` impl and `utils::scatter`.
+arrow-array   = { workspace = true }
+# `arrow_data::transform::MutableArrayData` is used by `utils::scatter`
+# (the `scatter_fallback` arm DataFusion's `scatter` uses for Arrow types
+# without a specialised kernel).
+arrow-data    = { workspace = true }
 # `arrow_schema::DataType` is used by binary_expression.rs,
-# boolean_expression.rs, cast_expression.rs, math_expression.rs.
+# cast_expression.rs, and by `ColumnarValue::data_type()`.
 arrow-schema  = { workspace = true }
-# `chrono::NaiveDate` is used by date_expression.rs only.
-chrono        = { workspace = true }
-# `Result`, `FdapQueryError`, `ScalarValue`, `ColumnVector`, `arrow_types::*`
-# — used by every expression file.
+# `RecordBatch` is the type `PhysicalExpr::evaluate` consumes; the
+# `record_batch::row_count` / `to_csv` free helpers live in datatypes.
 fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
+# `ScalarValue`, `ArrowVectorBuilder`, `FdapQueryError`, `Result` —
+# used by every expression file. Session 15d-2 #107 moved
+# `ArrowVectorBuilder` here from `fdapquery-datatypes` when the
+# `ColumnVector` trait was dropped.
+fdapquery-common    = { version = "0.1.0", path = "../fdapquery-common" }
+# Session 15 #138 — the unified physical `BinaryExpr` is parameterised
+# by `fdapquery_expr::Operator`. `fdapquery-expr` does not depend on
+# `fdapquery-physical-expr`, so no cycle.
+fdapquery-expr      = { version = "0.1.0", path = "../fdapquery-expr" }
 
 [dev-dependencies]
-# Test modules in boolean_expression.rs and cast_expression.rs build
+# Test modules in binary_expression.rs and cast_expression.rs build
 # typed arrow arrays (Int8Array, StringArray, etc.) directly. Matches
 # the dev-dep `fdapquery-physical-plan` carries for the same reason.
 arrow-array = { workspace = true }
+
+[lints]
+workspace = true

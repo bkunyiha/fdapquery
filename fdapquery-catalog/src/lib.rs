@@ -16,9 +16,22 @@
 // Per-file modules.
 // ==============================================================
 pub mod csv_data_source;
+// `DefaultTableSource` is the adapter that wraps
+// any `Arc<dyn TableProvider>` as the lightweight logical-side
+// `Arc<dyn TableSource>` held by `LogicalPlan::TableScan`. Lives in
+// the catalog crate (alongside `TableProvider`), not in expr, because
+// it's the boundary the catalog crate owns.
+pub mod default_table_source;
 pub mod in_memory_data_source;
 pub mod parquet_data_source;
-// `TableProvider` (Session 13b) — replaces the pre-13b `DataSource`
+// `Session` trait, the catalog-side interface
+// for accessing session state from `TableProvider` and other catalog
+// traits. Strict mirror of `datafusion_session::Session`. Hosted in
+// `fdapquery-catalog` for the equivalent reason DataFusion hosts it
+// in `datafusion-session`: catalog-layer traits must not depend on
+// the umbrella crate where `SessionState` lives.
+pub mod session;
+// `TableProvider` — replaces the pre-13b `DataSource`
 // trait. Lives here, not in `fdapquery-physical-plan`, to avoid a
 // catalog → physical-plan → expr → catalog cycle.
 pub mod table_provider;
@@ -26,7 +39,9 @@ pub mod table_provider;
 // ==============================================================
 // Re-exports for convenient downstream `use catalog::*;` ergonomics.
 // ==============================================================
-pub use csv_data_source::CsvDataSource;
-pub use in_memory_data_source::InMemoryDataSource;
-pub use parquet_data_source::ParquetDataSource;
+pub use csv_data_source::{CsvDataSource, CsvDataSourceConfig};
+pub use default_table_source::{DefaultTableSource, provider_as_source, source_as_provider};
+pub use in_memory_data_source::{InMemoryDataSource, InMemoryDataSourceConfig};
+pub use parquet_data_source::{ParquetDataSource, ParquetDataSourceConfig};
+pub use session::Session;
 pub use table_provider::{SendableRecordBatchStream, TableProvider};
