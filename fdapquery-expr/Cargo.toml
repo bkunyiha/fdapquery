@@ -9,6 +9,17 @@ rust-version.workspace = true
 
 [dependencies]
 arrow-schema = { workspace = true }
-chrono       = { workspace = true }      # NaiveDate for `LiteralDate`
+chrono       = { workspace = true }      # NaiveDate for the `Literal` trait's date impl
+fdapquery-common    = { version = "0.1.0", path = "../fdapquery-common" }
 fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
-fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }
+# Session 15 #140 — `fdapquery-expr` deliberately does NOT depend on
+# `fdapquery-catalog`. The two-trait split puts the lightweight
+# `TableSource` trait in this crate and the heavyweight `TableProvider`
+# in catalog; `LogicalPlan::TableScan` holds `Arc<dyn TableSource>` so
+# no catalog edge is needed. Tests use an in-file `MockTableSource`
+# rather than `CsvDataSource` to keep the crate boundary clean
+# (mirrors DataFusion's `datafusion_expr::test::test_table_source`
+# pattern, where the expr crate is also free of catalog).
+
+[lints]
+workspace = true

@@ -112,7 +112,7 @@ async fn sql_aggregate(
     let first = results
         .first()
         .expect("no result batches collected — is BENCH_PATH empty of .csv files?");
-    println!("{:?}", first.schema());
+    log::info!("output schema: {:?}", first.schema());
 
     // -----------------------------------------------------------------------
     // Second stage: register the partials as an InMemoryDataSource and run
@@ -130,15 +130,18 @@ async fn sql_aggregate(
     let df = ctx.sql(sql_final).expect("benchmarks: final sql plan");
     let stream = ctx
         .execute_data_frame(&df)
+        .await
         .expect("benchmarks: final execute");
     let batches: Vec<RecordBatch> = stream
         .try_collect()
         .await
         .expect("benchmarks: drain final stream");
     for batch in batches {
-        // Verbose `Debug` dump of each batch; for CSV row output instead,
-        // swap for `to_csv(&batch)` (same convention as `nyc_taxi`).
-        println!("{batch:?}");
+        // Verbose `Debug` dump of each batch — gated behind `RUST_LOG=info`
+        // to match DataFusion tpch/run.rs's pattern for verbose result
+        // output. For CSV row output instead, swap for `to_csv(&batch)`
+        // (same convention as `nyc_taxi`).
+        log::info!("output batch: {batch:?}");
     }
 
     let duration = start.elapsed().as_millis();
@@ -153,17 +156,16 @@ async fn sql_aggregate(
     writeln!(w, "1,{duration}").expect("write row");
 }
 
-/// Per-file partial-query worker. Each rayon worker drives its async
-/// stream to completion via `futures::executor::block_on` — rayon
-/// threads don't have a tokio runtime. Same bridge as
-/// `ParallelContext::execute_parallel_aggregate` and
-/// `ShuffleWriterExec::write_shuffle`.
+/// Per-file partial-query worker. Each rayon worker drives both the
+/// async planner and the async stream to completion via
+/// `futures::executor::block_on` — rayon threads don't have a tokio
+/// runtime. Same bridge as `ParallelContext::execute_parallel_aggregate`
+/// and `ShuffleWriterExec::write_shuffle`.
 fn execute_query(path: &str, sql: &str, settings: &HashMap<String, String>) -> Vec<RecordBatch> {
     let mut ctx = SessionContext::new(settings.clone());
     ctx.register_csv("tripdata", path);
     let df = ctx.sql(sql).expect("benchmarks: per-file sql plan");
-    let stream = ctx
-        .execute_data_frame(&df)
+    let stream = futures::executor::block_on(ctx.execute_data_frame(&df))
         .expect("benchmarks: per-file execute");
     futures::executor::block_on(stream.try_collect()).expect("benchmarks: drain per-file stream")
 }
@@ -176,7 +178,11 @@ fn list_csv_files(path: &str) -> Vec<String> {
     let mut out: Vec<String> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".csv"))
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+        })
         .collect();
     out.sort(); // stable order; `fs::read_dir` ordering is platform-defined
     out
@@ -200,7 +206,7 @@ fn print_memory_stats(label: &str) {
         true,
         ProcessRefreshKind::nothing().with_memory(),
     );
-    let process_virtual = sys.process(pid).map(|p| p.virtual_memory()).unwrap_or(0);
+    let process_virtual = sys.process(pid).map_or(0, |p| p.virtual_memory());
     println!(
         "[{label}] maxMemory={} totalMemory={} freeMemory={}",
         sys.total_memory(),

@@ -37,7 +37,8 @@ use uuid::Uuid;
 ///
 /// The scheduler talks to remote executors only through this trait, so it can
 /// be unit-tested against an in-process mock (see `SchedulerTest`). The real
-/// implementation lives in `flight-server` / `client` (modules 13/14).
+/// implementation lives in the `fdapquery-flight-server` and
+/// `fdapquery-flight-client` crates (as `FlightExecutorClient`).
 ///
 /// ## Dual return types — by design
 /// Intermediate tasks produce **file references** (shuffle output written to
@@ -143,26 +144,25 @@ impl<C: ExecutorClient> Scheduler<C> {
 
             // If this stage has dependency input, rewrite its plan to point at
             // the actual shuffle locations.
-            let updated_stage: QueryStage = if !input_locations.is_empty() {
-                self.planner
-                    .update_shuffle_locations(stage, input_locations)
-            } else {
+            let updated_stage: QueryStage = if input_locations.is_empty() {
                 stage
+            } else {
+                self.planner
+                    .update_shuffle_locations(stage, &input_locations)
             };
 
             if updated_stage.is_final_stage {
                 return self.execute_final_stage(&job_uuid, updated_stage).await;
-            } else {
-                let current_stage_id = updated_stage.stage_id;
-                let locations: Vec<ShuffleLocation> =
-                    self.execute_stage(&job_uuid, updated_stage).await?;
-                debug!(
-                    "Stage {} produced {} shuffle locations",
-                    current_stage_id,
-                    locations.len()
-                );
-                locations_by_stage.insert(current_stage_id, locations);
             }
+            let current_stage_id = updated_stage.stage_id;
+            let locations: Vec<ShuffleLocation> =
+                self.execute_stage(&job_uuid, updated_stage).await?;
+            debug!(
+                "Stage {} produced {} shuffle locations",
+                current_stage_id,
+                locations.len()
+            );
+            locations_by_stage.insert(current_stage_id, locations);
         }
 
         // Plan had no final stage — this should be unreachable for a well-formed
@@ -235,11 +235,11 @@ mod tests {
 
     use super::*;
     use crate::ExecutorConfig;
-    use fdapquery_catalog::CsvDataSource;
+    use fdapquery::DefaultPhysicalPlanner;
+    use fdapquery_catalog::{CsvDataSource, provider_as_source};
     use fdapquery_datatypes::{RecordBatch, Schema};
     use fdapquery_expr::{Aggregate, LogicalPlan, TableScan, col, sum};
     use fdapquery_optimizer::Optimizer;
-    use fdapquery_physical_plan::DefaultPhysicalPlanner;
     use fdapquery_physical_plan::RecordBatchStreamAdapter;
     use futures::TryStreamExt;
     use std::sync::{Arc, Mutex};
@@ -357,8 +357,9 @@ mod tests {
 
         // SELECT state, SUM(salary) FROM employee GROUP BY state
         let csv = CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024);
-        let scan =
-            LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, Arc::new(csv), vec![]).unwrap());
+        let scan = LogicalPlan::TableScan(
+            TableScan::new(EMPLOYEE_CSV, provider_as_source(Arc::new(csv)), vec![]).unwrap(),
+        );
         let aggregate = LogicalPlan::Aggregate(Aggregate::new(
             scan,
             vec![col("state")],
@@ -368,6 +369,7 @@ mod tests {
         let optimized = Optimizer::new().optimize(&aggregate).unwrap();
         let physical_plan = DefaultPhysicalPlanner::new()
             .create_physical_plan(&optimized)
+            .await
             .unwrap();
 
         // Drive execution. The final-task mock returns an empty stream; we

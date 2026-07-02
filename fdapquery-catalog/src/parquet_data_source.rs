@@ -4,19 +4,31 @@
 //!
 //! ## Notes
 //! - The reader is row-group-paced internally — one batch per row group.
-//! - I/O and parse errors panic (file-not-found, corrupt file, etc.).
+//! - I/O and parse errors surface as `FdapQueryError`.
+//!
+//! Same two-layer shape as `CsvDataSource`: `ParquetDataSource` is the
+//! public `TableProvider`; its `scan(projection)` builds an inner
+//! [`ParquetDataSourceConfig`] (which implements `DataSource`) and wraps
+//! it in a `DataSourceExec`.
 
-use crate::table_provider::{SendableRecordBatchStream, TableProvider};
-use fdapquery_datatypes::{Result, Schema};
-// Session 15d-1 #92 — `SendableRecordBatchStream` requires
-// `RecordBatchStream` (carries `schema()`); wrap the raw iterator via
-// `RecordBatchStreamAdapter`.
-use fdapquery_execution::stream::RecordBatchStreamAdapter;
+use crate::table_provider::TableProvider;
+use async_trait::async_trait;
+use fdapquery_datasource::{DataSource, DataSourceExec};
+use fdapquery_datatypes::{FdapQueryError, Result, Schema};
+use fdapquery_execution::TaskContext;
+use fdapquery_execution::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
+use fdapquery_physical_plan::display::DisplayFormatType;
+use fdapquery_physical_plan::partitioning::Partitioning;
+use fdapquery_physical_plan::physical_plan::ExecutionPlan;
+use fdapquery_physical_plan::plan_properties::PlanProperties;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use std::any::Any;
+use std::fmt;
 use std::fs::File;
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct ParquetDataSource {
     pub filename: String,
 }
@@ -37,12 +49,13 @@ impl ParquetDataSource {
     }
 }
 
+#[async_trait]
 impl TableProvider for ParquetDataSource {
     fn schema(&self) -> Schema {
-        // `TableProvider::schema()` is still infallible this session
-        // (Phase A, Session 4 scope). `open_builder` now returns
-        // `Result`, so we `.expect("…")` here as scaffolding until a
-        // later session converts `schema()` to `Result<Schema>`.
+        // `TableProvider::schema()` is still infallible this session.
+        // `open_builder` now returns `Result`, so we `.expect("…")`
+        // here as scaffolding until a later session converts `schema()`
+        // to `Result<Schema>`.
         let builder = self
             .open_builder()
             .expect("ParquetDataSource::schema: open_builder failed");
@@ -54,44 +67,182 @@ impl TableProvider for ParquetDataSource {
         self
     }
 
-    fn scan(&self, projection: &[String]) -> Result<SendableRecordBatchStream> {
-        let builder = self.open_builder()?;
+    async fn scan(&self, projection: Option<&Vec<usize>>) -> Result<Arc<dyn ExecutionPlan>> {
+        let full_schema = self.schema();
+        let projected_schema = match projection {
+            None => full_schema.clone(),
+            Some(indices) => full_schema.project(indices)?,
+        };
+        let properties = PlanProperties::single_partition_unknown();
+        let config = ParquetDataSourceConfig {
+            filename: self.filename.clone(),
+            full_schema,
+            projected_schema,
+            projection: projection.cloned(),
+            properties,
+        };
+        Ok(Arc::new(DataSourceExec::new(Arc::new(config))))
+    }
+}
 
-        let builder = if projection.is_empty() {
-            builder
-        } else {
-            // arrow-rs uses ProjectionMask, built from leaf column names (we
+/// Inner `DataSource` implementation for a single Parquet file. Held
+/// inside `DataSourceExec` — constructed exclusively by
+/// `ParquetDataSource::scan`.
+#[derive(Debug)]
+pub struct ParquetDataSourceConfig {
+    filename: String,
+    full_schema: Schema,
+    projected_schema: Schema,
+    projection: Option<Vec<usize>>,
+    properties: PlanProperties,
+}
+
+impl ParquetDataSourceConfig {
+    /// The Parquet file path. Read by the protobuf serializer to
+    /// populate `protobuf::DataSourceExecNode.path`.
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub fn full_schema(&self) -> &Schema {
+        &self.full_schema
+    }
+
+    pub fn projection(&self) -> Option<&Vec<usize>> {
+        self.projection.as_ref()
+    }
+
+    /// Constructor used by the protobuf deserializer to rebuild a
+    /// `ParquetDataSourceConfig` from the `protobuf::DataSourceExecNode`
+    /// wire fields.
+    pub fn new_for_proto(
+        filename: String,
+        full_schema: Schema,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        let projected_schema = match &projection {
+            None => full_schema.clone(),
+            Some(indices) => full_schema.project(indices)?,
+        };
+        let properties = PlanProperties::single_partition_unknown();
+        Ok(Self {
+            filename,
+            full_schema,
+            projected_schema,
+            projection,
+            properties,
+        })
+    }
+
+    /// Open the file and return a fresh `ParquetRecordBatchReaderBuilder`.
+    /// Same shape as `ParquetDataSource::open_builder`; kept local so the
+    /// `DataSource::open` path doesn't reach back into the provider.
+    fn open_builder(&self) -> Result<ParquetRecordBatchReaderBuilder<File>> {
+        let file = File::open(&self.filename)?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+        Ok(builder)
+    }
+}
+
+impl DataSource for ParquetDataSourceConfig {
+    fn open(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return Err(FdapQueryError::Internal(format!(
+                "ParquetDataSourceConfig has 1 output partition; partition {partition} is out of range"
+            )));
+        }
+        let builder = self.open_builder()?;
+        let builder = if let Some(indices) = &self.projection {
+            // arrow-rs uses ProjectionMask, built from leaf column names. We
             // pass top-level column names — fine for flat schemas, which is
-            // all this Parquet reader is designed to handle).
+            // all this Parquet reader is designed to handle.
             let parquet_schema = builder.parquet_schema();
-            let mask =
-                ProjectionMask::columns(parquet_schema, projection.iter().map(String::as_str));
+            let names: Vec<&str> = indices
+                .iter()
+                .map(|i| self.full_schema.fields()[*i].name().as_str())
+                .collect();
+            let mask = ProjectionMask::columns(parquet_schema, names);
             builder.with_projection(mask)
+        } else {
+            builder
         };
 
         let reader = builder.build()?;
-
-        // The reader yields `Result<RecordBatch, ArrowError>`. Lift each
-        // per-batch error into `FdapQueryError` via the `#[from]` derive,
-        // then wrap the sync iterator as a pin-boxed Stream.
         let iter = reader.map(|res| res.map_err(Into::into));
-        let output_arrow_schema = Arc::new(self.schema().clone());
+        let projected_arrow_schema = Arc::new(self.projected_schema.clone());
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            output_arrow_schema,
+            projected_arrow_schema,
             futures::stream::iter(iter),
         )))
+    }
+
+    fn schema(&self) -> Schema {
+        self.projected_schema.clone()
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(1)
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let projection_disp: String = match &self.projection {
+            None => "[*]".to_string(),
+            Some(indices) => {
+                let names: Vec<&str> = indices
+                    .iter()
+                    .map(|i| self.full_schema.fields()[*i].name().as_str())
+                    .collect();
+                format!("[{}]", names.join(", "))
+            }
+        };
+        write!(
+            f,
+            "file_groups={{1 group: [[{}]]}}, projection={}",
+            self.filename, projection_disp
+        )
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fdapquery_common::ScalarValue;
+    use fdapquery_datatypes::RecordBatch;
     use fdapquery_datatypes::record_batch::row_count;
-    use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
     use futures::TryStreamExt;
 
     fn fixture(name: &str) -> String {
-        format!("../testdata/{}", name)
+        format!("../testdata/{name}")
+    }
+
+    fn test_ctx() -> Arc<TaskContext> {
+        Arc::new(TaskContext::default_test())
+    }
+
+    fn names_to_indices(parquet: &ParquetDataSource, names: &[&str]) -> Vec<usize> {
+        let schema = parquet.schema();
+        names
+            .iter()
+            .map(|n| {
+                schema
+                    .fields()
+                    .iter()
+                    .position(|f| f.name() == n)
+                    .unwrap_or_else(|| panic!("column '{n}' not in schema"))
+            })
+            .collect()
     }
 
     #[test]
@@ -113,15 +264,17 @@ mod tests {
             "string_col",
             "timestamp_col",
         ] {
-            assert!(names.contains(&expected), "missing column: {}", expected);
+            assert!(names.contains(&expected), "missing column: {expected}");
         }
     }
 
     #[tokio::test]
     async fn read_parquet_file_id_column() {
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
-        let batches: Vec<RecordBatch> = parquet
-            .scan(&["id".to_string()])
+        let indices = names_to_indices(&parquet, &["id"]);
+        let plan = parquet.scan(Some(&indices)).await.unwrap();
+        let batches: Vec<RecordBatch> = plan
+            .execute(0, test_ctx())
             .unwrap()
             .try_collect()
             .await
@@ -133,19 +286,24 @@ mod tests {
         assert_eq!(row_count(batch), 8);
 
         // Spot-check the column values.
-        let id_col = ArrowFieldVector::new(batch.column(0).clone());
+        let id_col = batch.column(0).clone();
         // Expected `id` sequence in the alltypes_plain fixture is 4,5,6,7,2,3,0,1.
         let expected: Vec<i32> = vec![4, 5, 6, 7, 2, 3, 0, 1];
         for (i, want) in expected.iter().enumerate() {
-            assert_eq!(id_col.get_value(i).unwrap(), ScalarValue::Int32(*want));
+            assert_eq!(
+                ScalarValue::try_from_array(&id_col, i).unwrap(),
+                ScalarValue::Int32(*want)
+            );
         }
     }
 
     #[tokio::test]
     async fn read_parquet_string_column_non_null() {
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
-        let batches: Vec<RecordBatch> = parquet
-            .scan(&["string_col".to_string()])
+        let indices = names_to_indices(&parquet, &["string_col"]);
+        let plan = parquet.scan(Some(&indices)).await.unwrap();
+        let batches: Vec<RecordBatch> = plan
+            .execute(0, test_ctx())
             .unwrap()
             .try_collect()
             .await
@@ -153,22 +311,18 @@ mod tests {
         assert!(!batches.is_empty());
         let batch = &batches[0];
         assert_eq!(batch.num_columns(), 1);
-        let col = ArrowFieldVector::new(batch.column(0).clone());
+        let col = batch.column(0).clone();
         // All values should be non-null.
-        for i in 0..col.size() {
+        for i in 0..col.len() {
             assert!(
-                !col.get_value(i).unwrap().is_null(),
-                "string at index {} is null",
-                i
+                !ScalarValue::try_from_array(&col, i).unwrap().is_null(),
+                "string at index {i} is null"
             );
         }
     }
 
-    // --- Session 13b: TableProvider trait-surface tests ----
-
     #[test]
     fn as_any_downcasts_to_parquet_data_source() {
-        use std::sync::Arc;
         let parquet = ParquetDataSource::new(fixture("alltypes_plain.parquet"));
         let provider: Arc<dyn TableProvider> = Arc::new(parquet);
         assert!(

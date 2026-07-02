@@ -4,7 +4,6 @@
 //! wrapping the extended plan.
 
 use crate::aggregate::Aggregate;
-use crate::expressions::AggregateExpr;
 use crate::filter::Filter;
 use crate::join::{Join, JoinType};
 use crate::limit::Limit;
@@ -39,8 +38,10 @@ impl DataFrame {
         }
     }
 
-    /// Aggregate.
-    pub fn aggregate(self, group_by: Vec<Expr>, aggregate_expr: Vec<AggregateExpr>) -> DataFrame {
+    /// Aggregate. Each element of `aggregate_expr` must be
+    /// `Expr::AggregateFunction(...)` — mirrors DataFusion's
+    /// `LogicalPlan::Aggregate` invariant.
+    pub fn aggregate(self, group_by: Vec<Expr>, aggregate_expr: Vec<Expr>) -> DataFrame {
         DataFrame {
             plan: LogicalPlan::Aggregate(Aggregate::new(self.plan, group_by, aggregate_expr)),
         }
@@ -89,31 +90,69 @@ impl DataFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, count, lit_double, lit_long, lit_string, max, min};
+    use crate::expr_fn::lit;
+    use crate::expressions::{col, count, max, min};
     use crate::logical_plan::{LogicalPlan, format};
     use crate::scan::TableScan;
-    use fdapquery_catalog::CsvDataSource;
+    use crate::table_source::TableSource;
+    use arrow_schema::DataType;
+    use fdapquery_datatypes::{Field, Schema};
     use std::sync::Arc;
 
+    /// Minimal `TableSource` mock for logical-plan tests.
+    ///
+    /// fdapquery-expr deliberately does not depend on fdapquery-catalog
+    /// (The two-trait split). Tests that need a
+    /// `TableSource` build this in-file mock instead of pulling
+    /// `CsvDataSource` in as a dev-dep. Mirrors DataFusion's
+    /// `datafusion_expr::test::test_table_source` pattern.
+    #[derive(Debug)]
+    struct MockTableSource {
+        schema: Schema,
+    }
+
+    impl MockTableSource {
+        fn employee() -> Arc<dyn TableSource> {
+            Arc::new(Self {
+                schema: Schema::new(vec![
+                    Field::new("id", DataType::Int64, true),
+                    Field::new("first_name", DataType::Utf8, true),
+                    Field::new("last_name", DataType::Utf8, true),
+                    Field::new("state", DataType::Utf8, true),
+                    Field::new("job_title", DataType::Utf8, true),
+                    Field::new("salary", DataType::Int64, true),
+                ]),
+            })
+        }
+    }
+
+    impl TableSource for MockTableSource {
+        fn schema(&self) -> Schema {
+            self.schema.clone()
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
     fn csv() -> DataFrame {
-        let path = "../testdata/employee.csv";
-        let scan = TableScan::new(
-            "employee",
-            Arc::new(CsvDataSource::new(path, None, true, 1024)),
-            vec![],
-        )
-        .unwrap();
+        let scan = TableScan::new("employee", MockTableSource::employee(), vec![]).unwrap();
         DataFrame::new(LogicalPlan::TableScan(scan))
     }
 
     #[test]
     fn build_data_frame() {
-        let df = csv()
-            .filter(col("state").eq(lit_string("CO")))
-            .project(vec![col("id"), col("first_name"), col("last_name")]);
+        let df = csv().filter(col("state").eq(lit("CO"))).project(vec![
+            col("id"),
+            col("first_name"),
+            col("last_name"),
+        ]);
 
+        // `Expr::Literal(ScalarValue::Utf8("CO"))` displays
+        // bare `CO` (mirrors DataFusion's `ScalarValue::Display`), not the
+        // old quoted `'CO'`.
         let expected = "Projection: #id, #first_name, #last_name\n\
-                        \tFilter: #state = 'CO'\n\
+                        \tFilter: #state = CO\n\
                         \t\tTableScan: employee; projection=None\n";
 
         assert_eq!(format(df.logical_plan()), expected);
@@ -122,19 +161,19 @@ mod tests {
     #[test]
     fn multiplier_and_alias() {
         let df = csv()
-            .filter(col("state").eq(lit_string("CO")))
+            .filter(col("state").eq(lit("CO")))
             .project(vec![
                 col("id"),
                 col("first_name"),
                 col("last_name"),
                 col("salary"),
-                col("salary").mult(lit_double(0.1)).alias("bonus"),
+                col("salary").mult(lit(0.1_f64)).alias("bonus"),
             ])
-            .filter(col("bonus").gt(lit_long(1000)));
+            .filter(col("bonus").gt(lit(1000_i64)));
 
         let expected = "Filter: #bonus > 1000\n\
                         \tProjection: #id, #first_name, #last_name, #salary, #salary * 0.1 as bonus\n\
-                        \t\tFilter: #state = 'CO'\n\
+                        \t\tFilter: #state = CO\n\
                         \t\t\tTableScan: employee; projection=None\n";
 
         assert_eq!(format(df.logical_plan()), expected);

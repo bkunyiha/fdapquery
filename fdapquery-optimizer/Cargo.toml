@@ -14,3 +14,6 @@ fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
 [dev-dependencies]
 # Used only by the optimizer test, which scans a CsvDataSource.
 fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }
+
+[lints]
+workspace = true

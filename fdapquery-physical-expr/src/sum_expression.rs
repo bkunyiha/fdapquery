@@ -8,11 +8,12 @@
 
 use crate::aggregate_expression::AggregateExpr;
 use crate::expressions::{Accumulator, AccumulatorValue, PhysicalExpr};
-use fdapquery_datatypes::{FdapQueryError, Result, ScalarValue};
+use fdapquery_common::{FdapQueryError, Result, ScalarValue};
 use std::fmt;
 use std::sync::Arc;
 
 /// `SUM(expr)`.
+#[derive(Debug)]
 pub struct SumExpr {
     expr: Arc<dyn PhysicalExpr>,
 }
@@ -89,7 +90,7 @@ impl Accumulator for SumAccumulator {
 /// Add two same-typed numeric scalars (integers wrap on overflow). A type SUM
 /// doesn't support surfaces as `Err(NotImplemented(_))`.
 fn scalar_add(a: &ScalarValue, b: &ScalarValue) -> Result<ScalarValue> {
-    use ScalarValue::*;
+    use ScalarValue::{Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64};
     Ok(match (a, b) {
         (Int8(x), Int8(y)) => Int8(x.wrapping_add(*y)),
         (Int16(x), Int16(y)) => Int16(x.wrapping_add(*y)),

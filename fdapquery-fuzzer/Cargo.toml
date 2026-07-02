@@ -8,13 +8,17 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+fdapquery-common    = { version = "0.1.0", path = "../fdapquery-common" }
 fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
 fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
-fdapquery-sql = { version = "0.1.0", path = "../fdapquery-sql" }
 rand         = { workspace = true }
+arrow-array  = { workspace = true }   # for `ArrayRef` after #107 dropped `ColumnVector`
 arrow-schema = { workspace = true }   # for `DataType` in `create_values` dispatch
 
 [dev-dependencies]
 # Smoke test reads testdata/employee.csv through a `CsvDataSource` to drive
 # `create_plan()`; the data-source crate is only needed at test time.
 fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }
+
+[lints]
+workspace = true

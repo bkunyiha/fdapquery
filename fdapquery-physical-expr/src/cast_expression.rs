@@ -4,16 +4,16 @@
 //! reading each source value (which may be a number, a string, or raw bytes)
 //! and converting it through a few small helpers.
 
+use crate::columnar_value::ColumnarValue;
 use crate::expressions::PhysicalExpr;
-use arrow_schema::DataType;
-use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
-    record_batch,
-};
+use arrow_schema::{DataType, Schema};
+use fdapquery_common::{ArrowVectorBuilder, FdapQueryError, Result, ScalarValue};
+use fdapquery_datatypes::{RecordBatch, record_batch};
 use std::fmt;
 use std::sync::Arc;
 
 /// Cast the result of `expr` to `data_type`.
+#[derive(Debug)]
 pub struct CastExpr {
     pub expr: Arc<dyn PhysicalExpr>,
     pub data_type: DataType,
@@ -26,12 +26,13 @@ impl CastExpr {
 }
 
 impl PhysicalExpr for CastExpr {
-    fn evaluate(&self, input: &RecordBatch) -> Result<Box<dyn ColumnVector>> {
-        let value = self.expr.evaluate(input)?;
-        let mut builder = ArrowVectorBuilder::new(&self.data_type, record_batch::row_count(input));
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        let num_rows = record_batch::row_count(batch);
+        let value = self.expr.evaluate(batch)?.into_array(num_rows)?;
+        let mut builder = ArrowVectorBuilder::new(&self.data_type, num_rows);
 
-        for i in 0..value.size() {
-            let vv = value.get_value(i)?;
+        for i in 0..value.len() {
+            let vv = ScalarValue::try_from_array(&value, i)?;
             if vv.is_null() {
                 builder.append_null();
                 continue;
@@ -53,8 +54,25 @@ impl PhysicalExpr for CastExpr {
             builder.append_value(&cast);
         }
 
-        builder.set_value_count(value.size());
-        Ok(Box::new(builder.build()))
+        Ok(ColumnarValue::Array(builder.build()))
+    }
+
+    /// The cast result's Arrow type is the explicit target type — the cast
+    /// is what determines it, so the input schema is unused. Mirrors
+    /// DataFusion's `CastExpr::data_type`:
+    ///
+    /// ```text
+    /// fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+    ///     Ok(self.cast_type().clone())
+    /// }
+    /// ```
+    ///
+    /// DataFusion stores the target type as part of a `target_field:
+    /// FieldRef` and exposes it via `self.cast_type()`; fdapquery stores
+    /// it directly as `self.data_type: DataType`, but the semantics are
+    /// identical.
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(self.data_type.clone())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -64,9 +82,10 @@ impl PhysicalExpr for CastExpr {
 
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // arrow-rs's `DataType` has no `Display`, so use its `Debug` form
-        // for the type name.
-        write!(f, "CAST({} AS {:?})", self.expr, self.data_type)
+        // Mirrors DataFusion's
+        // `write!(f, "CAST({} AS {})", self.expr, self.cast_type())`.
+        // Arrow `DataType` implements `Display`, so use `{}` (not `{:?}`).
+        write!(f, "CAST({} AS {})", self.expr, self.data_type)
     }
 }
 
@@ -75,13 +94,13 @@ impl fmt::Display for CastExpr {
 /// well-formed and the cast is supported, but the actual data didn't fit.
 fn to_i64(v: &ScalarValue) -> Result<i64> {
     Ok(match v {
-        ScalarValue::Int8(n) => *n as i64,
-        ScalarValue::Int16(n) => *n as i64,
-        ScalarValue::Int32(n) => *n as i64,
+        ScalarValue::Int8(n) => i64::from(*n),
+        ScalarValue::Int16(n) => i64::from(*n),
+        ScalarValue::Int32(n) => i64::from(*n),
         ScalarValue::Int64(n) => *n,
-        ScalarValue::UInt8(n) => *n as i64,
-        ScalarValue::UInt16(n) => *n as i64,
-        ScalarValue::UInt32(n) => *n as i64,
+        ScalarValue::UInt8(n) => i64::from(*n),
+        ScalarValue::UInt16(n) => i64::from(*n),
+        ScalarValue::UInt32(n) => i64::from(*n),
         ScalarValue::UInt64(n) => *n as i64,
         ScalarValue::Float32(f) => *f as i64,
         ScalarValue::Float64(f) => *f as i64,
@@ -117,12 +136,12 @@ fn to_f32(v: &ScalarValue) -> Result<f32> {
         }
         ScalarValue::Float32(f) => *f,
         ScalarValue::Float64(f) => *f as f32,
-        ScalarValue::Int8(n) => *n as f32,
-        ScalarValue::Int16(n) => *n as f32,
+        ScalarValue::Int8(n) => f32::from(*n),
+        ScalarValue::Int16(n) => f32::from(*n),
         ScalarValue::Int32(n) => *n as f32,
         ScalarValue::Int64(n) => *n as f32,
-        ScalarValue::UInt8(n) => *n as f32,
-        ScalarValue::UInt16(n) => *n as f32,
+        ScalarValue::UInt8(n) => f32::from(*n),
+        ScalarValue::UInt16(n) => f32::from(*n),
         ScalarValue::UInt32(n) => *n as f32,
         ScalarValue::UInt64(n) => *n as f32,
         other => {
@@ -146,14 +165,14 @@ fn to_f64(v: &ScalarValue) -> Result<f64> {
             })?
         }
         ScalarValue::Float64(f) => *f,
-        ScalarValue::Float32(f) => *f as f64,
-        ScalarValue::Int8(n) => *n as f64,
-        ScalarValue::Int16(n) => *n as f64,
-        ScalarValue::Int32(n) => *n as f64,
+        ScalarValue::Float32(f) => f64::from(*f),
+        ScalarValue::Int8(n) => f64::from(*n),
+        ScalarValue::Int16(n) => f64::from(*n),
+        ScalarValue::Int32(n) => f64::from(*n),
         ScalarValue::Int64(n) => *n as f64,
-        ScalarValue::UInt8(n) => *n as f64,
-        ScalarValue::UInt16(n) => *n as f64,
-        ScalarValue::UInt32(n) => *n as f64,
+        ScalarValue::UInt8(n) => f64::from(*n),
+        ScalarValue::UInt16(n) => f64::from(*n),
+        ScalarValue::UInt32(n) => f64::from(*n),
         ScalarValue::UInt64(n) => *n as f64,
         other => {
             return Err(FdapQueryError::Internal(format!(
@@ -186,7 +205,7 @@ fn scalar_to_string(v: &ScalarValue) -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Builds the input batch directly (the `fuzzer` crate covered in module 9
+    //! Builds the input batch directly (the `fdapquery-fuzzer` crate
     //! is not yet implemented).
     use super::*;
     use crate::column_expression::Column;
@@ -209,13 +228,17 @@ mod tests {
             Arc::new(Int8Array::from(a.clone())),
         );
 
-        let expr = CastExpr::new(Arc::new(Column::new(0)), arrow_schema::DataType::Utf8);
-        let result = expr.evaluate(&batch).unwrap();
+        let expr = CastExpr::new(Arc::new(Column::new("a", 0)), arrow_schema::DataType::Utf8);
+        let result = expr
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
 
-        assert_eq!(result.size(), a.len());
+        assert_eq!(result.len(), a.len());
         for (i, val) in a.iter().enumerate() {
             assert_eq!(
-                result.get_value(i).unwrap(),
+                ScalarValue::try_from_array(&result, i).unwrap(),
                 ScalarValue::Utf8(val.to_string())
             );
         }
@@ -232,13 +255,47 @@ mod tests {
             Arc::new(StringArray::from(a.clone())),
         );
 
-        let expr = CastExpr::new(Arc::new(Column::new(0)), arrow_schema::DataType::Float32);
-        let result = expr.evaluate(&batch).unwrap();
+        let expr = CastExpr::new(
+            Arc::new(Column::new("a", 0)),
+            arrow_schema::DataType::Float32,
+        );
+        let result = expr
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
 
-        assert_eq!(result.size(), a.len());
+        assert_eq!(result.len(), a.len());
         for (i, val) in a.iter().enumerate() {
             let expected: f32 = val.parse().unwrap();
-            assert_eq!(result.get_value(i).unwrap(), ScalarValue::Float32(expected));
+            assert_eq!(
+                ScalarValue::try_from_array(&result, i).unwrap(),
+                ScalarValue::Float32(expected)
+            );
+        }
+    }
+
+    /// `CastExpr::data_type` returns the explicit cast target, independent
+    /// of the input schema — mirrors DataFusion's
+    /// `Ok(self.cast_type().clone())`. Verified across several target
+    /// types to confirm the return is `self.data_type`, not the inner
+    /// expression's type.
+    #[test]
+    fn data_type_returns_cast_target() {
+        let schema = arrow_schema::Schema::new(vec![arrow_schema::Field::new(
+            "a",
+            arrow_schema::DataType::Int8,
+            true,
+        )]);
+        let inner = Arc::new(Column::new("a", 0));
+        for target in [
+            arrow_schema::DataType::Int64,
+            arrow_schema::DataType::Float64,
+            arrow_schema::DataType::Utf8,
+            arrow_schema::DataType::Date32,
+        ] {
+            let expr = CastExpr::new(inner.clone(), target.clone());
+            assert_eq!(expr.data_type(&schema).unwrap(), target);
         }
     }
 }

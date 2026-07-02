@@ -24,8 +24,8 @@ async-trait      = { workspace = true }
 # `RecordBatchStreamAdapter` glue used when wrapping the materialised
 # response batches back into a `SendableRecordBatchStream`.
 futures          = { workspace = true }
-# `prost` for direct `Message::encode_to_vec` / `decode` on `pb::Action`,
-# `pb::TaskInfo`, `pb::TaskResult` — same direct usage as `flight-server`.
+# `prost` for direct `Message::encode_to_vec` / `decode` on `protobuf::Action`,
+# `protobuf::TaskInfo`, `protobuf::TaskResult` — same direct usage as `flight-server`.
 prost            = { workspace = true }
 # `tracing` for log macros (matches `flight-server` and `distributed`).
 tracing          = { workspace = true }
@@ -57,8 +57,15 @@ anyhow       = { workspace = true }
 # dev-only — at runtime the client crate has no knowledge of
 # `flight-server`; the protocol contract is the protobuf bytes.
 fdapquery-flight-server = { version = "0.1.0", path = "../fdapquery-flight-server" }
+# `fdapquery` umbrella crate — the integration test drives the query
+# through `SessionContext::standalone(...)` via `SessionContextExt`.
+# Dev-only: no runtime dep on the umbrella from this crate.
+fdapquery               = { version = "0.1.0", path = "../fdapquery" }
 # `tokio-stream::wrappers::TcpListenerStream` wraps the bound
 # `TcpListener` for `tonic::transport::Server::serve_with_incoming` in
 # the in-process server spawn. Dev-only — production callers use
 # `flight_server::serve(addr, ctx)` which binds the listener internally.
 tokio-stream = "0.1"
+
+[lints]
+workspace = true

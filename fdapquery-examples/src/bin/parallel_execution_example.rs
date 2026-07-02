@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use fdapquery::{ParallelContext, SessionContext};
-use fdapquery_datatypes::{ArrowFieldVector, ColumnVector, RecordBatch, ScalarValue};
+use fdapquery_common::ScalarValue;
+use fdapquery_datatypes::RecordBatch;
 use futures::TryStreamExt;
 
 /// In-repo employee fixture used by the existing execution-module tests.
@@ -36,6 +37,7 @@ async fn main() {
     let seq_start = Instant::now();
     let seq_results: Vec<RecordBatch> = seq_ctx
         .execute_data_frame(&seq_df)
+        .await
         .expect("seq execute")
         .try_collect()
         .await
@@ -53,6 +55,7 @@ async fn main() {
     let par_start = Instant::now();
     let par_results: Vec<RecordBatch> = par_ctx
         .execute_data_frame(&par_df)
+        .await
         .expect("par execute")
         .try_collect()
         .await
@@ -80,17 +83,13 @@ async fn main() {
 /// Print every `(state, sum)` row in the result batches.
 fn print_results(batches: &[RecordBatch]) {
     for batch in batches {
-        // Wrap each column once with ArrowFieldVector so we can use the
-        // `ColumnVector::get_value(row)` API — same pattern `to_csv` uses.
-        let state_col = ArrowFieldVector::new(batch.column(0).clone());
-        let sum_col = ArrowFieldVector::new(batch.column(1).clone());
+        let state_col = batch.column(0).clone();
+        let sum_col = batch.column(1).clone();
         for row in 0..batch.num_rows() {
-            let state = state_col
-                .get_value(row)
-                .expect("parallel_execution_example: get_value over state column");
-            let value = sum_col
-                .get_value(row)
-                .expect("parallel_execution_example: get_value over sum column");
+            let state = ScalarValue::try_from_array(&state_col, row)
+                .expect("parallel_execution_example: read state column");
+            let value = ScalarValue::try_from_array(&sum_col, row)
+                .expect("parallel_execution_example: read sum column");
             let key = scalar_to_string(&state);
             println!("  {key}: {value:?}");
         }
@@ -104,15 +103,13 @@ fn print_results(batches: &[RecordBatch]) {
 fn extract_results(batches: &[RecordBatch]) -> HashMap<String, ScalarValue> {
     let mut out = HashMap::new();
     for batch in batches {
-        let state_col = ArrowFieldVector::new(batch.column(0).clone());
-        let sum_col = ArrowFieldVector::new(batch.column(1).clone());
+        let state_col = batch.column(0).clone();
+        let sum_col = batch.column(1).clone();
         for row in 0..batch.num_rows() {
-            let state = state_col
-                .get_value(row)
-                .expect("parallel_execution_example: get_value over state column");
-            let value = sum_col
-                .get_value(row)
-                .expect("parallel_execution_example: get_value over sum column");
+            let state = ScalarValue::try_from_array(&state_col, row)
+                .expect("parallel_execution_example: read state column");
+            let value = ScalarValue::try_from_array(&sum_col, row)
+                .expect("parallel_execution_example: read sum column");
             let key = scalar_to_string(&state);
             out.insert(key, value);
         }

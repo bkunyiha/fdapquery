@@ -27,34 +27,38 @@
 //!   `fn as_any(&self) -> &dyn Any` and we downcast with
 //!   `plan.as_any().downcast_ref::<AggregateExec>()` (mirroring
 //!   DataFusion's `ExecutionPlan::as_any`).
-//! - **`InMemoryPlan`** is a leaf `ExecutionPlan` that replays a
-//!   pre-loaded `Vec<RecordBatch>` as a `SendableRecordBatchStream` (via
-//!   `futures::stream::iter` + `RecordBatchStreamAdapter`), used to feed
-//!   the partial and final aggregates.
+//! - **`MemoryExec`** (from `fdapquery-physical-plan`) is the leaf
+//!   `ExecutionPlan` that replays a pre-loaded `Vec<RecordBatch>` as a
+//!   `SendableRecordBatchStream` (backed by
+//!   `fdapquery_execution::MemoryStream`), used to feed the partial and
+//!   final aggregates. Previously this file carried a bespoke
+//!   `InMemoryPlan` for the same job; the strict-mirror port folded
+//!   that into `MemoryExec` (matching DataFusion's shape).
 //! - The per-worker bucket type is plain `Vec<Vec<RecordBatch>>` —
 //!   buckets are filled on one thread before the parallel phase, so no
 //!   concurrent queue is needed.
 
 use std::collections::HashMap;
-use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::TryStreamExt;
 use rayon::prelude::*;
 
+use crate::DefaultPhysicalPlanner;
 use fdapquery_catalog::CsvDataSource;
 use fdapquery_catalog::TableProvider;
-use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result, Schema};
+use fdapquery_catalog::provider_as_source;
+use fdapquery_datatypes::{FdapQueryError, RecordBatch, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
 use fdapquery_optimizer::Optimizer;
-use fdapquery_physical_plan::DefaultPhysicalPlanner;
 use fdapquery_physical_plan::{
-    AggregateExec, AggregateMode, ExecutionPlan, PlanProperties, RecordBatchStreamAdapter,
-    RuntimeEnv, SendableRecordBatchStream, SessionConfig, TaskContext,
+    AggregateExec, AggregateMode, ExecutionPlan, MemoryExec, RecordBatchStreamAdapter, RuntimeEnv,
+    SendableRecordBatchStream, SessionConfig, TaskContext,
 };
-// `PrattParser` brings the `parse` method into scope for `SqlParser`.
-use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_sql::SqlToRel;
+use fdapquery_sql::sqlparser::dialect::GenericDialect;
+use fdapquery_sql::sqlparser::parser::Parser;
 
 /// Default CSV batch size when `rquery.csv.batchSize` is unset.
 const DEFAULT_BATCH_SIZE: usize = 1024;
@@ -62,8 +66,7 @@ const DEFAULT_BATCH_SIZE: usize = 1024;
 /// Number of workers when none is given.
 fn default_parallelism() -> usize {
     std::thread::available_parallelism()
-        .map(NonZeroUsize::get)
-        .unwrap_or(1)
+        .map_or(1, NonZeroUsize::get)
 }
 
 /// Execution context with parallel aggregation.
@@ -109,23 +112,28 @@ impl ParallelContext {
 
     /// Create a `DataFrame` for the given SQL `SELECT`.
     pub fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let tokens = SqlTokenizer::new(sql).tokenize()?;
-        let parsed = SqlParser::new(tokens).parse(0)?;
-        let select = match parsed {
-            Some(SqlExpr::Select(select)) => *select,
-            other => {
-                return Err(FdapQueryError::Plan(format!(
-                    "expected SELECT, found {other:?}"
-                )));
-            }
-        };
-        SqlPlanner::new().create_data_frame(&select, &self.tables)
+        let dialect = GenericDialect {};
+        let mut statements = Parser::parse_sql(&dialect, sql)
+            .map_err(|e| FdapQueryError::SqlParse(format!("{e}")))?;
+        if statements.len() > 1 {
+            return Err(FdapQueryError::Plan(
+                "multiple SQL statements per call are not supported at v0.1".into(),
+            ));
+        }
+        let statement = statements
+            .pop()
+            .ok_or_else(|| FdapQueryError::Plan("empty SQL input".into()))?;
+        SqlToRel::new(&self.tables).sql_statement_to_plan(&statement)
     }
 
     /// Get a `DataFrame` representing the specified CSV file.
     pub fn csv(&self, filename: &str) -> DataFrame {
-        let source = CsvDataSource::new(filename, None, true, self.batch_size);
-        let scan = TableScan::new(filename, Arc::new(source), vec![])
+        let source: Arc<dyn TableProvider> =
+            Arc::new(CsvDataSource::new(filename, None, true, self.batch_size));
+        // Wrap the heavyweight `TableProvider` in a
+        // `DefaultTableSource` so it can be held as the logical-side
+        // `Arc<dyn TableSource>` by `LogicalPlan::TableScan`.
+        let scan = TableScan::new(filename, provider_as_source(source), vec![])
             .expect("ParallelContext::csv: scan construction");
         DataFrame::new(LogicalPlan::TableScan(scan))
     }
@@ -137,7 +145,10 @@ impl ParallelContext {
 
     /// Register a data source with the context.
     pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn TableProvider>) {
-        let scan = TableScan::new(table_name, data_source, vec![])
+        // Wrap into a `DefaultTableSource` for the
+        // logical plan; the physical planner unwraps it at the
+        // `TableScan` seam via `source_as_provider`.
+        let scan = TableScan::new(table_name, provider_as_source(data_source), vec![])
             .expect("ParallelContext::register_data_source: scan construction");
         self.register(table_name, DataFrame::new(LogicalPlan::TableScan(scan)));
     }
@@ -151,16 +162,23 @@ impl ParallelContext {
     /// Execute the logical plan represented by a `DataFrame`. Returns a
     /// `SendableRecordBatchStream` — callers drive it to completion on a
     /// tokio runtime via `try_collect().await` / `try_next().await`.
-    pub fn execute_data_frame(&self, df: &DataFrame) -> Result<SendableRecordBatchStream> {
-        self.execute(df.logical_plan())
+    ///
+    /// `async fn` because the
+    /// physical planner is now `async fn`.
+    pub async fn execute_data_frame(&self, df: &DataFrame) -> Result<SendableRecordBatchStream> {
+        self.execute(df.logical_plan()).await
     }
 
-    /// Execute the provided logical plan with parallel processing. Returns
-    /// a `SendableRecordBatchStream` synchronously — the stream is async
-    /// but construction is not.
-    pub fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
+    /// Execute the provided logical plan with parallel processing.
+    /// Returns a `SendableRecordBatchStream` after awaiting the
+    /// physical planner. The stream itself is async; the rayon-driven
+    /// partial/final aggregate split inside `execute_parallel` stays
+    /// blocking on rayon workers (CPU-bound).
+    pub async fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
         let optimized = Optimizer::new().optimize(plan)?;
-        let physical = DefaultPhysicalPlanner::new().create_physical_plan(&optimized)?;
+        let physical = DefaultPhysicalPlanner::new()
+            .create_physical_plan(&optimized)
+            .await?;
         let ctx = Arc::new(TaskContext::new(
             "parallel",
             "localhost",
@@ -168,13 +186,13 @@ impl ParallelContext {
             SessionConfig::new(),
             Arc::new(RuntimeEnv::default_local()),
         ));
-        self.execute_parallel(physical, ctx)
+        self.execute_parallel(&physical, ctx)
     }
 
     /// Run a physical plan, special-casing `AggregateExec` for parallelism.
     fn execute_parallel(
         &self,
-        plan: Arc<dyn ExecutionPlan>,
+        plan: &Arc<dyn ExecutionPlan>,
         ctx: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // Standard Rust idiom for "is this trait object a specific concrete type?"
@@ -229,7 +247,7 @@ impl ParallelContext {
 
         if all_partial.is_empty() {
             // Emit an empty stream over the aggregate's output schema.
-            let arrow_schema = Arc::new(aggregate.schema.clone());
+            let arrow_schema = Arc::new(aggregate.schema());
             let empty = futures::stream::empty::<Result<RecordBatch>>();
             return Ok(Box::pin(RecordBatchStreamAdapter::new(arrow_schema, empty)));
         }
@@ -249,13 +267,24 @@ fn execute_partial_aggregate(
     batches: Vec<RecordBatch>,
     ctx: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
-    let partial = AggregateExec::new_with_mode(
-        Arc::new(InMemoryPlan::new(aggregate.input.schema(), batches)),
-        aggregate.group_expr.clone(),
-        aggregate.aggregate_expr.clone(),
-        aggregate.schema.clone(),
+    // Strict-mirror constructor: `try_new(mode, group_by,
+    // aggr_expr, filter_expr, input, input_schema, schema)`. The group-by
+    // and aggregate-expression lists are reused unchanged; filter_expr is
+    // a same-length vec of `None`s because fdapquery has no FILTER (WHERE)
+    // surface on aggregates today.
+    let input: Arc<dyn ExecutionPlan> =
+        Arc::new(MemoryExec::new(aggregate.input.schema(), batches));
+    let n_aggrs = aggregate.aggr_expr().len();
+    let partial = AggregateExec::try_new(
         AggregateMode::Partial,
-    );
+        Arc::new(aggregate.group_expr().clone()),
+        aggregate.aggr_expr().to_vec(),
+        vec![None; n_aggrs],
+        input,
+        aggregate.input_schema(),
+        aggregate.schema(),
+    )
+    .expect("AggregateExec::try_new for parallel Partial stage");
     futures::executor::block_on(partial.execute(0, ctx)?.try_collect())
 }
 
@@ -267,102 +296,20 @@ fn execute_final_aggregate(
     partial_batches: Vec<RecordBatch>,
     ctx: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
-    let final_aggregate = AggregateExec::new_with_mode(
-        Arc::new(InMemoryPlan::new(aggregate.schema.clone(), partial_batches)),
-        aggregate.group_expr.clone(),
-        aggregate.aggregate_expr.clone(),
-        aggregate.schema.clone(),
+    let input: Arc<dyn ExecutionPlan> =
+        Arc::new(MemoryExec::new(aggregate.schema(), partial_batches));
+    let n_aggrs = aggregate.aggr_expr().len();
+    let final_aggregate = AggregateExec::try_new(
         AggregateMode::Final,
-    );
+        Arc::new(aggregate.group_expr().clone()),
+        aggregate.aggr_expr().to_vec(),
+        vec![None; n_aggrs],
+        input,
+        aggregate.input_schema(),
+        aggregate.schema(),
+    )
+    .expect("AggregateExec::try_new for parallel Final stage");
     final_aggregate.execute(0, ctx)
-}
-
-/// Leaf physical plan over pre-loaded batches. Mirrors `MemoryExec` in
-/// DataFusion: caches its output schema and `PlanProperties` at
-/// construction, and on `execute` wraps the in-memory `Vec<RecordBatch>`
-/// in a `futures::stream::iter` adapted to a `SendableRecordBatchStream`
-/// via `RecordBatchStreamAdapter`.
-struct InMemoryPlan {
-    schema: Schema,
-    batches: Vec<RecordBatch>,
-    properties: PlanProperties,
-}
-
-impl InMemoryPlan {
-    fn new(schema: Schema, batches: Vec<RecordBatch>) -> Self {
-        let properties = PlanProperties::single_partition_unknown();
-        Self {
-            schema,
-            batches,
-            properties,
-        }
-    }
-}
-
-impl fmt::Display for InMemoryPlan {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InMemoryPlan: {} batches", self.batches.len())
-    }
-}
-
-impl fmt::Debug for InMemoryPlan {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
-impl ExecutionPlan for InMemoryPlan {
-    fn name(&self) -> &str {
-        "InMemoryPlan"
-    }
-
-    fn schema(&self) -> Schema {
-        self.schema.clone()
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.properties
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        Vec::new()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        _ctx: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return Err(FdapQueryError::Internal(format!(
-                "InMemoryPlan has 1 output partition; partition {partition} is out of range"
-            )));
-        }
-        // arrow `RecordBatch` is `Arc`-backed, so cloning the vec is cheap.
-        let arrow_schema = Arc::new(self.schema.clone());
-        let stream = futures::stream::iter(self.batches.clone().into_iter().map(Ok));
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            arrow_schema,
-            stream,
-        )))
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !children.is_empty() {
-            return Err(FdapQueryError::Internal(format!(
-                "InMemoryPlan is a leaf and expects no children, got {}",
-                children.len()
-            )));
-        }
-        Ok(self)
-    }
 }
 
 #[cfg(test)]
@@ -380,9 +327,12 @@ mod tests {
     const SQL: &str = "SELECT state, SUM(CAST(salary AS double)) FROM employee GROUP BY state";
 
     /// Drain a context-produced async stream to a `Vec<RecordBatch>`.
-    /// Encapsulates the standard test-time await pattern.
-    async fn collect_batches(stream: Result<SendableRecordBatchStream>) -> Vec<RecordBatch> {
-        stream.unwrap().try_collect::<Vec<_>>().await.unwrap()
+    /// Encapsulates the standard test-time await pattern. The argument
+    /// is an `impl Future` because `execute_data_frame` is `async fn`.
+    async fn collect_batches(
+        fut: impl std::future::Future<Output = Result<SendableRecordBatchStream>>,
+    ) -> Vec<RecordBatch> {
+        fut.await.unwrap().try_collect::<Vec<_>>().await.unwrap()
     }
 
     /// Flatten batches into a set of CSV rows so comparisons ignore the

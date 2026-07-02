@@ -50,7 +50,7 @@ use fdapquery_distributed::{ExecutorClient, ExecutorConfig};
 use fdapquery_physical_plan::{
     RecordBatchStreamAdapter, SendableRecordBatchStream, ShuffleLocation, Task,
 };
-use fdapquery_proto::{pb, serialize_task};
+use fdapquery_proto::{protobuf, serialize_task};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -120,7 +120,7 @@ fn empty_stream() -> SendableRecordBatchStream {
 impl ExecutorClient for FlightExecutorClient {
     /// Ship a `ShuffleWriterExec` task to the executor via
     /// `do_action("execute_task", ...)`. Decodes the returned
-    /// `pb::TaskResult` into a `Vec<ShuffleLocation>`. Async — the
+    /// `protobuf::TaskResult` into a `Vec<ShuffleLocation>`. Async — the
     /// scheduler awaits this on its tokio runtime.
     async fn execute_task(
         &self,
@@ -128,7 +128,7 @@ impl ExecutorClient for FlightExecutorClient {
         task: Task,
     ) -> Result<Vec<ShuffleLocation>> {
         // Encode the physical task into the protobuf payload expected by Flight.
-        let task_info: pb::TaskInfo = serialize_task(&task);
+        let task_info: protobuf::TaskInfo = serialize_task(&task);
         let body: Vec<u8> = prost::Message::encode_to_vec(&task_info);
 
         debug!(
@@ -144,8 +144,8 @@ impl ExecutorClient for FlightExecutorClient {
             .map_err(|e| FdapQueryError::Internal(format!("execute_task do_action failed: {e}")))?;
 
         // The server replies with TaskResult, not data batches.
-        let task_result: pb::TaskResult =
-            prost::Message::decode(&response_bytes[..]).map_err(|e| {
+        let task_result: protobuf::TaskResult = prost::Message::decode(&response_bytes[..])
+            .map_err(|e| {
                 FdapQueryError::Internal(format!("execute_task: failed to decode TaskResult: {e}"))
             })?;
 
@@ -166,7 +166,7 @@ impl ExecutorClient for FlightExecutorClient {
     }
 
     /// Ship the final-stage task to the executor via `do_get` (with the
-    /// `pb::Action.task` field). Returns the response as a
+    /// `protobuf::Action.task` field). Returns the response as a
     /// `SendableRecordBatchStream` over the materialised batches.
     ///
     /// This path works for any plan tree containing `ShuffleReaderExec`
@@ -179,7 +179,7 @@ impl ExecutorClient for FlightExecutorClient {
     /// rewriting needed.
     ///
     /// v0.1 collects the wire stream into a `Vec<RecordBatch>` before
-    /// wrapping it in a `RecordBatchStreamAdapter` — a Phase D
+    /// wrapping it in a `RecordBatchStreamAdapter` — a
     /// optimisation will pipe `FlightRecordBatchStream` straight through
     /// without buffering.
     async fn execute_final_task(
@@ -187,9 +187,9 @@ impl ExecutorClient for FlightExecutorClient {
         executor: &ExecutorConfig,
         task: Task,
     ) -> Result<SendableRecordBatchStream> {
-        let task_info: pb::TaskInfo = serialize_task(&task);
+        let task_info: protobuf::TaskInfo = serialize_task(&task);
         // Final stages stream result batches through do_get using Action.task.
-        let action = pb::Action {
+        let action = protobuf::Action {
             query: None,
             task: Some(task_info),
             settings: vec![],

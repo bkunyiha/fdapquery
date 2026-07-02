@@ -22,6 +22,7 @@ use futures::StreamExt;
 use std::sync::Arc;
 
 /// Reads shuffle data from a set of locations.
+#[derive(Debug)]
 pub struct ShuffleReaderExec {
     pub shuffle_schema: Schema,
     pub shuffle_locations: Vec<ShuffleLocation>,
@@ -40,7 +41,7 @@ impl ShuffleReaderExec {
 }
 
 impl ExecutionPlan for ShuffleReaderExec {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "ShuffleReaderExec"
     }
 
@@ -134,13 +135,27 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 }
 
-impl std::fmt::Display for ShuffleReaderExec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl crate::display::DisplayAs for ShuffleReaderExec {
+    fn fmt_as(
+        &self,
+        _t: crate::display::DisplayFormatType,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         write!(
             f,
             "ShuffleReaderExec: schema={:?}, locations={}",
             self.shuffle_schema,
             self.shuffle_locations.len()
+        )
+    }
+}
+
+impl std::fmt::Display for ShuffleReaderExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <Self as crate::display::DisplayAs>::fmt_as(
+            self,
+            crate::display::DisplayFormatType::Default,
+            f,
         )
     }
 }
@@ -152,10 +167,8 @@ mod tests {
 
     use super::*;
     use crate::Column;
-    use crate::scan_exec::ScanExec;
     use crate::shuffle_writer_exec::ShuffleWriterExec;
-    use fdapquery_catalog::CsvDataSource;
-    use fdapquery_catalog::TableProvider;
+    use crate::test_util::{employee_schema, employee_source};
     use fdapquery_execution::ShuffleManager;
     use fdapquery_execution::{RuntimeEnv, SessionConfig, TaskContext};
     use futures::TryStreamExt;
@@ -166,26 +179,12 @@ mod tests {
         RuntimeEnv::new(Arc::new(ShuffleManager::new(base.to_string())))
     }
 
-    const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
-
     fn temp_dir(tag: &str) -> String {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
-    }
-
-    fn employee_ds() -> Arc<dyn TableProvider> {
-        Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024))
-    }
-
-    fn employee_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
-        ds.schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect()
+        format!("/tmp/fdapquery-shuffle-test-{tag}-{nanos}")
     }
 
     /// Build a `TaskContext` with a specific shuffle base dir and executor
@@ -206,11 +205,8 @@ mod tests {
         job_uuid: &str,
         partition_count: i32,
     ) -> (usize, Vec<ShuffleLocation>, Schema) {
-        let ds = employee_ds();
-        let schema = ds.schema();
-        let scan: Arc<dyn ExecutionPlan> =
-            Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap());
-        let input_batches = scan
+        let schema = employee_schema();
+        let input_batches = employee_source()
             .execute(0, Arc::clone(&ctx))
             .unwrap()
             .try_collect::<Vec<_>>()
@@ -218,15 +214,15 @@ mod tests {
             .unwrap();
         let input_row_count: usize = input_batches.iter().map(|b| b.num_rows()).sum();
         let writer = ShuffleWriterExec::new(
-            Arc::new(ScanExec::new(Arc::clone(&ds), employee_columns(&ds)).unwrap()),
-            vec![Arc::new(Column::new(0))],
+            employee_source(),
+            vec![Arc::new(Column::new("id", 0))],
             job_uuid,
             0,
             partition_count,
         );
         // ShuffleWriterExec's real entry point is `write_shuffle(ctx)`; the
         // trait `execute()` is a NotImplemented stub.
-        let locations = writer.write_shuffle(Arc::clone(&ctx)).unwrap();
+        let locations = writer.write_shuffle(&ctx).unwrap();
         (input_row_count, locations, schema)
     }
 
@@ -259,8 +255,7 @@ mod tests {
         let base = temp_dir("reader-empty");
         let ctx = make_ctx("exec-test", "127.0.0.1", 50099, &base);
 
-        let ds = employee_ds();
-        let reader = ShuffleReaderExec::new(ds.schema(), vec![]);
+        let reader = ShuffleReaderExec::new(employee_schema(), vec![]);
         let batches = reader
             .execute(0, Arc::clone(&ctx))
             .unwrap()
@@ -304,7 +299,7 @@ mod tests {
         let ctx = make_ctx("exec-A", "127.0.0.1", 50099, &base);
 
         let remote_loc = ShuffleLocation::new("test-job-remote", 0, 0, "exec-B", "10.0.0.2", 50099);
-        let reader = ShuffleReaderExec::new(employee_ds().schema(), vec![remote_loc]);
+        let reader = ShuffleReaderExec::new(employee_schema(), vec![remote_loc]);
         let err = reader
             .execute(0, Arc::clone(&ctx))
             .map(|_| ())

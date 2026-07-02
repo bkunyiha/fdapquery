@@ -13,8 +13,8 @@
 //!   [`arrow_flight::flight_service_server::FlightService`] implementation:
 //!   `do_action("execute_task")` runs intermediate-stage `ShuffleWriterExec`
 //!   tasks and returns shuffle locations; `do_get` streams `RecordBatch`es
-//!   for either a distributed final task (`pb::Action.task` set) or an
-//!   interactive logical plan (`pb::Action.query` set).
+//!   for either a distributed final task (`protobuf::Action.task` set) or an
+//!   interactive logical plan (`protobuf::Action.query` set).
 //! - [`flight_server::serve`] — the thin `serve(addr, ctx)` wrapper that
 //!   boots a `tonic::transport::Server` with the producer.
 //!
@@ -27,7 +27,7 @@
 pub mod fdap_query_flight_producer;
 pub mod flight_server;
 
-// Session 15d-1 #96 + #97 — top-level re-exports so external consumers
+// Top-level re-exports so external consumers
 // can write the short form `use fdapquery_flight_server::{FdapQueryFlightProducer, serve};`
 // instead of reaching through submodule paths.
 pub use fdap_query_flight_producer::FdapQueryFlightProducer;

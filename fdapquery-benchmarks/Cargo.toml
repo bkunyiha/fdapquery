@@ -27,7 +27,11 @@ rayon        = { workspace = true }
 # Process-memory stats — used to report RSS / virtual / available memory at
 # the start and end of a benchmark run.
 sysinfo      = { workspace = true }
-anyhow       = { workspace = true }
+# `log` for diagnostic output — mirrors DataFusion benchmarks' pattern
+# of gating verbose result dumps behind `log::info!` so `RUST_LOG=info`
+# controls verbosity while the essential timing/summary output stays on
+# `println!` unconditionally. `env_logger` wires the facade to stderr
+# in the binary entry points.
 log          = { workspace = true }
 env_logger   = { workspace = true }
 
@@ -38,3 +42,6 @@ path = "src/bin/tpch_runner.rs"
 [[bin]]
 name = "fdapquery-benchmarks"
 path = "src/bin/benchmarks.rs"
+
+[lints]
+workspace = true

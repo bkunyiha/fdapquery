@@ -1,190 +1,97 @@
 //! # What lives here vs. in `logical_expr.rs`
 //!
-//! This module holds two kinds of thing: (1) the `AggregateExpr` family, and
-//! (2) the convenience constructors for `Expr` and `AggregateExpr`.
+//! This module holds two kinds of thing: (1) convenience constructors for
+//! `Expr`, and (2) the `self`-consuming builder methods for comparison
+//! and arithmetic (`a.eq(b)`, `a.add(b)`, …).
 //!
-//! - (1) `AggregateExpr` is its own sum type — a narrow family (`Sum`, `Min`,
-//!   `Max`, `Avg`, `Count`, `CountDistinct`) that is also part of the broader
-//!   `Expr` family. The `Aggregate` plan ranges over a typed
-//!   `Vec<AggregateExpr>`, and the `From<AggregateExpr> for Expr` impl
-//!   below bridges an aggregate back into `Expr` via the single
-//!   `Expr::AggregateExpr` variant — exactly the shape of DataFusion's
-//!   `Expr::AggregateFunction`.
+//! - The convenience constructors are introduction forms — functions into
+//!   the type (`col: &str -> Expr`, `sum`/`min`/`max`/`avg`/`count`/
+//!   `count_distinct` — each returning `Expr` directly via the
+//!   `Expr::AggregateFunction` variant). They live here rather than in
+//!   `logical_expr.rs` so the enum definition stays narrowly focused.
 //!
-//! - (2) The convenience constructors are introduction forms — functions into
-//!   a type (`col: &str -> Expr`, `lit_long: i64 -> Expr`, the
-//!   `eq`/`add`/… builder methods, and `sum`/`min`/… which build an
-//!   `AggregateExpr`). They live here rather than in `logical_expr.rs` so the
-//!   enum definition stays narrowly focused.
+//! The single literal factory `lit<T: Literal>(value: T) -> Expr` lives in
+//! its own `expr_fn` module (alongside DataFusion's layout); the `Literal`
+//! trait that powers it lives in `literal.rs`. Collapsed the
+//! per-type `lit_string` / `lit_long` / `lit_float` / `lit_double` /
+//! `lit_date` family into that single generic entry point.
 //!
-//! Literal constructors are spelled out per type (`lit_string`, `lit_long`,
-//! …) because Rust has no function overloading; comparison and arithmetic
-//! builders are `self`-consuming methods (`a.eq(b)`, `a.mult(b).alias("x")`).
+//! Comparison and arithmetic builders remain `self`-consuming methods
+//! (`a.eq(b)`, `a.mult(b).alias("x")`).
+//!
+//! ## DSL constructors return `Expr`
+//!
+//! Every aggregate is a single `Expr::AggregateFunction(AggregateFunction)`
+//! variant, and the DSL constructors return `Expr` directly —
+//! byte-for-byte the same signatures DataFusion uses for `min`, `max`,
+//! `sum`, `avg`, and `count` in `datafusion/functions-aggregate/src/`
+//! (where `make_udaf_expr_and_func!` emits `pub fn min(expr: Expr) -> Expr`
+//! etc., wrapping the call in `Expr::AggregateFunction(...)`).
 
+use crate::aggregate_function::{AggregateFunction, AggregateFunctionKind};
 use crate::logical_expr::Expr;
-use crate::logical_plan::LogicalPlan;
+use crate::operator::Operator;
 use arrow_schema::DataType;
-use fdapquery_datatypes::{Field, Result};
-use std::fmt;
-
-/// Aggregate functions: `Sum` / `Min` / `Max` / `Avg` / `Count` /
-/// `CountDistinct`. Kept as its own enum so the `Aggregate` plan and
-/// `DataFrame::aggregate` keep a typed `Vec<AggregateExpr>`; bridged into
-/// `Expr` (for nesting inside expressions, e.g. `HAVING`) by the
-/// `From<AggregateExpr> for Expr` impl below — the analogue of
-/// DataFusion's `Expr::AggregateFunction`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum AggregateExpr {
-    Sum(Expr),
-    Min(Expr),
-    Max(Expr),
-    Avg(Expr),
-    Count(Expr),
-    CountDistinct(Expr),
-}
-
-impl AggregateExpr {
-    /// Compute the output `Field` for this aggregate against `input`'s schema.
-    /// SUM/MIN/MAX/AVG carry the data type of their input expression; COUNT
-    /// and COUNT DISTINCT are integer counts.
-    pub fn to_field(&self, input: &LogicalPlan) -> Result<Field> {
-        match self {
-            AggregateExpr::Sum(e) => Ok(Field::new(
-                "SUM",
-                e.to_field(input)?.data_type().clone(),
-                true,
-            )),
-            AggregateExpr::Min(e) => Ok(Field::new(
-                "MIN",
-                e.to_field(input)?.data_type().clone(),
-                true,
-            )),
-            AggregateExpr::Max(e) => Ok(Field::new(
-                "MAX",
-                e.to_field(input)?.data_type().clone(),
-                true,
-            )),
-            AggregateExpr::Avg(e) => Ok(Field::new(
-                "AVG",
-                e.to_field(input)?.data_type().clone(),
-                true,
-            )),
-            AggregateExpr::Count(_) => Ok(Field::new("COUNT", arrow_schema::DataType::Int32, true)),
-            AggregateExpr::CountDistinct(_) => Ok(Field::new(
-                "COUNT_DISTINCT",
-                arrow_schema::DataType::UInt32,
-                true,
-            )),
-        }
-    }
-}
-
-impl fmt::Display for AggregateExpr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AggregateExpr::Sum(e) => write!(f, "SUM({e})"),
-            AggregateExpr::Min(e) => write!(f, "MIN({e})"),
-            AggregateExpr::Max(e) => write!(f, "MAX({e})"),
-            AggregateExpr::Avg(e) => write!(f, "AVG({e})"),
-            AggregateExpr::Count(e) => write!(f, "COUNT({e})"),
-            AggregateExpr::CountDistinct(e) => write!(f, "COUNT(DISTINCT {e})"),
-        }
-    }
-}
-
-/// The bridge: inject an `AggregateExpr` into `Expr` so it can nest
-/// inside any expression (cf. DataFusion's `Expr::AggregateFunction`).
-impl From<AggregateExpr> for Expr {
-    fn from(agg: AggregateExpr) -> Self {
-        Expr::AggregateExpr(Box::new(agg))
-    }
-}
 
 // ==============================================================
 // `self`-consuming builder methods for comparison and arithmetic.
 // ==============================================================
+// Every builder constructs the unified
+// `Expr::BinaryExpr { left, op, right }` (parameterised by [`Operator`]).
+// Same shape as DataFusion's `Expr` builder helpers in
+// `datafusion/expr/src/expr.rs`.
 // `add` / `div` are deliberately named methods (alongside `subtract` / `mult` /
 // `modulus`); they build AST nodes, not compute values, so they are
 // intentionally *not* `std::ops::{Add, Div}` impls.
 #[allow(clippy::should_implement_trait)]
 impl Expr {
-    pub fn eq(self, rhs: Expr) -> Expr {
-        Expr::Eq {
-            l: Box::new(self),
-            r: Box::new(rhs),
+    /// Build `self op rhs`.
+    fn binary(self, op: Operator, rhs: Expr) -> Expr {
+        Expr::BinaryExpr {
+            left: Box::new(self),
+            op,
+            right: Box::new(rhs),
         }
+    }
+
+    pub fn eq(self, rhs: Expr) -> Expr {
+        self.binary(Operator::Eq, rhs)
     }
     pub fn neq(self, rhs: Expr) -> Expr {
-        Expr::Neq {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::NotEq, rhs)
     }
     pub fn gt(self, rhs: Expr) -> Expr {
-        Expr::Gt {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Gt, rhs)
     }
     pub fn gteq(self, rhs: Expr) -> Expr {
-        Expr::GtEq {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::GtEq, rhs)
     }
     pub fn lt(self, rhs: Expr) -> Expr {
-        Expr::Lt {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Lt, rhs)
     }
     pub fn lteq(self, rhs: Expr) -> Expr {
-        Expr::LtEq {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::LtEq, rhs)
     }
     pub fn and(self, rhs: Expr) -> Expr {
-        Expr::And {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::And, rhs)
     }
     pub fn or(self, rhs: Expr) -> Expr {
-        Expr::Or {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Or, rhs)
     }
     pub fn add(self, rhs: Expr) -> Expr {
-        Expr::Add {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Plus, rhs)
     }
     pub fn subtract(self, rhs: Expr) -> Expr {
-        Expr::Subtract {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Minus, rhs)
     }
     pub fn mult(self, rhs: Expr) -> Expr {
-        Expr::Multiply {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Multiply, rhs)
     }
     pub fn div(self, rhs: Expr) -> Expr {
-        Expr::Divide {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Divide, rhs)
     }
     pub fn modulus(self, rhs: Expr) -> Expr {
-        Expr::Modulus {
-            l: Box::new(self),
-            r: Box::new(rhs),
-        }
+        self.binary(Operator::Modulo, rhs)
     }
     pub fn alias(self, alias: impl Into<String>) -> Expr {
         Expr::Alias {
@@ -195,33 +102,12 @@ impl Expr {
 }
 
 // ==============================================================
-// Convenience constructors for `Expr` and `AggregateExpr`.
+// Convenience constructors for `Expr`.
 // ==============================================================
 
 /// Create a column reference by name.
 pub fn col(name: impl Into<String>) -> Expr {
     Expr::Column(name.into())
-}
-
-/// Literal string.
-pub fn lit_string(value: impl Into<String>) -> Expr {
-    Expr::LiteralString(value.into())
-}
-/// Literal `i64`.
-pub fn lit_long(value: i64) -> Expr {
-    Expr::LiteralLong(value)
-}
-/// Literal `f32`.
-pub fn lit_float(value: f32) -> Expr {
-    Expr::LiteralFloat(value)
-}
-/// Literal `f64`.
-pub fn lit_double(value: f64) -> Expr {
-    Expr::LiteralDouble(value)
-}
-/// Literal date.
-pub fn lit_date(value: chrono::NaiveDate) -> Expr {
-    Expr::LiteralDate(value)
 }
 
 /// Cast `expr` to `data_type`.
@@ -232,21 +118,38 @@ pub fn cast(expr: Expr, data_type: DataType) -> Expr {
     }
 }
 
-pub fn sum(expr: Expr) -> AggregateExpr {
-    AggregateExpr::Sum(expr)
+/// Construct an aggregate-function expression with no DISTINCT, FILTER,
+/// ORDER BY, or null treatment — the default the SQL planner emits today.
+/// Mirrors the body that DataFusion's `make_udaf_expr_and_func!` macro
+/// generates for each built-in aggregate (e.g. the `min` / `max` /
+/// `sum` / `avg` / `count` functions in
+/// `datafusion/functions-aggregate/src/{min_max, sum, average, count}.rs`).
+fn agg(func: AggregateFunctionKind, expr: Expr, distinct: bool) -> Expr {
+    Expr::AggregateFunction(AggregateFunction::new(
+        func,
+        vec![expr],
+        distinct,
+        None,
+        Vec::new(),
+        None,
+    ))
 }
-pub fn min(expr: Expr) -> AggregateExpr {
-    AggregateExpr::Min(expr)
+
+pub fn sum(expr: Expr) -> Expr {
+    agg(AggregateFunctionKind::Sum, expr, false)
 }
-pub fn max(expr: Expr) -> AggregateExpr {
-    AggregateExpr::Max(expr)
+pub fn min(expr: Expr) -> Expr {
+    agg(AggregateFunctionKind::Min, expr, false)
 }
-pub fn avg(expr: Expr) -> AggregateExpr {
-    AggregateExpr::Avg(expr)
+pub fn max(expr: Expr) -> Expr {
+    agg(AggregateFunctionKind::Max, expr, false)
 }
-pub fn count(expr: Expr) -> AggregateExpr {
-    AggregateExpr::Count(expr)
+pub fn avg(expr: Expr) -> Expr {
+    agg(AggregateFunctionKind::Avg, expr, false)
 }
-pub fn count_distinct(expr: Expr) -> AggregateExpr {
-    AggregateExpr::CountDistinct(expr)
+pub fn count(expr: Expr) -> Expr {
+    agg(AggregateFunctionKind::Count, expr, false)
+}
+pub fn count_distinct(expr: Expr) -> Expr {
+    agg(AggregateFunctionKind::Count, expr, true)
 }

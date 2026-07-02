@@ -12,3 +12,6 @@ arrow        = { workspace = true }
 arrow-array  = { workspace = true }
 arrow-schema = { workspace = true }
 fdapquery-common = { version = "0.1.0", path = "../fdapquery-common" }
+
+[lints]
+workspace = true

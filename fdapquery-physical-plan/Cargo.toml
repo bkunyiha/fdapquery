@@ -15,22 +15,45 @@ rust-version.workspace = true
 # types at different versions and a confusing "expected DataType, found DataType"
 # error. Matching what logical-plan / sql already do.
 arrow-schema  = { workspace = true }
+# `arrow-array` provides `ArrayRef` — used by operator bodies after #107
+# dropped the `ColumnVector` trait. Several operators (Projection, Filter,
+# ShuffleWriter, Aggregate, HashJoin) materialize `ColumnarValue::Array` to
+# `ArrayRef` via `into_array(num_rows)`.
+arrow-array   = { workspace = true }
+# Session 17 #112 — `SortExec` calls into `arrow::compute::{concat_batches,
+# lexsort_to_indices, take_record_batch}` (umbrella re-exports of
+# `arrow-ord` and `arrow-select`). Matches DataFusion's `SortExec`, which
+# pulls the same kernels from the umbrella crate (sort.rs:60).
+arrow         = { workspace = true }
 # `futures` provides the `Stream` trait — the runtime currency for the new
 # `ExecutionPlan::execute` shape returning `SendableRecordBatchStream`.
 futures          = { workspace = true }
-# `pin-project-lite` powers safe pin-projection in `RecordBatchStreamAdapter`.
-pin-project-lite = { workspace = true }
 # `async-stream` provides the `try_stream!` generator macro used by the
 # stateful operators (HashAggregateExec, HashJoinExec, LimitExec) to express
 # blocking aggregation as a sequential body that .awaits and yields.
 async-stream     = { workspace = true }
-# `chrono::NaiveDate` is used by the folded `query_planner` module's
-# `days_since_unix_epoch` helper to lower a logical `LiteralDate` into the
-# physical `LiteralDateExpression { days_since_epoch: i32 }`. Folded in
-# from the dissolved `fdapquery-query-planner` crate in Session 12.
-chrono           = { workspace = true }
+# `PhysicalPlanner::create_physical_plan` is `async fn`; `async-trait`
+# desugars the trait method into a dyn-safe `Pin<Box<dyn Future…>>`
+# returning method. Same crate DataFusion uses for the same purpose.
+async-trait      = { workspace = true }
+# `chrono` provides `DateTime<Utc>` used by the metrics `Timestamp` type.
+# Strict mirror of DataFusion's `physical-expr-common::metrics::value::Timestamp`
+# (which stores `parking_lot::Mutex<Option<DateTime<Utc>>>`). fdapquery uses
+# `std::sync::Mutex` instead of `parking_lot::Mutex` to avoid pulling
+# `parking_lot` into the workspace; `DateTime<Utc>` is `Copy` so the
+# poisoning paths cannot leave a half-modified state.
+#
+# The workspace dep has `default-features = false, features = ["std"]`.
+# `BaselineMetrics::done()` calls `Utc::now()` (DataFusion does the same),
+# which lives behind the `clock` feature, so opt in here.
+chrono           = { workspace = true, features = ["clock"] }
 fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
-fdapquery-catalog = { version = "0.1.0", path = "../fdapquery-catalog" }
+# `ScalarValue` lives in fdapquery-common; used by `row_key.rs`.
+fdapquery-common  = { version = "0.1.0", path = "../fdapquery-common" }
+# No `fdapquery-catalog` dep here. The layering is `catalog →
+# physical-plan → expr/execution` plus `catalog → datasource →
+# physical-plan`. The protobuf serializer and the umbrella planner sit
+# on the `catalog + physical-plan` seam instead.
 # Session 15c — `TaskContext`/`RuntimeEnv`/`SessionConfig`/`ShuffleManager`/
 # `ShuffleLocation` moved into `fdapquery-execution`. The operator trait
 # `ExecutionPlan::execute(_, ctx: Arc<TaskContext>)` references this dep;
@@ -55,9 +78,10 @@ arrow-array   = { workspace = true }
 # Tokio runtime for `#[tokio::test]` — every operator's test drives an async
 # stream to completion via `try_collect().await`.
 tokio         = { workspace = true }
-# `query_planner.rs`'s in-file test (`build_aggregate_plan_for_max_passenger_count`)
-# builds a logical plan, optimises it, then plans it — so it needs the
-# optimizer crate. Folded in from the dissolved `fdapquery-query-planner`'s
-# dev-dependencies in Session 12. Optimizer only depends on
-# `fdapquery-expr` (no path to `fdapquery-physical-plan`), so no cycle.
-fdapquery-optimizer = { version = "0.1.0", path = "../fdapquery-optimizer" }
+# No `fdapquery-optimizer` dev-dep. `DefaultPhysicalPlanner` (and its
+# `plan_aggregate_query` test) lives in the umbrella `fdapquery` crate;
+# the trait-only `physical_planner.rs` here does not reference the
+# optimizer.
+
+[lints]
+workspace = true

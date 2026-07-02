@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use fdapquery::SessionContext;
 use fdapquery_catalog::InMemoryDataSource;
-use fdapquery_datatypes::record_batch::to_csv;
 use fdapquery_datatypes::RecordBatch;
+use fdapquery_datatypes::record_batch::to_csv;
 use futures::TryStreamExt;
 use rayon::prelude::*;
 
@@ -82,6 +82,7 @@ async fn main() {
     let df = ctx.sql(FINAL_SQL).expect("parallel_query: final sql plan");
     let stream = ctx
         .execute_data_frame(&df)
+        .await
         .expect("parallel_query: final execute");
     let batches: Vec<RecordBatch> = stream
         .try_collect()
@@ -111,8 +112,8 @@ fn execute_query(path: &str, month: u32, sql: &str) -> Vec<RecordBatch> {
     let mut ctx = SessionContext::new(HashMap::new());
     ctx.register_csv("tripdata", &filename);
     let df = ctx.sql(sql).expect("parallel_query: per-month sql plan");
-    let stream = ctx
-        .execute_data_frame(&df)
+    // Rayon workers `block_on` the async planner just like they do the stream.
+    let stream = futures::executor::block_on(ctx.execute_data_frame(&df))
         .expect("parallel_query: per-month execute");
     futures::executor::block_on(stream.try_collect())
         .expect("parallel_query: drain per-month stream")

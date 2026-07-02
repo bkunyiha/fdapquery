@@ -38,11 +38,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use fdapquery_datatypes::{
-    ArrowFieldVector, ColumnVector, FdapQueryError, RecordBatch, Result, ScalarValue,
-};
+use fdapquery_common::{FdapQueryError, Result, ScalarValue};
+use fdapquery_datatypes::RecordBatch;
+use fdapquery::SessionContext;
 use fdapquery_distributed::{
-    DistributedConfig, DistributedContext, ExecutorClient, ExecutorConfig,
+    DistributedConfig, ExecutorClient, ExecutorConfig, SessionContextExt,
 };
 use fdapquery_physical_plan::{
     RuntimeEnv, SendableRecordBatchStream, SessionConfig, ShuffleLocation, ShuffleManager,
@@ -84,14 +84,25 @@ async fn main() {
     let shuffle_dir = unique_shuffle_dir();
     let executor_client = LocalExecutorClient::new(&shuffle_dir);
 
-    // Build the context and register the test data.
-    let mut ctx = DistributedContext::new(config, executor_client);
-    ctx.register_csv("employee", EMPLOYEE_CSV, true);
+    // Build the context and register the test data. `standalone`
+    // installs a `DistributedQueryPlanner` on the `SessionState`;
+    // every query executed against `ctx` routes through the
+    // in-process scheduler.
+    let mut ctx = SessionContext::standalone(config, executor_client)
+        .await
+        .expect("distributed_example: SessionContext::standalone");
+    ctx.register_csv("employee", EMPLOYEE_CSV);
 
-    // Execute the query.
+    // Execute the query. `SessionContext::sql` is sync (returns
+    // `DataFrame`); the async `execute_data_frame` drives the plan
+    // through the query planner and returns a stream.
     println!("Executing query (stage 0 → 3 shuffle-writer tasks, stage 1 → 1 final task):");
     let start = Instant::now();
-    let stream = ctx.sql(SQL).await.expect("distributed_example: sql");
+    let df = ctx.sql(SQL).expect("distributed_example: sql");
+    let stream = ctx
+        .execute_data_frame(&df)
+        .await
+        .expect("distributed_example: execute_data_frame");
     let results: Vec<RecordBatch> = stream
         .try_collect()
         .await
@@ -160,7 +171,7 @@ impl ExecutorClient for LocalExecutorClient {
         // return shape (`SendableRecordBatchStream` of result rows)
         // doesn't fit "produce shuffle locations."
         if let Some(writer) = task.plan.as_any().downcast_ref::<ShuffleWriterExec>() {
-            writer.write_shuffle(Arc::clone(&self.ctx))
+            writer.write_shuffle(&self.ctx)
         } else {
             // Non-shuffle intermediate stage — drain the async stream and
             // return no locations.
@@ -221,21 +232,19 @@ fn unique_shuffle_dir() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!("/tmp/rquery-distributed-example-{nanos}")
+    format!("/tmp/fdapquery-distributed-example-{nanos}")
 }
 
 /// Print every `(state, sum)` row in the result batches.
 fn print_results(batches: &[RecordBatch]) {
     for batch in batches {
-        let state_col = ArrowFieldVector::new(batch.column(0).clone());
-        let sum_col = ArrowFieldVector::new(batch.column(1).clone());
+        let state_col = batch.column(0).clone();
+        let sum_col = batch.column(1).clone();
         for row in 0..batch.num_rows() {
-            let state = state_col
-                .get_value(row)
-                .expect("distributed_example: get_value over state column");
-            let value = sum_col
-                .get_value(row)
-                .expect("distributed_example: get_value over sum column");
+            let state = ScalarValue::try_from_array(&state_col, row)
+                .expect("distributed_example: read state column");
+            let value = ScalarValue::try_from_array(&sum_col, row)
+                .expect("distributed_example: read sum column");
             let key = scalar_to_string(&state);
             println!("  {key}: {value:?}");
         }

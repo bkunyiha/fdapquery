@@ -1,7 +1,9 @@
 # Rust build artefacts
 /target
 **/*.rs.bk
-Cargo.lock.bak
+
+# Manual backup files (editors, one-off refactors, etc.)
+*.bak
 
 # Note: Cargo.lock IS committed for binary crates. This workspace has binary crates
 # (flight-server, benchmarks, examples), so Cargo.lock should be committed.

@@ -11,8 +11,17 @@
 //!   at shuffle boundaries (currently only the two-stage aggregate pattern)
 //! - [`scheduler`] — `Scheduler` plus the `ExecutorClient` abstraction boundary
 //!   to the Flight world
-//! - [`distributed_context`] — facade matching `SessionContext`'s public API
-//!   (`register_csv` / `register` / `sql` / `execute`)
+//! - [`execution_plans`] — [`DistributedQueryExec`], the leaf `ExecutionPlan`
+//!   whose `execute(0, ctx)` runs the physical planner + scheduler dispatch
+//! - [`planner`] — [`DistributedQueryPlanner`], the `QueryPlanner`
+//!   implementation that wraps every incoming logical plan in a
+//!   `DistributedQueryExec`
+//! - [`session_state_ext`] — [`SessionStateExt`], the trait that installs a
+//!   `DistributedQueryPlanner` into a `SessionState`
+//! - [`extension`] — [`SessionContextExt`], the trait providing
+//!   `SessionContext::standalone(config, client).await` and
+//!   `SessionContext::remote(url).await` constructors (mirror of Ballista's
+//!   `SessionContextExt` at `ballista/client/src/extension.rs:63-89`)
 //!
 //! ## Architectural notes
 //! - **Synchronous, sequential.** No async, no Tokio, no rayon. Each stage
@@ -27,15 +36,20 @@
 //!   boundary.
 
 pub mod distributed_config;
-pub mod distributed_context;
 pub mod distributed_planner;
+pub mod execution_plans;
+pub mod extension;
+pub mod planner;
 pub mod query_stage;
 pub mod scheduler;
+pub mod session_state_ext;
 
-// Re-exports for ergonomic `use distributed::*;` are added per-batch as the
-// types come into existence.
+// Re-exports for ergonomic `use distributed::*;`.
 pub use distributed_config::{DistributedConfig, ExecutorConfig};
-pub use distributed_context::DistributedContext;
 pub use distributed_planner::DistributedPlanner;
+pub use execution_plans::DistributedQueryExec;
+pub use extension::SessionContextExt;
+pub use planner::DistributedQueryPlanner;
 pub use query_stage::QueryStage;
 pub use scheduler::{ExecutorClient, Scheduler};
+pub use session_state_ext::SessionStateExt;

@@ -26,14 +26,15 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use arrow_flight::{Action, Ticket};
 use fdapquery_catalog::CsvDataSource;
 use fdapquery_catalog::TableProvider;
+use fdapquery_catalog::provider_as_source;
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_expr::{LogicalPlan, TableScan};
 use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
 use fdapquery_physical_plan::{
-    Column, ExecutionPlan, RuntimeEnv, ScanExec, SessionConfig, ShuffleManager, ShuffleWriterExec,
-    Task, TaskContext,
+    Column, ExecutionPlan, RuntimeEnv, SessionConfig, ShuffleManager, ShuffleWriterExec, Task,
+    TaskContext,
 };
-use fdapquery_proto::{pb, serialize_logical_plan, serialize_task};
+use fdapquery_proto::{protobuf, serialize_logical_plan, serialize_task};
 use futures::StreamExt;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -48,7 +49,7 @@ fn temp_dir(tag: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    format!("/tmp/rquery-shuffle-test-{tag}-{nanos}")
+    format!("/tmp/fdapquery-shuffle-test-{tag}-{nanos}")
 }
 
 /// Build a per-test `Arc<TaskContext>` from a tag and a random port, with
@@ -106,21 +107,17 @@ async fn connect_client(addr: std::net::SocketAddr) -> FlightServiceClient<Chann
 
 fn build_employee_scan_plan() -> LogicalPlan {
     let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-    LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, ds, vec![]).unwrap())
+    // Wrap the provider as a `TableSource` for the
+    // logical plan; the planner unwraps it at the `TableScan` seam.
+    LogicalPlan::TableScan(TableScan::new(EMPLOYEE_CSV, provider_as_source(ds), vec![]).unwrap())
 }
 
-fn build_shuffle_writer_task() -> Task {
+async fn build_shuffle_writer_task() -> Task {
     let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(EMPLOYEE_CSV, None, true, 1024));
-    let columns: Vec<String> = ds
-        .schema()
-        .fields()
-        .iter()
-        .map(|f| f.name().clone())
-        .collect();
-    let scan: Arc<dyn ExecutionPlan> = Arc::new(ScanExec::new(Arc::clone(&ds), columns).unwrap());
+    let scan = ds.scan(None).await.unwrap();
     let writer: Arc<dyn ExecutionPlan> = Arc::new(ShuffleWriterExec::new(
         scan,
-        vec![Arc::new(Column::new(0))],
+        vec![Arc::new(Column::new("id", 0))],
         "test-job-integration",
         0,
         3,
@@ -141,8 +138,8 @@ async fn integration_do_action_execute_task() {
 
     // Build a Task containing a ShuffleWriterExec. Serialise it; wrap in an
     // execute_task Action.
-    let task = build_shuffle_writer_task();
-    let task_info: pb::TaskInfo = serialize_task(&task);
+    let task = build_shuffle_writer_task().await;
+    let task_info: protobuf::TaskInfo = serialize_task(&task);
     let body: Vec<u8> = prost::Message::encode_to_vec(&task_info);
     let action = Action {
         r#type: "execute_task".to_string(),
@@ -162,7 +159,7 @@ async fn integration_do_action_execute_task() {
         .expect("at least one result expected");
 
     // Decode the result body as TaskResult.
-    let task_result: pb::TaskResult =
+    let task_result: protobuf::TaskResult =
         prost::Message::decode(result.body.as_ref()).expect("body should decode as TaskResult");
 
     assert_eq!(task_result.job_uuid, "test-job-integration");
@@ -195,7 +192,7 @@ async fn integration_do_get_streams_record_batches() {
     // Build a LogicalPlan and wrap in an Action protobuf, serialise to ticket bytes.
     let plan = build_employee_scan_plan();
     let plan_node = serialize_logical_plan(&plan);
-    let action = pb::Action {
+    let action = protobuf::Action {
         query: Some(plan_node),
         task: None,
         settings: vec![],

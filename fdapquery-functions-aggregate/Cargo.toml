@@ -8,5 +8,16 @@ authors.workspace      = true
 rust-version.workspace = true
 
 [dependencies]
+# `fdapquery-datatypes` is not consumed by the v0.1 re-export stub —
+# the entire `lib.rs` is `pub use fdapquery_physical_expr::{...}`. Kept
+# as forward-parity with DataFusion's `datafusion-functions-aggregate`
+# dep set: `datafusion-common = { workspace = true }` (re-exported
+# through `fdapquery-datatypes` here) is required by the real
+# `AggregateUDF` implementations that land under Task #142
+# (AggregateFunctionKind → Arc<AggregateUDF>). Keeping the dep now
+# means zero dep-churn during the stub-to-real transition.
 fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
 fdapquery-physical-expr = { version = "0.1.0", path = "../fdapquery-physical-expr" }
+
+[lints]
+workspace = true

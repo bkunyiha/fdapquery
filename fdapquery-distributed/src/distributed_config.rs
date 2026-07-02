@@ -1,5 +1,9 @@
-//! `ExecutorConfig` + `DistributedConfig` data structs. Pure data, no logic
-//! beyond `partition_count()`.
+//! `ExecutorConfig` + `DistributedConfig` data structs. Holds the cluster-
+//! level configuration and a single `build_runtime_env()` helper that wires
+//! `shuffle_dir` into a runtime an executor process can use.
+
+use fdapquery_physical_plan::{RuntimeEnv, ShuffleManager};
+use std::sync::Arc;
 
 /// Configuration for a single executor in the distributed cluster.
 ///
@@ -28,7 +32,7 @@ impl ExecutorConfig {
 /// Builder methods set defaults for the shuffle directory and partition count.
 ///
 /// ## Shuffle directory
-/// The default shuffle directory is `/tmp/rquery-shuffle`.
+/// The default shuffle directory is `/tmp/fdapquery-shuffle`.
 #[derive(Debug, Clone)]
 pub struct DistributedConfig {
     /// List of executors in the cluster.
@@ -42,7 +46,7 @@ pub struct DistributedConfig {
 
 impl DistributedConfig {
     /// Default shuffle directory.
-    pub const DEFAULT_SHUFFLE_DIR: &str = "/tmp/rquery-shuffle";
+    pub const DEFAULT_SHUFFLE_DIR: &str = "/tmp/fdapquery-shuffle";
 
     /// Construct with sensible defaults — empty `shuffle_dir`,
     /// `default_partitions = 0` (i.e., use executor count).
@@ -76,6 +80,20 @@ impl DistributedConfig {
             self.executors.len() as i32
         }
     }
+
+    /// Build a `RuntimeEnv` whose `ShuffleManager` is keyed on this config's
+    /// `shuffle_dir`. Use this whenever you spawn an executor (in-process for
+    /// testing or as a separate process) so the cluster config is the single
+    /// source of truth for where shuffle files land.
+    ///
+    /// Without this helper, the executor process and the cluster config can
+    /// silently drift apart — the planner believes shuffle files live at
+    /// `config.shuffle_dir` while the executor writes them somewhere else.
+    /// Routing every executor construction through `build_runtime_env()`
+    /// makes that mismatch impossible by construction.
+    pub fn build_runtime_env(&self) -> RuntimeEnv {
+        RuntimeEnv::new(Arc::new(ShuffleManager::new(self.shuffle_dir.clone())))
+    }
 }
 
 #[cfg(test)]
@@ -100,8 +118,22 @@ mod tests {
     }
 
     #[test]
-    fn default_shuffle_dir_is_rquery_path() {
+    fn default_shuffle_dir_is_fdapquery_path() {
         let cfg = DistributedConfig::new(vec![]);
-        assert_eq!(cfg.shuffle_dir, "/tmp/rquery-shuffle");
+        assert_eq!(cfg.shuffle_dir, "/tmp/fdapquery-shuffle");
+    }
+
+    #[test]
+    fn build_runtime_env_uses_configured_shuffle_dir() {
+        let cfg = DistributedConfig::new(vec![]).with_shuffle_dir("/tmp/fdap-test-build-env");
+        let runtime = cfg.build_runtime_env();
+        assert_eq!(runtime.shuffle_manager.base_dir, "/tmp/fdap-test-build-env");
+    }
+
+    #[test]
+    fn build_runtime_env_picks_up_default_when_unset() {
+        let cfg = DistributedConfig::new(vec![]);
+        let runtime = cfg.build_runtime_env();
+        assert_eq!(runtime.shuffle_manager.base_dir, "/tmp/fdapquery-shuffle");
     }
 }

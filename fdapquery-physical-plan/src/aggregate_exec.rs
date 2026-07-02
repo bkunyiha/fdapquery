@@ -7,15 +7,27 @@
 //! before it can emit anything — so `execute` consumes the whole input eagerly and
 //! returns a single output batch.
 //!
+//! ## Strict mirror of DataFusion
+//! Struct field names (`mode`, `group_by`, `aggr_expr`, `filter_expr`, `input`,
+//! `schema`, `input_schema`), constructor signature (`try_new(mode, group_by,
+//! aggr_expr, filter_expr, input, input_schema)`), accessor names (`mode()`,
+//! `group_expr()`, `aggr_expr()`, `filter_expr()`, `input()`, `input_schema()`),
+//! and the `DisplayAs::fmt_as` `Default`/`Verbose` output
+//! (`"AggregateExec: mode={Mode:?}, gby=[…], aggr=[…]"`) match
+//! `datafusion/physical-plan/src/aggregates/mod.rs` byte-for-byte. fdapquery's
+//! `aggr_expr` element type is the trait object `Arc<dyn AggregateExpr>`
+//! (vs. DataFusion's concrete `Arc<AggregateFunctionExpr>`).
+//!
 //! ## The group key
-//! [`GroupKey`] wraps `Vec<ScalarValue>` with `Hash`/`Eq` impls. Floats are hashed
+//! `GroupKey` wraps `Vec<ScalarValue>` with `Hash`/`Eq` impls. Floats are hashed
 //! and compared **by bit pattern**, so the two agree and `NaN` keys group together.
 //! `ScalarValue` itself is left unchanged (it stays `PartialEq`-only, since float
 //! `Eq`/`Hash` is meaningful only in this grouping context).
 //!
 //! ## Modes
-//! Single-node `Complete` (the default, and the only mode used until the
-//! `distributed` module 15) calls `accumulate` + `final_value`. `Final` merges
+//! Single-node `Single` (the default, and the only mode used until the
+//! `fdapquery-distributed` two-stage aggregate path) calls `accumulate` +
+//! `final_value`. `Final` merges
 //! incoming partial state; `Partial` would emit intermediate state. AVG's
 //! intermediate state is compound ([`AccumulatorValue::AvgState`]) and cannot sit
 //! in a scalar output column, so a `Partial` AVG output panics until the
@@ -23,14 +35,15 @@
 
 use crate::AggregateExpr;
 use crate::AggregateMode;
+use crate::aggregates::PhysicalGroupBy;
 use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
 use crate::{Accumulator, AccumulatorValue, PhysicalExpr};
+use arrow_array::ArrayRef;
 use async_stream::try_stream;
-use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, FdapQueryError, Result, ScalarValue, Schema, record_batch,
-};
+use fdapquery_common::{ArrowVectorBuilder, FdapQueryError, Result, ScalarValue};
+use fdapquery_datatypes::{Schema, record_batch};
 use fdapquery_execution::TaskContext;
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -38,55 +51,95 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-/// Group-by hash aggregation.
+/// Hash aggregate execution plan
+#[derive(Debug)]
 pub struct AggregateExec {
+    /// Aggregation mode (full, partial)
+    mode: AggregateMode,
+    /// Group by expressions
+    group_by: Arc<PhysicalGroupBy>,
+    /// Aggregate expressions
+    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
-    pub group_expr: Vec<Arc<dyn PhysicalExpr>>,
-    pub aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
-    pub schema: Schema,
-    pub mode: AggregateMode,
+    /// Schema after the aggregate is applied. Contains the group by columns followed by the
+    /// aggregate outputs.
+    schema: Schema,
+    /// Input schema before any aggregation is applied. For partial aggregate this will be the
+    /// same as input.schema() but for the final aggregate it will be the same as the input
+    /// to the partial aggregate, i.e., partial and final aggregates have same `input_schema`.
+    pub input_schema: Schema,
     properties: PlanProperties,
 }
 
 impl AggregateExec {
-    /// Single-node (`Complete`) aggregation — the common case.
-    pub fn new(
-        input: Arc<dyn ExecutionPlan>,
-        group_expr: Vec<Arc<dyn PhysicalExpr>>,
-        aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
-        schema: Schema,
-    ) -> Self {
-        Self::new_with_mode(
+    /// Create a new hash aggregate execution plan.
+    ///
+    /// Strict mirror of DataFusion's `AggregateExec::try_new` (parameter order,
+    /// names, types). fdapquery diverges from DataFusion only in
+    /// `Result`/`SchemaRef` types: `FdapQueryError` instead of
+    /// `DataFusionError`, and `Schema` (cloneable) instead of `Arc<Schema>`.
+    /// The output `schema` argument is also passed explicitly — DataFusion
+    /// builds it internally via `create_schema(&input.schema(), &group_by,
+    /// &aggr_expr, mode)`, but fdapquery's planner already has it in hand.
+    pub fn try_new(
+        mode: AggregateMode,
+        group_by: impl Into<Arc<PhysicalGroupBy>>,
+        aggr_expr: Vec<Arc<dyn AggregateExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        input: Arc<dyn ExecutionPlan>, // input.schema() — schema of the direct child plan node. For Partial: the CSV. For Final: the ShuffleReader (intermediate state).
+        input_schema: Schema, // Original schema — schema of the raw table before ANY aggregation. Same value for Partial and Final.
+        schema: Schema, // schema this aggregate PRODUCES as its output. For Partial: (group_keys, state_buffers). For Final: (group_keys, final_values)
+    ) -> Result<Self> {
+        let group_by = group_by.into();
+        let properties = PlanProperties::single_partition_unknown();
+        Ok(Self {
+            mode,
+            group_by,
+            aggr_expr,
+            filter_expr,
             input,
-            group_expr,
-            aggregate_expr,
             schema,
-            AggregateMode::Complete,
-        )
+            input_schema,
+            properties,
+        })
     }
 
-    /// Construct with an explicit [`AggregateMode`] (for distributed execution).
-    pub fn new_with_mode(
-        input: Arc<dyn ExecutionPlan>,
-        group_expr: Vec<Arc<dyn PhysicalExpr>>,
-        aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
-        schema: Schema,
-        mode: AggregateMode,
-    ) -> Self {
-        let properties = PlanProperties::single_partition_unknown();
-        Self {
-            input,
-            group_expr,
-            aggregate_expr,
-            schema,
-            mode,
-            properties,
-        }
+    /// Aggregation mode (full, partial)
+    pub fn mode(&self) -> &AggregateMode {
+        &self.mode
+    }
+
+    /// Grouping expressions
+    pub fn group_expr(&self) -> &PhysicalGroupBy {
+        &self.group_by
+    }
+
+    /// Aggregate expressions
+    pub fn aggr_expr(&self) -> &[Arc<dyn AggregateExpr>] {
+        &self.aggr_expr
+    }
+
+    /// FILTER (WHERE clause) expression for each aggregate expression
+    pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
+        &self.filter_expr
+    }
+
+    /// Input plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    /// Get the input schema before any aggregates are applied
+    pub fn input_schema(&self) -> Schema {
+        self.input_schema.clone()
     }
 }
 
 impl ExecutionPlan for AggregateExec {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "AggregateExec"
     }
 
@@ -109,8 +162,8 @@ impl ExecutionPlan for AggregateExec {
     }
 
     /// Rebuild this aggregate with a new input child. Arity 1. We use
-    /// `new_with_mode` (not `new`) so the `mode` (Complete / Partial /
-    /// Final) is preserved through the rewrite.
+    /// `try_new` so the mode (Single / Partial / Final) is preserved through
+    /// the rewrite.
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -121,13 +174,15 @@ impl ExecutionPlan for AggregateExec {
                 children.len()
             )));
         }
-        Ok(Arc::new(AggregateExec::new_with_mode(
-            children.into_iter().next().unwrap(),
-            self.group_expr.clone(),
-            self.aggregate_expr.clone(),
-            self.schema.clone(),
+        Ok(Arc::new(AggregateExec::try_new(
             self.mode,
-        )))
+            Arc::clone(&self.group_by),
+            self.aggr_expr.clone(),
+            self.filter_expr.clone(),
+            children.into_iter().next().unwrap(),
+            self.input_schema.clone(),
+            self.schema.clone(),
+        )?))
     }
 
     fn execute(
@@ -142,11 +197,11 @@ impl ExecutionPlan for AggregateExec {
         }
         // Capture everything the generator body needs by clone — the
         // generator runs detached from `self`, so it can't hold &self.
-        let group_expr = self.group_expr.clone();
-        let aggregate_expr = self.aggregate_expr.clone();
+        let group_expr: Vec<Arc<dyn PhysicalExpr>> = self.group_by.input_exprs();
+        let aggregate_expr = self.aggr_expr.clone();
         let schema = self.schema.clone();
         let mode = self.mode;
-        let n_group = self.group_expr.len();
+        let n_group = group_expr.len();
 
         let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
         let arrow_schema = Arc::new(self.schema.clone());
@@ -160,21 +215,24 @@ impl ExecutionPlan for AggregateExec {
             let mut input = std::pin::pin!(input_stream);
             while let Some(batch_res) = input.next().await {
                 let batch = batch_res?;
-                // Evaluate the group-by and aggregate-input expressions once per batch.
-                let group_keys: Vec<Box<dyn ColumnVector>> = group_expr
+                let num_rows = batch.num_rows();
+                // Evaluate the group-by and aggregate-input expressions once per batch
+                // and materialize each result to an `ArrayRef` so we can read cells
+                // by index via `ScalarValue::try_from_array`.
+                let group_keys: Vec<ArrayRef> = group_expr
                     .iter()
-                    .map(|e| e.evaluate(&batch))
+                    .map(|e| e.evaluate(&batch)?.into_array(num_rows))
                     .collect::<Result<Vec<_>>>()?;
-                let aggr_inputs: Vec<Box<dyn ColumnVector>> = aggregate_expr
+                let aggr_inputs: Vec<ArrayRef> = aggregate_expr
                     .iter()
-                    .map(|a| a.input_expression().evaluate(&batch))
+                    .map(|a| a.input_expression().evaluate(&batch)?.into_array(num_rows))
                     .collect::<Result<Vec<_>>>()?;
 
                 for row in 0..batch.num_rows() {
                     let key = GroupKey(
                         group_keys
                             .iter()
-                            .map(|c| c.get_value(row))
+                            .map(|c| ScalarValue::try_from_array(c, row))
                             .collect::<Result<Vec<_>>>()?,
                     );
                     let accumulators = map.entry(key).or_insert_with(|| {
@@ -184,10 +242,11 @@ impl ExecutionPlan for AggregateExec {
                             .collect()
                     });
                     for (i, acc) in accumulators.iter_mut().enumerate() {
-                        let value = aggr_inputs[i].get_value(row)?;
+                        let value = ScalarValue::try_from_array(&aggr_inputs[i], row)?;
                         match mode {
-                            // FINAL merges incoming partial state; other modes accumulate raw values.
-                            AggregateMode::Final => {
+                            // FINAL / FinalPartitioned merge incoming partial state.
+                            // Other modes accumulate raw values.
+                            AggregateMode::Final | AggregateMode::FinalPartitioned => {
                                 acc.merge(&AccumulatorValue::Scalar(value))?;
                             }
                             _ => acc.accumulate(&value)?,
@@ -213,24 +272,23 @@ impl ExecutionPlan for AggregateExec {
                     // `?` to, avoiding an `unreachable!()` after the AVG-state
                     // error path.
                     let output: ScalarValue = match mode {
-                        AggregateMode::Partial => match acc.intermediate_value()? {
-                            AccumulatorValue::Scalar(s) => Ok(s),
-                            AccumulatorValue::AvgState { .. } => Err(FdapQueryError::NotImplemented(
-                                "AggregateExec PARTIAL output of AVG intermediate state \
-                                 requires the distributed module"
-                                    .into(),
-                            )),
-                        }?,
+                        AggregateMode::Partial | AggregateMode::PartialReduce => {
+                            match acc.intermediate_value()? {
+                                AccumulatorValue::Scalar(s) => Ok(s),
+                                AccumulatorValue::AvgState { .. } => Err(FdapQueryError::NotImplemented(
+                                    "AggregateExec PARTIAL output of AVG intermediate state \
+                                     requires the distributed module"
+                                        .into(),
+                                )),
+                            }?
+                        }
                         _ => acc.final_value()?,
                     };
                     builders[n_group + i].append_value(&output);
                 }
             }
 
-            let columns: Vec<Box<dyn ColumnVector>> = builders
-                .into_iter()
-                .map(|b| Box::new(b.build()) as Box<dyn ColumnVector>)
-                .collect();
+            let columns: Vec<ArrayRef> = builders.into_iter().map(|b| b.build()).collect();
             let batch = record_batch::create(&schema, columns)?;
             yield batch;
         };
@@ -242,16 +300,111 @@ impl ExecutionPlan for AggregateExec {
     }
 }
 
+impl crate::display::DisplayAs for AggregateExec {
+    fn fmt_as(
+        &self,
+        t: crate::display::DisplayFormatType,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        // Helper that mirrors DataFusion's `format_expr_with_alias`: if the
+        // expression's `to_string()` already matches the alias, just print
+        // the expression; otherwise emit `"{expr} as {alias}"`. For the
+        // simple `GROUP BY a, b, …` path the planner constructs each pair as
+        // `(expr, expr.to_string())` so the alias collapses out.
+        let format_expr_with_alias = |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+            let e = e.to_string();
+            if &e == alias {
+                e
+            } else {
+                format!("{e} as {alias}")
+            }
+        };
+
+        match t {
+            crate::display::DisplayFormatType::Default
+            | crate::display::DisplayFormatType::Verbose => {
+                write!(f, "AggregateExec: mode={:?}", self.mode)?;
+                let g: Vec<String> = if self.group_by.is_single() {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(format_expr_with_alias)
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        format_expr_with_alias(&self.group_by.null_expr[idx])
+                                    } else {
+                                        format_expr_with_alias(&self.group_by.expr[idx])
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+                write!(f, ", gby=[{}]", g.join(", "))?;
+
+                let a: Vec<String> = self.aggr_expr.iter().map(|agg| agg.to_string()).collect();
+                write!(f, ", aggr=[{}]", a.join(", "))?;
+                Ok(())
+            }
+            crate::display::DisplayFormatType::TreeRender => {
+                let g: Vec<String> = if self.group_by.is_single() {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(format_expr_with_alias)
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        format_expr_with_alias(&self.group_by.null_expr[idx])
+                                    } else {
+                                        format_expr_with_alias(&self.group_by.expr[idx])
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+                let a: Vec<String> = self.aggr_expr.iter().map(|agg| agg.to_string()).collect();
+                writeln!(f, "mode={:?}", self.mode)?;
+                if !g.is_empty() {
+                    writeln!(f, "group_by={}", g.join(", "))?;
+                }
+                if !a.is_empty() {
+                    writeln!(f, "aggr={}", a.join(", "))?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 impl fmt::Display for AggregateExec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let group: Vec<String> = self.group_expr.iter().map(|e| e.to_string()).collect();
-        let aggr: Vec<String> = self.aggregate_expr.iter().map(|e| e.to_string()).collect();
-        write!(
+        <Self as crate::display::DisplayAs>::fmt_as(
+            self,
+            crate::display::DisplayFormatType::Default,
             f,
-            "AggregateExec: groupExpr=[{}], aggrExpr=[{}], mode={:?}",
-            group.join(", "),
-            aggr.join(", "),
-            self.mode
         )
     }
 }
@@ -285,7 +438,7 @@ impl Hash for GroupKey {
 /// Equality used for group keys: bit-equality for floats (so `NaN == NaN`, to agree
 /// with [`hash_scalar`]); the derived `PartialEq` for everything else.
 fn scalar_key_eq(a: &ScalarValue, b: &ScalarValue) -> bool {
-    use ScalarValue::*;
+    use ScalarValue::{Float32, Float64};
     match (a, b) {
         (Float32(x), Float32(y)) => x.to_bits() == y.to_bits(),
         (Float64(x), Float64(y)) => x.to_bits() == y.to_bits(),
@@ -296,7 +449,7 @@ fn scalar_key_eq(a: &ScalarValue, b: &ScalarValue) -> bool {
 /// Hash one scalar: the variant discriminant plus the value's bytes (floats by bit
 /// pattern, so equal-keyed floats hash equally).
 fn hash_scalar<H: Hasher>(v: &ScalarValue, state: &mut H) {
-    use ScalarValue::*;
+    use ScalarValue::{Null, Boolean, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64, Utf8, Binary, Date32};
     std::mem::discriminant(v).hash(state);
     match v {
         Null => {}
@@ -321,25 +474,61 @@ fn hash_scalar<H: Hasher>(v: &ScalarValue, state: &mut H) {
 mod tests {
     //! Accumulator tests plus a group-by integration test over `employee.csv`
     //! (the §4.6 snapshot check). The accumulators are driven directly and the
-    //! integration test builds the physical plan by hand (the `query-planner`
-    //! that normally assembles it is covered in module 7).
+    //! integration test builds the physical plan by hand (the physical planner
+    //! that normally assembles it lives in the `fdapquery` crate's
+    //! `physical_planner` module).
     use super::*;
     use crate::Column;
     use crate::CountExpr;
     use crate::MaxExpr;
     use crate::MinExpr;
     use crate::SumExpr;
-    use crate::scan_exec::ScanExec;
-    use fdapquery_catalog::CsvDataSource;
-    use fdapquery_catalog::TableProvider;
+    use crate::test_util::employee_source;
     use fdapquery_datatypes::Field;
     use futures::TryStreamExt;
+
+    /// Build a single-group `PhysicalGroupBy` matching the simple `GROUP BY a, b, …`
+    /// shape — the only shape fdapquery's planner emits today. Each pair's alias
+    /// is the expression's own `to_string()`, so the DataFusion-style `expr as alias`
+    /// rendering collapses to just `expr` (e.g. `#3`).
+    fn simple_group_by(exprs: Vec<Arc<dyn PhysicalExpr>>) -> PhysicalGroupBy {
+        let pairs = exprs
+            .into_iter()
+            .map(|e| {
+                let alias = e.to_string();
+                (e, alias)
+            })
+            .collect();
+        PhysicalGroupBy::new_single(pairs)
+    }
+
+    /// Sugar for the test-only `Single`-mode constructor: no FILTER expressions,
+    /// `input_schema = input.schema()`.
+    fn single_mode_aggregate(
+        input: Arc<dyn ExecutionPlan>,
+        group_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        aggr_exprs: Vec<Arc<dyn AggregateExpr>>,
+        out_schema: Schema,
+    ) -> AggregateExec {
+        let n = aggr_exprs.len();
+        let input_schema = input.schema();
+        AggregateExec::try_new(
+            AggregateMode::Single,
+            simple_group_by(group_exprs),
+            aggr_exprs,
+            vec![None; n],
+            input,
+            input_schema,
+            out_schema,
+        )
+        .unwrap()
+    }
 
     // ---- Accumulators driven directly. ----
 
     #[test]
     fn min_accumulator() {
-        let mut a = MinExpr::new(Arc::new(Column::new(0))).create_accumulator();
+        let mut a = MinExpr::new(Arc::new(Column::new("a", 0))).create_accumulator();
         for v in [10, 14, 4] {
             a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
@@ -348,7 +537,7 @@ mod tests {
 
     #[test]
     fn max_accumulator() {
-        let mut a = MaxExpr::new(Arc::new(Column::new(0))).create_accumulator();
+        let mut a = MaxExpr::new(Arc::new(Column::new("a", 0))).create_accumulator();
         for v in [10, 14, 4] {
             a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
@@ -357,7 +546,7 @@ mod tests {
 
     #[test]
     fn sum_accumulator() {
-        let mut a = SumExpr::new(Arc::new(Column::new(0))).create_accumulator();
+        let mut a = SumExpr::new(Arc::new(Column::new("a", 0))).create_accumulator();
         for v in [10, 14, 4] {
             a.accumulate(&ScalarValue::Int32(v)).unwrap();
         }
@@ -368,20 +557,6 @@ mod tests {
 
     #[tokio::test]
     async fn group_by_state_min_max_count() {
-        let ds: Arc<dyn TableProvider> = Arc::new(CsvDataSource::new(
-            "../testdata/employee.csv",
-            None,
-            true,
-            1024,
-        ));
-        let all: Vec<String> = ds
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect();
-        let scan = ScanExec::new(Arc::clone(&ds), all).unwrap();
-
         // Output: state, MIN(salary), MAX(salary), COUNT(salary).
         let out_schema = Schema::new(vec![
             Field::new("state", arrow_schema::DataType::Utf8, true),
@@ -389,14 +564,14 @@ mod tests {
             Field::new("max_salary", arrow_schema::DataType::Int64, true),
             Field::new("count_salary", arrow_schema::DataType::Int32, true),
         ]);
-        // employee.csv columns: 0=id 1=first_name 2=last_name 3=state 4=job_title 5=salary
-        let agg = AggregateExec::new(
-            Arc::new(scan),
-            vec![Arc::new(Column::new(3))],
+        // employee fixture columns: 0=id 1=first_name 2=last_name 3=state 4=job_title 5=salary
+        let agg = single_mode_aggregate(
+            employee_source(),
+            vec![Arc::new(Column::new("state", 3))],
             vec![
-                Arc::new(MinExpr::new(Arc::new(Column::new(5)))),
-                Arc::new(MaxExpr::new(Arc::new(Column::new(5)))),
-                Arc::new(CountExpr::new(Arc::new(Column::new(5)))),
+                Arc::new(MinExpr::new(Arc::new(Column::new("salary", 5)))),
+                Arc::new(MaxExpr::new(Arc::new(Column::new("salary", 5)))),
+                Arc::new(CountExpr::new(Arc::new(Column::new("salary", 5)))),
             ],
             out_schema,
         );
@@ -412,27 +587,27 @@ mod tests {
         let batch = &batches[0];
         assert_eq!(batch.num_rows(), 3); // groups: CA, CO, and the null-state row
 
-        let states = record_batch::field(batch, 0);
-        let mins = record_batch::field(batch, 1);
-        let maxs = record_batch::field(batch, 2);
-        let counts = record_batch::field(batch, 3);
+        let states = batch.column(0).clone();
+        let mins = batch.column(1).clone();
+        let maxs = batch.column(2).clone();
+        let counts = batch.column(3).clone();
 
         let mut got: HashMap<Option<String>, (i64, i64, i32)> = HashMap::new();
         for i in 0..batch.num_rows() {
-            let state = match states.get_value(i).unwrap() {
+            let state = match ScalarValue::try_from_array(&states, i).unwrap() {
                 ScalarValue::Utf8(s) => Some(s),
                 ScalarValue::Null => None,
                 other => panic!("unexpected state value: {other:?}"),
             };
-            let mn = match mins.get_value(i).unwrap() {
+            let mn = match ScalarValue::try_from_array(&mins, i).unwrap() {
                 ScalarValue::Int64(n) => n,
                 o => panic!("min: {o:?}"),
             };
-            let mx = match maxs.get_value(i).unwrap() {
+            let mx = match ScalarValue::try_from_array(&maxs, i).unwrap() {
                 ScalarValue::Int64(n) => n,
                 o => panic!("max: {o:?}"),
             };
-            let c = match counts.get_value(i).unwrap() {
+            let c = match ScalarValue::try_from_array(&counts, i).unwrap() {
                 ScalarValue::Int32(n) => n,
                 o => panic!("count: {o:?}"),
             };
@@ -442,5 +617,122 @@ mod tests {
         assert_eq!(got.get(&Some("CA".to_string())), Some(&(12000, 12000, 1)));
         assert_eq!(got.get(&Some("CO".to_string())), Some(&(10000, 11500, 2)));
         assert_eq!(got.get(&None), Some(&(11500, 11500, 1)));
+    }
+
+    /// Smoke check that accessor method names match DataFusion's: `mode()`,
+    /// `group_expr()`, `aggr_expr()`, `filter_expr()`, `input()`,
+    /// `input_schema()`. If any of these is renamed away from the DataFusion
+    /// surface, this test stops compiling.
+    #[test]
+    fn accessor_method_names_match_datafusion() {
+        let out_schema = Schema::new(vec![
+            Field::new("state", arrow_schema::DataType::Utf8, true),
+            Field::new("min_salary", arrow_schema::DataType::Int64, true),
+        ]);
+        let agg = single_mode_aggregate(
+            employee_source(),
+            vec![Arc::new(Column::new("state", 3))],
+            vec![Arc::new(MinExpr::new(Arc::new(Column::new("salary", 5))))],
+            out_schema,
+        );
+        // Each call below proves the method exists with the DataFusion name.
+        assert_eq!(*agg.mode(), AggregateMode::Single);
+        assert_eq!(agg.group_expr().expr().len(), 1);
+        assert_eq!(agg.aggr_expr().len(), 1);
+        assert_eq!(agg.filter_expr().len(), 1);
+        assert!(agg.filter_expr().iter().all(|f| f.is_none()));
+        assert_eq!(agg.input().name(), "TestSourceExec");
+        assert_eq!(agg.input_schema().fields().len(), 6);
+    }
+
+    /// Byte-for-byte mirror of DataFusion's `DisplayFormatType::Default`
+    /// output: `"AggregateExec: mode={Mode:?}, gby=[…], aggr=[…]"`.
+    /// Source: `datafusion::physical_plan::aggregates::AggregateExec::fmt_as`,
+    /// `datafusion/physical-plan/src/aggregates/mod.rs` lines 1551–1620.
+    #[test]
+    fn display_default_matches_datafusion() {
+        // Case 1: single group, single aggregate, mode=Single.
+        let out_schema = Schema::new(vec![
+            Field::new("state", arrow_schema::DataType::Utf8, true),
+            Field::new("min_salary", arrow_schema::DataType::Int64, true),
+        ]);
+        let agg = single_mode_aggregate(
+            employee_source(),
+            vec![Arc::new(Column::new("state", 3))],
+            vec![Arc::new(MinExpr::new(Arc::new(Column::new("salary", 5))))],
+            out_schema,
+        );
+        assert_eq!(
+            format!("{agg}"),
+            "AggregateExec: mode=Single, gby=[state@3], aggr=[MIN(salary@5)]"
+        );
+
+        // Case 2: multi-group, multi-aggregate, mode=Single.
+        let out_schema = Schema::new(vec![
+            Field::new("state", arrow_schema::DataType::Utf8, true),
+            Field::new("job_title", arrow_schema::DataType::Utf8, true),
+            Field::new("min_salary", arrow_schema::DataType::Int64, true),
+            Field::new("max_salary", arrow_schema::DataType::Int64, true),
+        ]);
+        let agg = single_mode_aggregate(
+            employee_source(),
+            vec![
+                Arc::new(Column::new("state", 3)),
+                Arc::new(Column::new("job_title", 4)),
+            ],
+            vec![
+                Arc::new(MinExpr::new(Arc::new(Column::new("salary", 5)))),
+                Arc::new(MaxExpr::new(Arc::new(Column::new("salary", 5)))),
+            ],
+            out_schema,
+        );
+        assert_eq!(
+            format!("{agg}"),
+            "AggregateExec: mode=Single, gby=[state@3, job_title@4], aggr=[MIN(salary@5), MAX(salary@5)]"
+        );
+
+        // Case 3: no group, single aggregate, mode=Single.
+        let out_schema = Schema::new(vec![Field::new(
+            "max_salary",
+            arrow_schema::DataType::Int64,
+            true,
+        )]);
+        let agg = single_mode_aggregate(
+            employee_source(),
+            vec![],
+            vec![Arc::new(MaxExpr::new(Arc::new(Column::new("salary", 5))))],
+            out_schema,
+        );
+        assert_eq!(
+            format!("{agg}"),
+            "AggregateExec: mode=Single, gby=[], aggr=[MAX(salary@5)]"
+        );
+    }
+
+    /// Exercise the full `displayable(plan).indent(false)` pipeline — the
+    /// path EXPLAIN uses. Confirms that the operator's first line through
+    /// the tree walker matches DataFusion's exact string, including the
+    /// trailing newline emitted by the walker.
+    #[test]
+    fn displayable_indent_default_first_line() {
+        let out_schema = Schema::new(vec![
+            Field::new("state", arrow_schema::DataType::Utf8, true),
+            Field::new("min_salary", arrow_schema::DataType::Int64, true),
+        ]);
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(single_mode_aggregate(
+            employee_source(),
+            vec![Arc::new(Column::new("state", 3))],
+            vec![Arc::new(MinExpr::new(Arc::new(Column::new("salary", 5))))],
+            out_schema,
+        ));
+        let rendered = format!(
+            "{}",
+            crate::display::displayable(plan.as_ref()).indent(false)
+        );
+        let first_line = rendered.lines().next().unwrap();
+        assert_eq!(
+            first_line,
+            "AggregateExec: mode=Single, gby=[state@3], aggr=[MIN(salary@5)]"
+        );
     }
 }

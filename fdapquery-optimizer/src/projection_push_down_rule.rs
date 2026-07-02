@@ -10,18 +10,18 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::optimizer::{
-    OptimizerConfig, OptimizerRule, aggregate_inner, extract_columns, extract_columns_list,
+    OptimizerConfig, OptimizerRule, aggregate_args, extract_columns, extract_columns_list,
 };
 
 /// The one optimisation rule so far.
 pub struct ProjectionPushDownRule;
 
 impl OptimizerRule for ProjectionPushDownRule {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "projection_push_down"
     }
 
-    /// Session 15d-1 #100 — migrated to the `try_optimize` shape.
+    /// Migrated to the `try_optimize` shape.
     /// The rule always fires (even if it leaves the plan
     /// structurally unchanged, e.g. a single `TableScan`), so it
     /// returns `Ok(Some(_))` whenever `push_down` succeeds.
@@ -51,9 +51,14 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
         LogicalPlan::Aggregate(a) => {
             extract_columns_list(&a.group_expr, &a.input, column_names)?;
             // Collect the columns referenced by each aggregate's *argument*
-            // expression.
+            // expressions. Aggregates are now
+            // `Expr::AggregateFunction(...)` carrying
+            // `params.args: Vec<Expr>`; the `aggregate_args` helper
+            // returns the slice and we recurse into each argument.
             for agg in &a.aggregate_expr {
-                extract_columns(aggregate_inner(agg), &a.input, column_names)?;
+                for arg in aggregate_args(agg)? {
+                    extract_columns(arg, &a.input, column_names)?;
+                }
             }
             let input = push_down(&a.input, column_names)?;
             LogicalPlan::Aggregate(Aggregate::new(
@@ -71,13 +76,9 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
             // request every column from both sides.
             if column_names.is_empty() {
                 let left_schema = j.left.schema()?;
-                for f in left_schema.fields().iter() {
-                    column_names.insert(f.name().clone());
-                }
+                column_names.extend(left_schema.fields().iter().map(|f| f.name().clone()));
                 let right_schema = j.right.schema()?;
-                for f in right_schema.fields().iter() {
-                    column_names.insert(f.name().clone());
-                }
+                column_names.extend(right_schema.fields().iter().map(|f| f.name().clone()));
             }
             // The join keys are always required.
             for (left_col, right_col) in &j.on {
@@ -86,7 +87,7 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
             }
             let left = push_down(&j.left, column_names)?;
             let right = push_down(&j.right, column_names)?;
-            LogicalPlan::Join(Join::new(left, right, j.join_type.clone(), j.on.clone()))
+            LogicalPlan::Join(Join::new(left, right, j.join_type, j.on.clone()))
         }
         LogicalPlan::TableScan(s) => {
             // Keep only the source columns that were actually requested, sorted.
@@ -111,8 +112,8 @@ fn push_down(plan: &LogicalPlan, column_names: &mut HashSet<String>) -> Result<L
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdapquery_catalog::CsvDataSource;
-    use fdapquery_expr::{DataFrame, col, count, format, lit_string, max, min};
+    use fdapquery_catalog::{CsvDataSource, provider_as_source};
+    use fdapquery_expr::{DataFrame, col, count, format, lit, max, min};
     use std::sync::Arc;
 
     /// `employee` table scanned with no projection yet.
@@ -120,7 +121,7 @@ mod tests {
         let path = "../testdata/employee.csv";
         let scan = TableScan::new(
             "employee",
-            Arc::new(CsvDataSource::new(path, None, true, 1024)),
+            provider_as_source(Arc::new(CsvDataSource::new(path, None, true, 1024))),
             vec![],
         )
         .unwrap();
@@ -141,15 +142,19 @@ mod tests {
 
     #[test]
     fn projection_push_down_with_selection() {
-        let df = csv()
-            .filter(col("state").eq(lit_string("CO")))
-            .project(vec![col("id"), col("first_name"), col("last_name")]);
+        let df = csv().filter(col("state").eq(lit("CO"))).project(vec![
+            col("id"),
+            col("first_name"),
+            col("last_name"),
+        ]);
         let optimized = ProjectionPushDownRule
             .try_optimize(df.logical_plan(), &OptimizerConfig)
             .unwrap()
             .expect("rule should fire");
+        // `Expr::Literal(ScalarValue::Utf8("CO"))` displays
+        // bare `CO` (mirrors DataFusion's `ScalarValue::Display`).
         let expected = "Projection: #id, #first_name, #last_name\n\
-                        \tFilter: #state = 'CO'\n\
+                        \tFilter: #state = CO\n\
                         \t\tTableScan: employee; projection=[first_name, id, last_name, state]\n";
         assert_eq!(optimized.pretty(), expected);
     }

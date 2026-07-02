@@ -1,0 +1,46 @@
+[package]
+name         = "fdapquery-physical-optimizer"
+description  = "Physical-plan optimizer: PhysicalOptimizerRule trait and rule-based driver."
+edition.workspace      = true
+license.workspace      = true
+version.workspace      = true
+authors.workspace      = true
+rust-version.workspace = true
+
+# Strict mirror of DataFusion's `datafusion-physical-optimizer` crate
+# (`datafusion/physical-optimizer/Cargo.toml`).
+#
+# DataFusion's dep set (workspace deps): `arrow`, `datafusion-common`,
+# `datafusion-execution`, `datafusion-expr`, `datafusion-expr-common`,
+# `datafusion-physical-expr`, `datafusion-physical-expr-common`,
+# `datafusion-physical-plan`, `datafusion-pruning`, `itertools`,
+# `recursive` (optional). fdapquery has no equivalents of
+# `datafusion-pruning` (pruning predicates over file statistics) or
+# `datafusion-expr-common` / `datafusion-physical-expr-common` (the
+# upstream-shared trait crates split out from `datafusion-expr` /
+# `datafusion-physical-expr`); they are deferred until rules that need
+# them land. `itertools` and `recursive` are not needed for the v0.1
+# trait + driver surface; they'll join when the first concrete rule
+# does. The minimal set below mirrors what the v0.1 trait + driver
+# actually touches:
+#
+# - `fdapquery-common`     — `Result` (mirror of DataFusion's per-rule
+#                            `use datafusion_common::Result;` import pattern)
+# - `fdapquery-execution`  — `SessionConfig` (substitutes for DataFusion's
+#                            `ConfigOptions`; see `src/optimizer.rs` docs)
+# - `fdapquery-physical-plan` — `ExecutionPlan` (the plan the trait rewrites)
+#
+# `fdapquery-datatypes` is a `[dev-dependencies]` entry only — the test
+# module uses `Schema` and `Field` (both re-exports of `arrow_schema`
+# types) for the minimal in-test `ExecutionPlan` impl.
+
+[dependencies]
+fdapquery-common         = { version = "0.1.0", path = "../fdapquery-common" }
+fdapquery-execution      = { version = "0.1.0", path = "../fdapquery-execution" }
+fdapquery-physical-plan  = { version = "0.1.0", path = "../fdapquery-physical-plan" }
+
+[dev-dependencies]
+fdapquery-datatypes      = { version = "0.1.0", path = "../fdapquery-datatypes" }
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 [package]
 name         = "fdapquery-catalog"
-description  = "DataSource trait with CSV, Parquet, and in-memory implementations."
+description  = "TableProvider trait with CSV, Parquet, and in-memory implementations. Builds DataSourceExec at the planning seam."
 edition.workspace      = true
 license.workspace      = true
 version.workspace      = true
@@ -12,18 +12,43 @@ arrow        = { workspace = true }
 arrow-array  = { workspace = true }
 arrow-schema = { workspace = true }
 parquet      = { workspace = true }
-# `futures::stream` (Session 13b) — `TableProvider::scan` returns a
-# `Pin<Box<dyn Stream<Item = Result<RecordBatch>>>>`, modernizing the
-# pre-13b sync `Iterator` return shape.
+# `futures::stream` — adapter helpers for the per-format `DataSource::open`
+# bodies that wrap the sync arrow/parquet iterators as async streams.
 futures      = { workspace = true }
+# `TableProvider::scan` is `async fn` on a trait; `async-trait`
+# desugars it into a dyn-safe vtable. DataFusion uses the same crate
+# for `TableProvider`.
+async-trait  = { workspace = true }
 fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }
-# Session 15d-1 #92 — `SendableRecordBatchStream` moved to
-# `fdapquery-execution`; catalog imports it from there so
-# `TableProvider::scan` uses the canonical type rather than a local
-# `BoxRecordBatchStream` alias.
+# `SendableRecordBatchStream` lives in `fdapquery-execution`; catalog
+# imports it from there.
 fdapquery-execution = { version = "0.1.0", path = "../fdapquery-execution" }
+# The catalog crate depends on `fdapquery-expr` for the `TableSource`
+# trait that the `DefaultTableSource` adapter implements.
+# `LogicalPlan::TableScan` holds `Arc<dyn TableSource>`; the adapter
+# wraps a heavyweight `Arc<dyn TableProvider>` (this crate) as the
+# lightweight logical-side trait. There is no back-edge
+# (`expr → catalog`), so this edge is acyclic.
+fdapquery-expr = { version = "0.1.0", path = "../fdapquery-expr" }
+# `TableProvider::scan` returns `Arc<dyn ExecutionPlan>`, so the catalog
+# crate depends on `fdapquery-physical-plan` (the trait +
+# `PlanProperties` + `Partitioning` + `DisplayFormatType`). There is no
+# back-edge from `physical-plan → catalog`, so this dep is acyclic.
+fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
+# Each `TableProvider::scan` impl wraps an inner `*Config: DataSource`
+# in a `DataSourceExec`. Both types live in `fdapquery-datasource` and
+# the catalog crate depends on it directly. `datasource` does NOT
+# depend on `catalog` — the dependency direction matches DataFusion's
+# `datafusion-catalog` → `datafusion-datasource`.
+fdapquery-datasource = { version = "0.1.0", path = "../fdapquery-datasource" }
 
 [dev-dependencies]
 # Tokio runtime for the per-provider `#[tokio::test]` test bodies that
-# drain the `TableProvider::scan` stream via `try_collect().await`.
+# drain the `DataSourceExec::execute` stream via `try_collect().await`.
 tokio = { workspace = true }
+# `ScalarValue` used by test modules in in_memory_data_source.rs and
+# parquet_data_source.rs.
+fdapquery-common = { version = "0.1.0", path = "../fdapquery-common" }
+
+[lints]
+workspace = true

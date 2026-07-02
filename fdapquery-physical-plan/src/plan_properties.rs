@@ -4,7 +4,7 @@
 //! whether to reorder joins, etc. v0.1 ships only `output_partitioning`;
 //! `output_ordering`, equivalence classes, emission cadence, and
 //! boundedness are reserved for later sessions when the optimiser rules
-//! that consume them ship (Phase C / Session 11+).
+//! that consume them ship.
 
 use crate::partitioning::Partitioning;
 

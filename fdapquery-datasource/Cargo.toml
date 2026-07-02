@@ -1,0 +1,24 @@
+[package]
+name         = "fdapquery-datasource"
+description  = "DataSource trait + DataSourceExec operator. Strict mirror of datafusion-datasource."
+edition.workspace      = true
+license.workspace      = true
+version.workspace      = true
+authors.workspace      = true
+rust-version.workspace = true
+
+[dependencies]
+# Strict mirror of DataFusion's `datafusion-datasource`:
+# - depends on `physical-plan` (for `ExecutionPlan`, `PlanProperties`,
+#   `Partitioning`, `DisplayAs`, `DisplayFormatType`, `SendableRecordBatchStream`)
+# - does NOT depend on `catalog` — `DataSource` is a stand-alone trait that
+#   knows nothing of `TableProvider`. The `catalog` crate depends on
+#   `datasource` (it builds `DataSourceExec` to satisfy
+#   `TableProvider::scan`), not the other way around.
+fdapquery-common         = { version = "0.1.0", path = "../fdapquery-common" }
+fdapquery-datatypes      = { version = "0.1.0", path = "../fdapquery-datatypes" }
+fdapquery-execution      = { version = "0.1.0", path = "../fdapquery-execution" }
+fdapquery-physical-plan  = { version = "0.1.0", path = "../fdapquery-physical-plan" }
+
+[lints]
+workspace = true

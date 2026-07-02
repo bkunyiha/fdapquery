@@ -1,7 +1,7 @@
 //! The single-node front door to the engine. `SessionContext` ties the
 //! whole pipeline together: it parses SQL (or accepts a `DataFrame` built
 //! fluently), optimizes the logical plan, lowers it to a physical plan, and
-//! executes it, yielding a stream of [`RecordBatch`]es. Most user-facing code
+//! executes it, yielding a stream of `RecordBatch`es. Most user-facing code
 //! and tests call through here.
 //!
 //! ## Notes
@@ -15,33 +15,51 @@
 //! - `register*` methods take `&mut self` and mutate a plain `HashMap`,
 //!   keeping the context `Send + Sync` (no interior mutability) so
 //!   `ParallelContext` can share it with rayon workers.
-//! - `sql()` parses with the Pratt parser (`SqlParser::parse(0)`) and expects
-//!   a `SqlExpr::Select`; anything else panics (§3.6).
+//! - `sql()` parses via `sqlparser::Parser::parse_sql` (same crate DataFusion
+//!   uses) with `GenericDialect`, then lowers via [`SqlToRel`]. Multi-statement
+//!   input is rejected; anything other than `Statement::Query(_)` returns
+//!   `FdapQueryError::NotImplemented(_)`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::session_state::{SessionState, SessionStateBuilder};
 use fdapquery_catalog::CsvDataSource;
 use fdapquery_catalog::TableProvider;
+use fdapquery_catalog::provider_as_source;
 use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
-use fdapquery_optimizer::Optimizer;
-use fdapquery_physical_plan::DefaultPhysicalPlanner;
-use fdapquery_physical_plan::{RuntimeEnv, SendableRecordBatchStream, SessionConfig, TaskContext};
-// `PrattParser` brings the `parse` method into scope for `SqlParser`.
-use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_physical_plan::{SendableRecordBatchStream, SessionConfig};
+use fdapquery_sql::SqlToRel;
+use fdapquery_sql::sqlparser::ast::Statement;
+use fdapquery_sql::sqlparser::dialect::GenericDialect;
+use fdapquery_sql::sqlparser::parser::Parser;
 
 /// Default CSV batch size when `rquery.csv.batchSize` is unset.
 const DEFAULT_BATCH_SIZE: usize = 1024;
 
 /// Single-node execution context.
+///
+/// `SessionContext` now holds an
+/// `Arc<SessionState>` internally that owns the `SessionConfig`,
+/// `RuntimeEnv`, `Optimizer`, and `QueryPlanner`. The legacy
+/// `settings` / `batch_size` / `tables` fields are preserved so the
+/// existing public surface (`sql`, `csv`, `register_*`, `execute`)
+/// continues to work; future passes migrate them one at a time.
 pub struct SessionContext {
-    /// Configuration settings.
+    /// Configuration settings — preserved for the
+    /// `ctx.settings` public field. The same key-value pairs are
+    /// mirrored into the inner `SessionState`'s `SessionConfig`.
     pub settings: HashMap<String, String>,
     /// CSV read batch size, derived from `settings` once at construction.
     batch_size: usize,
     /// Tables registered with this context.
     tables: HashMap<String, DataFrame>,
+    /// The per-session engine state. Mirror of DataFusion's
+    /// `SessionContext.state: Arc<RwLock<SessionState>>`; v0.1 holds a
+    /// plain `Arc<SessionState>` because none of the consumers mutate
+    /// state through the context yet.
+    state: Arc<SessionState>,
 }
 
 impl SessionContext {
@@ -50,11 +68,46 @@ impl SessionContext {
             .get("rquery.csv.batchSize")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_BATCH_SIZE);
+        // Build the inner `SessionState` via the builder. The
+        // `SessionConfig` carries every setting from the
+        // `settings` map verbatim.
+        let mut config = SessionConfig::new();
+        for (k, v) in &settings {
+            config = config.with_setting(k.clone(), v.clone());
+        }
+        let state = SessionStateBuilder::new_with_defaults()
+            .with_config(config)
+            .build();
         Self {
             settings,
             batch_size,
             tables: HashMap::new(),
+            state: Arc::new(state),
         }
+    }
+
+    /// Construct a `SessionContext` from an existing `SessionState`.
+    /// Mirror of DataFusion's `SessionContext::new_with_state` at
+    /// `execution/context/mod.rs`.
+    pub fn new_with_state(state: SessionState) -> Self {
+        // The legacy `settings` map is derived from the state's
+        // `SessionConfig` so the `ctx.settings` public field stays
+        // populated.
+        let settings = state.config().settings.clone();
+        let batch_size = state.config().csv_batch_size();
+        Self {
+            settings,
+            batch_size,
+            tables: HashMap::new(),
+            state: Arc::new(state),
+        }
+    }
+
+    /// Return the underlying `SessionState`. Mirror of DataFusion's
+    /// `SessionContext::state` (which returns a `SessionState` clone
+    /// out of the inner `RwLock`).
+    pub fn state(&self) -> &Arc<SessionState> {
+        &self.state
     }
 
     /// The configured CSV batch size.
@@ -68,23 +121,28 @@ impl SessionContext {
     /// Returns a `Result` so tokenizer/parser/planner errors surface
     /// cleanly without the Session-7 `.expect("…")` scaffolding.
     pub fn sql(&self, sql: &str) -> Result<DataFrame> {
-        let tokens = SqlTokenizer::new(sql).tokenize()?;
-        let parsed = SqlParser::new(tokens).parse(0)?;
-        let select = match parsed {
-            Some(SqlExpr::Select(select)) => *select,
-            other => {
-                return Err(FdapQueryError::Plan(format!(
-                    "expected SELECT, found {other:?}"
-                )));
-            }
-        };
-        SqlPlanner::new().create_data_frame(&select, &self.tables)
+        let dialect = GenericDialect {};
+        let mut statements: Vec<Statement> = Parser::parse_sql(&dialect, sql)
+            .map_err(|e| FdapQueryError::SqlParse(format!("{e}")))?;
+        if statements.len() > 1 {
+            return Err(FdapQueryError::Plan(
+                "multiple SQL statements per call are not supported at v0.1".into(),
+            ));
+        }
+        let statement = statements
+            .pop()
+            .ok_or_else(|| FdapQueryError::Plan("empty SQL input".into()))?;
+        SqlToRel::new(&self.tables).sql_statement_to_plan(&statement)
     }
 
     /// Get a `DataFrame` representing the specified CSV file.
     pub fn csv(&self, filename: &str) -> DataFrame {
-        let source = CsvDataSource::new(filename, None, true, self.batch_size);
-        let scan = TableScan::new(filename, Arc::new(source), vec![])
+        let source: Arc<dyn TableProvider> =
+            Arc::new(CsvDataSource::new(filename, None, true, self.batch_size));
+        // Wrap the heavyweight `TableProvider` in a
+        // `DefaultTableSource` so it can be held as the logical-side
+        // `Arc<dyn TableSource>` by `LogicalPlan::TableScan`.
+        let scan = TableScan::new(filename, provider_as_source(source), vec![])
             .expect("SessionContext::csv: scan construction");
         DataFrame::new(LogicalPlan::TableScan(scan))
     }
@@ -96,7 +154,10 @@ impl SessionContext {
 
     /// Register a data source with the context.
     pub fn register_data_source(&mut self, table_name: &str, data_source: Arc<dyn TableProvider>) {
-        let scan = TableScan::new(table_name, data_source, vec![])
+        // Wrap into a `DefaultTableSource` for the
+        // logical plan; the physical planner unwraps it at the
+        // `TableScan` seam via `source_as_provider`.
+        let scan = TableScan::new(table_name, provider_as_source(data_source), vec![])
             .expect("SessionContext::register_data_source: scan construction");
         self.register(table_name, DataFrame::new(LogicalPlan::TableScan(scan)));
     }
@@ -110,29 +171,32 @@ impl SessionContext {
     /// Execute the logical plan represented by a `DataFrame`. Returns a
     /// `SendableRecordBatchStream` — callers drive it to completion with
     /// `try_collect().await` / `try_next().await` on a tokio runtime.
-    pub fn execute_data_frame(&self, df: &DataFrame) -> Result<SendableRecordBatchStream> {
-        self.execute(df.logical_plan())
+    ///
+    /// `async fn` because the
+    /// physical planner is now `async fn` (it awaits
+    /// `TableProvider::scan`).
+    pub async fn execute_data_frame(&self, df: &DataFrame) -> Result<SendableRecordBatchStream> {
+        self.execute(df.logical_plan()).await
     }
 
     /// Execute the provided logical plan: optimize, lower to a physical
     /// plan, and run it.
     ///
-    /// Returns a `SendableRecordBatchStream` synchronously — the stream
-    /// itself is async, but constructing it is not. The function builds an
-    /// `Arc<TaskContext>` populated for single-node use: the executor
-    /// identity is `"single-node"`, and the shuffle directory is a default
-    /// path that is never actually written to (no shuffle ops run in
-    /// single-process mode).
-    pub fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
-        let optimized = Optimizer::new().optimize(plan)?;
-        let physical = DefaultPhysicalPlanner::new().create_physical_plan(&optimized)?;
-        let ctx = Arc::new(TaskContext::new(
-            "single-node",
-            "localhost",
-            0,
-            SessionConfig::new(),
-            Arc::new(RuntimeEnv::default_local()),
-        ));
+    /// Returns a `SendableRecordBatchStream` after awaiting the
+    /// async-planner future — the stream itself is async, and
+    /// constructing it also awaits.
+    ///
+    /// Dispatches through the inner
+    /// `SessionState`: the state's logical optimizer + pluggable
+    /// `QueryPlanner` build the physical plan, then the state's
+    /// `task_ctx()` provides the runtime context. The `Arc<TaskContext>`
+    /// it produces carries the session's `SessionConfig` and
+    /// `RuntimeEnv`, so the executor identity is the session id and
+    /// the shuffle directory is whatever the session's runtime points
+    /// at. Mirrors DataFusion's `SessionContext::execute` shape.
+    pub async fn execute(&self, plan: &LogicalPlan) -> Result<SendableRecordBatchStream> {
+        let physical = SessionState::create_physical_plan(&self.state, plan).await?;
+        let ctx = SessionState::task_ctx(&self.state);
         physical.execute(0, ctx)
     }
 }
@@ -143,7 +207,7 @@ mod tests {
     //! assertions for `ctx.sql()`, plus end-to-end execution cases. The
     //! `Fuzzer`-backed cases — `min max sum float`, `float math`,
     //! `boolean expressions`, `inner join using DataFrame`,
-    //! `left join using DataFrame` — exercise the `fuzzer` crate (module 9).
+    //! `left join using DataFrame` — exercise the `fdapquery-fuzzer` crate.
     //!
     //! ## Float formatting note
     //! Rust's `f32::to_string()` (which `fdapquery_datatypes::record_batch::to_csv` uses)
@@ -154,10 +218,11 @@ mod tests {
     //! assertion matches whatever Rust's formatter produces.
     use super::*;
     use fdapquery_catalog::InMemoryDataSource;
+    use fdapquery_common::ScalarValue;
     use fdapquery_datatypes::RecordBatch;
     use fdapquery_datatypes::record_batch::to_csv;
-    use fdapquery_datatypes::{Field, ScalarValue, Schema};
-    use fdapquery_expr::{JoinType, cast, col, format, lit_string, max, min, sum};
+    use fdapquery_datatypes::{Field, Schema};
+    use fdapquery_expr::{JoinType, cast, col, format, lit, max, min, sum};
     use fdapquery_fuzzer::Fuzzer;
     use futures::TryStreamExt;
     use std::collections::HashSet;
@@ -165,16 +230,23 @@ mod tests {
     /// Drain a context-produced async stream to a `Vec<RecordBatch>`.
     /// Encapsulates the standard test-time await pattern so individual
     /// test bodies stay focused on the assertion they care about.
-    async fn collect_batches(stream: Result<SendableRecordBatchStream>) -> Vec<RecordBatch> {
-        stream.unwrap().try_collect::<Vec<_>>().await.unwrap()
+    ///
+    /// The argument is an `impl Future` because `execute_data_frame` is
+    /// `async fn`; we await it inside the helper to keep the call-site
+    /// one line.
+    async fn collect_batches(
+        fut: impl std::future::Future<Output = Result<SendableRecordBatchStream>>,
+    ) -> Vec<RecordBatch> {
+        fut.await.unwrap().try_collect::<Vec<_>>().await.unwrap()
     }
 
     /// Helper: wrap a single in-memory `RecordBatch` as a `DataFrame` over a
     /// scan of an `InMemoryDataSource`. Used by every Fuzzer-backed case.
     fn in_memory_df(name: &str, schema: Schema, batch: RecordBatch) -> DataFrame {
         let source = InMemoryDataSource::new(schema, vec![batch]);
+        // Wrap as `TableSource` for the logical plan.
         DataFrame::new(LogicalPlan::TableScan(
-            TableScan::new(name, Arc::new(source), vec![]).unwrap(),
+            TableScan::new(name, provider_as_source(Arc::new(source)), vec![]).unwrap(),
         ))
     }
 
@@ -198,6 +270,11 @@ mod tests {
         );
     }
 
+    // Plan Display now mirrors DataFusion's
+    // `ScalarValue` Display: string literals print bare (no surrounding
+    // quotes). SQL source text retains its quoted literals — only the
+    // plan's Display output changes.
+
     #[test]
     fn select_with_where() {
         let ctx = ctx_with_employee();
@@ -207,7 +284,7 @@ mod tests {
         assert_eq!(
             format(df.logical_plan()),
             "Projection: #id\n\
-             \tFilter: #state = 'CO'\n\
+             \tFilter: #state = CO\n\
              \t\tProjection: #id, #state\n\
              \t\t\tTableScan: ../testdata/employee.csv; projection=None\n"
         );
@@ -238,7 +315,7 @@ mod tests {
         assert_eq!(
             format(df.logical_plan()),
             "Projection: #annual_salary\n\
-             \tFilter: #annual_salary > 1000 AND #state = 'CO'\n\
+             \tFilter: #annual_salary > 1000 AND #state = CO\n\
              \t\tProjection: #salary as annual_salary, #state\n\
              \t\t\tTableScan: ../testdata/employee.csv; projection=None\n"
         );
@@ -251,7 +328,7 @@ mod tests {
         let ctx = SessionContext::new(HashMap::new());
         let df = ctx
             .csv(EMPLOYEE_CSV)
-            .filter(col("state").eq(lit_string("CO")))
+            .filter(col("state").eq(lit("CO")))
             .project(vec![col("id"), col("first_name"), col("last_name")]);
         let batches = collect_batches(ctx.execute_data_frame(&df)).await;
         assert_eq!(batches.len(), 1);
@@ -282,7 +359,7 @@ mod tests {
         let ctx = SessionContext::new(HashMap::new());
         let df = ctx.csv(EMPLOYEE_CSV).aggregate(
             vec![col("state")],
-            vec![max(cast(col("salary"), arrow_schema::DataType::Int32))],
+            vec![max(cast(col("salary"), arrow::datatypes::DataType::Int32))],
         );
         let batches = collect_batches(ctx.execute_data_frame(&df)).await;
         assert_eq!(batches.len(), 1);
@@ -339,7 +416,7 @@ mod tests {
         assert_eq!(to_csv(&batches[0]).unwrap(), "2,Gregg,Langford\n");
     }
 
-    // ---- ExecutionTest: Fuzzer-backed cases (unblocked by module 9) ----
+    // ---- ExecutionTest: Fuzzer-backed cases (unblocked by fdapquery-fuzzer) ----
 
     #[tokio::test]
     async fn min_max_sum_float() {
@@ -348,8 +425,8 @@ mod tests {
         // formatting follows Rust's `f32::to_string` — see the module-level
         // float-formatting note.
         let schema = Schema::new(vec![
-            Field::new("a", arrow_schema::DataType::Utf8, true),
-            Field::new("b", arrow_schema::DataType::Float32, true),
+            Field::new("a", arrow::datatypes::DataType::Utf8, true),
+            Field::new("b", arrow::datatypes::DataType::Float32, true),
         ]);
         let batch = Fuzzer::new().create_record_batch(
             &schema,
@@ -394,8 +471,8 @@ mod tests {
         // matches whatever Rust's f32 formatter produces — no guesswork about
         // float precision.
         let schema = Schema::new(vec![
-            Field::new("a", arrow_schema::DataType::Float32, true),
-            Field::new("b", arrow_schema::DataType::Float32, true),
+            Field::new("a", arrow::datatypes::DataType::Float32, true),
+            Field::new("b", arrow::datatypes::DataType::Float32, true),
         ]);
         let batch = Fuzzer::new().create_record_batch(
             &schema,
@@ -434,8 +511,8 @@ mod tests {
     #[tokio::test]
     async fn boolean_expressions() {
         let schema = Schema::new(vec![
-            Field::new("a", arrow_schema::DataType::Boolean, true),
-            Field::new("b", arrow_schema::DataType::Boolean, true),
+            Field::new("a", arrow::datatypes::DataType::Boolean, true),
+            Field::new("b", arrow::datatypes::DataType::Boolean, true),
         ]);
         let batch = Fuzzer::new().create_record_batch(
             &schema,
@@ -469,12 +546,12 @@ mod tests {
     #[tokio::test]
     async fn inner_join_using_dataframe() {
         let left_schema = Schema::new(vec![
-            Field::new("id", arrow_schema::DataType::Int32, true),
-            Field::new("name", arrow_schema::DataType::Utf8, true),
+            Field::new("id", arrow::datatypes::DataType::Int32, true),
+            Field::new("name", arrow::datatypes::DataType::Utf8, true),
         ]);
         let right_schema = Schema::new(vec![
-            Field::new("id", arrow_schema::DataType::Int32, true),
-            Field::new("dept", arrow_schema::DataType::Utf8, true),
+            Field::new("id", arrow::datatypes::DataType::Int32, true),
+            Field::new("dept", arrow::datatypes::DataType::Utf8, true),
         ]);
         let left_batch = Fuzzer::new().create_record_batch(
             &left_schema,
@@ -523,12 +600,12 @@ mod tests {
     #[tokio::test]
     async fn left_join_using_dataframe() {
         let left_schema = Schema::new(vec![
-            Field::new("id", arrow_schema::DataType::Int32, true),
-            Field::new("name", arrow_schema::DataType::Utf8, true),
+            Field::new("id", arrow::datatypes::DataType::Int32, true),
+            Field::new("name", arrow::datatypes::DataType::Utf8, true),
         ]);
         let right_schema = Schema::new(vec![
-            Field::new("id", arrow_schema::DataType::Int32, true),
-            Field::new("dept", arrow_schema::DataType::Utf8, true),
+            Field::new("id", arrow::datatypes::DataType::Int32, true),
+            Field::new("dept", arrow::datatypes::DataType::Utf8, true),
         ]);
         let left_batch = Fuzzer::new().create_record_batch(
             &left_schema,

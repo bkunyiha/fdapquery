@@ -30,6 +30,7 @@ use std::sync::Arc;
 */
 
 /// A distributed task.
+#[derive(Debug)]
 pub struct Task {
     pub job_uuid: String,
     pub stage_id: i32,

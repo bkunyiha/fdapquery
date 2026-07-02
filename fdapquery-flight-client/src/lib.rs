@@ -2,11 +2,10 @@
 //!
 //! Two roles in one crate:
 //!
-//! 1. **Interactive Flight client** — [`Client`](client::Client) and
-//!    [`Context`](context::Context) wrap an Arrow Flight connection so a user
-//!    can submit a `LogicalPlan` and receive `RecordBatch`es back.
-//! 2. **Distributed-scheduler transport** —
-//!    [`FlightExecutorClient`](flight_executor_client::FlightExecutorClient)
+//! 1. **Interactive Flight client** — [`Client`] and [`Context`] wrap an Arrow
+//!    Flight connection so a user can submit a `LogicalPlan` and receive
+//!    `RecordBatch`es back.
+//! 2. **Distributed-scheduler transport** — [`FlightExecutorClient`]
 //!    implements `fdapquery_distributed::ExecutorClient` over a set of per-executor
 //!    `Client` instances, so `Scheduler<FlightExecutorClient>::execute(...)`
 //!    drives a real distributed query against real Flight executors.

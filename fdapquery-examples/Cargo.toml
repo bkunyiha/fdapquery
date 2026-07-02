@@ -13,7 +13,8 @@ rust-version.workspace = true
 # binaries now import via `use fdapquery::{ExecutionContext, ParallelContext};`.
 fdapquery           = { version = "0.1.0", path = "../fdapquery" }
 fdapquery-catalog   = { version = "0.1.0", path = "../fdapquery-catalog" }    # InMemoryDataSource for parallel_query
-fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }  # RecordBatch, ScalarValue, arrow_types
+fdapquery-common    = { version = "0.1.0", path = "../fdapquery-common" }     # ScalarValue (lives here per #108)
+fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }  # RecordBatch, arrow_types
 fdapquery-expr      = { version = "0.1.0", path = "../fdapquery-expr" }       # col, cast, max, format, …
 fdapquery-optimizer = { version = "0.1.0", path = "../fdapquery-optimizer" }     # Optimizer used by nyc_taxi
 # `distributed_example` and `distributed_flight_example` use the distributed
@@ -27,9 +28,8 @@ fdapquery-flight-server = { version = "0.1.0", path = "../fdapquery-flight-serve
 # Used by `distributed_flight_example` to spawn the in-process tonic server
 # and bind a random TCP port — same pattern as
 # `client/tests/distributed_integration_test.rs`.
-# Session 15d-1 #95 — `nyc_taxi` constructs cast types via
-# `arrow_schema::DataType::Float32` directly (replacing the deleted
-# `arrow_types::FLOAT_TYPE` re-export).
+# `nyc_taxi` constructs cast types via
+# `arrow_schema::DataType::Float32` directly.
 arrow-schema    = { workspace = true }
 arrow-flight    = { workspace = true }
 tonic           = { workspace = true }
@@ -46,9 +46,14 @@ futures         = { workspace = true }
 # Data parallelism: `parallel_query` fans out 12 monthly CSV queries via
 # `(1..=12).into_par_iter()`.
 rayon           = { workspace = true }
+# `log` for progress breadcrumbs — mirrors DataFusion `datafusion-examples`
+# pattern (e.g. `data_io/catalog.rs`'s `log::info!("adding table X")`
+# breadcrumbs). Primary example output stays on `println!` for the
+# pedagogical value; background events (server bind, shuffle-dir setup)
+# route through `log::info!` so `RUST_LOG=info` controls verbosity.
+# `env_logger` wires the facade to stderr from the binary entry points.
 log             = { workspace = true }
 env_logger      = { workspace = true }
-anyhow          = { workspace = true }
 
 [[bin]]
 name = "nyc_taxi"
@@ -69,3 +74,6 @@ path = "src/bin/distributed_example.rs"
 [[bin]]
 name = "distributed_flight_example"
 path = "src/bin/distributed_flight_example.rs"
+
+[lints]
+workspace = true

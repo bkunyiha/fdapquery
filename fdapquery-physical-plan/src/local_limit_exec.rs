@@ -6,7 +6,7 @@
 //! Same shape as DataFusion's `LocalLimitExec`.
 //!
 //! ## Status
-//! Scaffolded in Session 15d-1 #105 — no optimizer rule currently
+//! Scaffolded — no optimizer rule currently
 //! emits `LocalLimitExec` because fdapquery is single-partition, so
 //! the global limit at the root is sufficient. This type comes into
 //! play once `RepartitionExec` lands and an `EnforceDistribution`-class
@@ -26,22 +26,26 @@ use crate::physical_plan::ExecutionPlan;
 use crate::plan_properties::PlanProperties;
 use crate::stream::{RecordBatchStreamAdapter, SendableRecordBatchStream};
 use async_stream::try_stream;
-use fdapquery_datatypes::{
-    ArrowVectorBuilder, ColumnVector, FdapQueryError, RecordBatch, Result, Schema, record_batch,
-};
+use fdapquery_common::{FdapQueryError, Result};
+use fdapquery_datatypes::Schema;
 use fdapquery_execution::TaskContext;
 use futures::StreamExt;
 use std::sync::Arc;
 
 /// Per-partition early-termination limit. Emits at most `fetch` rows
-/// from one input partition.
+/// from one input partition. Strict mirror of
+/// `datafusion::physical_plan::limit::LocalLimitExec`.
+#[derive(Debug)]
 pub struct LocalLimitExec {
-    pub input: Arc<dyn ExecutionPlan>,
-    pub fetch: usize,
+    /// Input execution plan
+    input: Arc<dyn ExecutionPlan>,
+    /// Maximum number of rows to return
+    fetch: usize,
     properties: PlanProperties,
 }
 
 impl LocalLimitExec {
+    /// Create a new `LocalLimitExec` partition.
     pub fn new(input: Arc<dyn ExecutionPlan>, fetch: usize) -> Self {
         let properties = PlanProperties::single_partition_unknown();
         Self {
@@ -50,10 +54,20 @@ impl LocalLimitExec {
             properties,
         }
     }
+
+    /// Input execution plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    /// Maximum number of rows to fetch
+    pub fn fetch(&self) -> usize {
+        self.fetch
+    }
 }
 
 impl ExecutionPlan for LocalLimitExec {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "LocalLimitExec"
     }
 
@@ -79,8 +93,7 @@ impl ExecutionPlan for LocalLimitExec {
                 "LocalLimitExec has 1 output partition; partition {partition} is out of range"
             )));
         }
-        let schema = self.input.schema();
-        let arrow_schema = Arc::new(schema.clone());
+        let arrow_schema = Arc::new(self.input.schema());
         let fetch = self.fetch;
         let input_stream = self.input.execute(0, Arc::clone(&ctx))?;
         let stream = try_stream! {
@@ -96,7 +109,7 @@ impl ExecutionPlan for LocalLimitExec {
                         } else {
                             let take = remaining;
                             remaining = 0;
-                            yield truncate(&batch, take, &schema)?;
+                            yield batch.slice(0, take);
                         }
                     }
                     Some(Err(e)) => Err(e)?,
@@ -132,59 +145,45 @@ impl ExecutionPlan for LocalLimitExec {
     }
 }
 
-impl std::fmt::Display for LocalLimitExec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LocalLimitExec: fetch={}", self.fetch)
+impl crate::display::DisplayAs for LocalLimitExec {
+    fn fmt_as(
+        &self,
+        t: crate::display::DisplayFormatType,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        match t {
+            crate::display::DisplayFormatType::Default
+            | crate::display::DisplayFormatType::Verbose => {
+                write!(f, "LocalLimitExec: fetch={}", self.fetch)
+            }
+            crate::display::DisplayFormatType::TreeRender => {
+                write!(f, "limit={}", self.fetch)
+            }
+        }
     }
 }
 
-/// Build a new batch containing only the first `n` rows of `batch`,
-/// copying cell-by-cell. Duplicated from `global_limit_exec.rs`;
-/// when Session 15d-2 #106/#107 drop the `Schema`/`ColumnVector`
-/// wrappers, this collapses to `batch.slice(0, n)` and the duplicate
-/// can be hoisted to a shared helper.
-fn truncate(batch: &RecordBatch, n: usize, schema: &Schema) -> Result<RecordBatch> {
-    let columns: Vec<Box<dyn ColumnVector>> = (0..batch.num_columns())
-        .map(|i| -> Result<Box<dyn ColumnVector>> {
-            let source = record_batch::field(batch, i);
-            let mut builder = ArrowVectorBuilder::new(&source.get_type(), n);
-            for row in 0..n {
-                let value = source.get_value(row)?;
-                builder.append_value(&value);
-            }
-            builder.set_value_count(n);
-            Ok(Box::new(builder.build()) as Box<dyn ColumnVector>)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    record_batch::create(schema, columns)
+impl std::fmt::Display for LocalLimitExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <Self as crate::display::DisplayAs>::fmt_as(
+            self,
+            crate::display::DisplayFormatType::Default,
+            f,
+        )
+    }
 }
+
+// The old cell-by-cell `truncate` helper was replaced
+// by `RecordBatch::slice(0, n)` (arrow-rs's native zero-copy slice). The
+// `Schema` argument is no longer needed at the call site.
 
 #[cfg(test)]
 mod tests {
     //! Exercises `LocalLimitExec` directly (no planner emits it yet).
     //! Same shape as `global_limit_exec.rs`'s `limit_truncates_to_budget`.
     use super::*;
-    use crate::scan_exec::ScanExec;
-    use fdapquery_catalog::CsvDataSource;
-    use fdapquery_catalog::TableProvider;
+    use crate::test_util::employee_source;
     use futures::TryStreamExt;
-
-    fn employee_ds() -> Arc<dyn TableProvider> {
-        Arc::new(CsvDataSource::new(
-            "../testdata/employee.csv",
-            None,
-            true,
-            1024,
-        ))
-    }
-
-    fn all_columns(ds: &Arc<dyn TableProvider>) -> Vec<String> {
-        ds.schema()
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect()
-    }
 
     fn test_ctx() -> Arc<TaskContext> {
         Arc::new(TaskContext::default_test())
@@ -192,9 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn local_limit_truncates_to_fetch() {
-        let ds = employee_ds();
-        let scan = ScanExec::new(Arc::clone(&ds), all_columns(&ds)).unwrap();
-        let limited: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(Arc::new(scan), 2));
+        let limited: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(employee_source(), 2));
         let batches = limited
             .execute(0, test_ctx())
             .unwrap()
@@ -203,5 +200,38 @@ mod tests {
             .unwrap();
         let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(rows, 2);
+    }
+
+    /// Byte-for-byte mirror of DataFusion's `DisplayFormatType::Default`
+    /// output: `"LocalLimitExec: fetch={fetch}"`. Source:
+    /// `datafusion::physical_plan::limit::LocalLimitExec::fmt_as`.
+    #[test]
+    fn display_default_matches_datafusion() {
+        let plan = LocalLimitExec::new(employee_source(), 7);
+        assert_eq!(format!("{plan}"), "LocalLimitExec: fetch=7");
+
+        let plan = LocalLimitExec::new(employee_source(), 0);
+        assert_eq!(format!("{plan}"), "LocalLimitExec: fetch=0");
+    }
+
+    /// Drive the full `displayable(plan).indent(false)` pipeline — the
+    /// path EXPLAIN uses.
+    #[test]
+    fn displayable_indent_default_first_line() {
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(employee_source(), 3));
+        let rendered = format!(
+            "{}",
+            crate::display::displayable(plan.as_ref()).indent(false)
+        );
+        let first_line = rendered.lines().next().unwrap();
+        assert_eq!(first_line, "LocalLimitExec: fetch=3");
+    }
+
+    #[test]
+    fn input_and_fetch_accessors() {
+        let plan = LocalLimitExec::new(employee_source(), 5);
+        // Accessor names match DataFusion's: `input()` and `fetch()`.
+        assert_eq!(plan.input().name(), "TestSourceExec");
+        assert_eq!(plan.fetch(), 5);
     }
 }

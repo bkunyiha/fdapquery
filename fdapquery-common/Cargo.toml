@@ -9,9 +9,21 @@ rust-version.workspace = true
 repository.workspace   = true
 
 [dependencies]
+arrow-array   = { workspace = true }
+# arrow-data exposes `ArrayData`, walked by
+# `utils::memory::get_record_batch_memory_size` to compute the physical
+# memory footprint of a `RecordBatch`.
+arrow-data    = { workspace = true }
 arrow-schema  = { workspace = true }
 parquet       = { workspace = true }
 thiserror     = { workspace = true }
+# chrono::NaiveDate is used by ScalarValue::Display for the Date32 variant
+# (formats as YYYY-MM-DD, byte-for-byte matching DataFusion's
+# `ScalarValue::fmt_as_sql` output for Date32).
+chrono        = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

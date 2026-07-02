@@ -9,13 +9,11 @@
 //! - Each operator keeps its own file (`scan.rs`, `projection.rs`, …) holding
 //!   a struct plus its `schema` / `children` / `Display` logic;
 //!   `logical_plan.rs` holds the `LogicalPlan` enum that dispatches to them.
-//! - Aggregate functions are a separate `AggregateExpr` enum (`Sum` / `Min` /
-//!   `Max` / `Avg` / `Count` / `CountDistinct`, in `expressions.rs`), so the
-//!   `Aggregate` plan keeps a typed `Vec<AggregateExpr>`. A single bridge
-//!   variant `Expr::AggregateExpr(Box<AggregateExpr>)` (with
-//!   `From<AggregateExpr> for Expr`) injects an aggregate into the
-//!   expression enum so it can nest inside any expression — e.g. a `HAVING`
-//!   predicate. Mirrors DataFusion's `Expr::AggregateFunction`.
+//! - Aggregate functions are a single `Expr::AggregateFunction(AggregateFunction)`
+//!   variant — byte-for-byte the shape DataFusion uses. The `Aggregate`
+//!   plan's `aggregate_expr` slot is `Vec<Expr>` where every element is
+//!   `Expr::AggregateFunction(...)` by construction — also matching
+//!   DataFusion's `LogicalPlan::Aggregate.aggr_expr`.
 //! - `DataFrame` is a fluent, `self`-consuming builder wrapping a
 //!   `LogicalPlan`.
 
@@ -23,29 +21,38 @@
 // Per-file modules.
 // ==============================================================
 pub mod aggregate;
+pub mod aggregate_function;
 pub mod data_frame;
+pub mod expr_fn;
 pub mod expressions;
 pub mod filter;
 pub mod join;
 pub mod limit;
+pub mod literal;
 pub mod logical_expr;
 pub mod logical_plan;
+pub mod operator;
 pub mod projection;
 pub mod scan;
+pub mod sort;
+pub mod table_source;
 
 // ==============================================================
 // Re-exports for convenient downstream `use logical_plan::*;` ergonomics.
 // ==============================================================
 pub use aggregate::Aggregate;
+pub use aggregate_function::{AggregateFunction, AggregateFunctionKind, AggregateFunctionParams};
 pub use data_frame::DataFrame;
-pub use expressions::{
-    AggregateExpr, avg, cast, col, count, count_distinct, lit_date, lit_double, lit_float,
-    lit_long, lit_string, max, min, sum,
-};
+pub use expr_fn::lit;
+pub use expressions::{avg, cast, col, count, count_distinct, max, min, sum};
 pub use filter::Filter;
-pub use join::{Join, JoinType};
+pub use join::{Join, JoinSide, JoinType, NullEquality};
 pub use limit::Limit;
+pub use literal::Literal;
 pub use logical_expr::Expr;
 pub use logical_plan::{LogicalPlan, format};
+pub use operator::Operator;
 pub use projection::Projection;
 pub use scan::TableScan;
+pub use sort::{NullTreatment, Sort};
+pub use table_source::TableSource;

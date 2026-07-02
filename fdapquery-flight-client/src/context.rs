@@ -1,17 +1,24 @@
 //!
-//! Interactive Flight client: same API shape as
-//! [`fdapquery::SessionContext`] and [`fdapquery_distributed::DistributedContext`]
-//! (`register_csv` / `register` / `sql` / `execute`), but the execution
-//! goes over the wire via an `arrow_flight::FlightServiceClient` instead of
-//! running locally or through the distributed scheduler.
+//! Interactive Flight client: same `register_csv` / `register` / `sql` /
+//! `execute` shape as `fdapquery::SessionContext`, but the execution
+//! goes over the wire via an `arrow_flight::FlightServiceClient` instead
+//! of running locally.
 //!
 //! ## Where this fits in the workspace
 //!
 //! ```text
-//!   SessionContext       — single-process, runs the plan locally
-//!   DistributedContext<C>  — distributed, routes via Scheduler<C>
-//!   Context (this file)    — interactive Flight, routes via a single Client
+//!   SessionContext                      — single-process, runs the plan locally
+//!   SessionContext (via
+//!     SessionContextExt::standalone)    — distributed, routes via Scheduler<C>
+//!   Context (this file)                 — interactive Flight, routes via a single Client
 //! ```
+//!
+//! The distributed variant is `SessionContext` extended with the
+//! [`SessionContextExt`](fdapquery_distributed::SessionContextExt) trait
+//! (mirror of Ballista's `SessionContextExt` at
+//! `ballista/client/src/extension.rs`). It installs a
+//! `DistributedQueryPlanner` on the session's `SessionState`, so every
+//! query routes through the in-process scheduler transparently.
 //!
 //! All three expose the same surface: register tables, submit SQL, get
 //! `RecordBatch`es back. A reader switching between them should find the
@@ -20,17 +27,21 @@
 use crate::client::Client;
 use crate::endpoint::Endpoint;
 use anyhow::Result;
-use fdapquery_catalog::CsvDataSource;
+use fdapquery_catalog::{CsvDataSource, provider_as_source};
 use fdapquery_datatypes::RecordBatch;
 use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
-use fdapquery_proto::{pb, serialize_logical_plan};
-use fdapquery_sql::{PrattParser, SqlExpr, SqlParser, SqlPlanner, SqlTokenizer};
+use fdapquery_proto::{protobuf, serialize_logical_plan};
+use fdapquery_sql::SqlToRel;
+use fdapquery_sql::sqlparser::dialect::GenericDialect;
+use fdapquery_sql::sqlparser::parser::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// CSV batch size for tables registered through `register_csv`. Matches the
-/// workspace's other contexts (`fdapquery_distributed::DistributedContext`,
-/// `fdapquery::SessionContext`).
+/// CSV batch size for tables registered through `register_csv`. Matches
+/// [`fdapquery::SessionContext`]'s `register_csv` default so a query run
+/// against the interactive client and a query run against a session
+/// produced by [`fdapquery_distributed::SessionContextExt::standalone`]
+/// see the same batch shape.
 const CSV_BATCH_SIZE: usize = 1024;
 
 /// Interactive client-side context for executing queries via a single
@@ -57,14 +68,17 @@ impl Context {
 
     /// Register a CSV file as a table.
     ///
-    /// Mirrors `DistributedContext::register_csv` line-for-line — same
-    /// `CsvDataSource::new(...)` construction, same `TableScan` node, same
-    /// `register(...)` delegation. The two contexts diverge only at
-    /// `sql`/`execute`: one routes through a `Scheduler`, the other
-    /// through a `Client`.
+    /// Same `CsvDataSource::new(...)` construction, same `TableScan` node,
+    /// same `register(...)` delegation as [`fdapquery::SessionContext::register_csv`].
+    /// This context diverges from `SessionContext` only at `sql` / `execute`:
+    /// where `SessionContext` runs the plan through a `QueryPlanner`, this
+    /// one ships the plan over the wire to a Flight server via
+    /// [`Client::do_get`].
     pub fn register_csv(&mut self, table_name: &str, path: &str, has_header: bool) {
         let ds = CsvDataSource::new(path, None, has_header, CSV_BATCH_SIZE);
-        let scan = TableScan::new(path, Arc::new(ds), vec![])
+        // Wrap the provider as a `TableSource` for
+        // the logical plan; the planner unwraps it at the seam.
+        let scan = TableScan::new(path, provider_as_source(Arc::new(ds)), vec![])
             .expect("Context::register_csv: scan construction");
         let df = DataFrame::new(LogicalPlan::TableScan(scan));
         self.register(table_name, df);
@@ -78,22 +92,20 @@ impl Context {
     /// Parse + execute a SQL query via the Flight server. Async — call
     /// from within a tokio runtime and `.await`.
     ///
-    /// Identical parse pipeline to `DistributedContext::sql`: Pratt-parse
-    /// the SQL, lower to `DataFrame` via `SqlPlanner`, take its logical
-    /// plan. The execution step then delegates to [`Self::execute`].
+    /// Parses with `sqlparser` (same crate DataFusion uses), lowers via
+    /// [`SqlToRel`], and delegates execution to [`Self::execute`].
     pub async fn sql(&self, sql: &str) -> Result<Vec<RecordBatch>> {
-        let tokens = SqlTokenizer::new(sql)
-            .tokenize()
-            .map_err(|e| anyhow::anyhow!("tokenize: {e}"))?;
-        let parsed = SqlParser::new(tokens)
-            .parse(0)
+        let dialect = GenericDialect {};
+        let mut statements = Parser::parse_sql(&dialect, sql)
             .map_err(|e| anyhow::anyhow!("parse: {e}"))?;
-        let select = match parsed {
-            Some(SqlExpr::Select(select)) => *select,
-            other => anyhow::bail!("Expected a SELECT statement, found {other:?}"),
-        };
-        let df = SqlPlanner::new()
-            .create_data_frame(&select, &self.tables)
+        if statements.len() > 1 {
+            anyhow::bail!("multiple SQL statements per call are not supported at v0.1");
+        }
+        let statement = statements
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("empty SQL input"))?;
+        let df = SqlToRel::new(&self.tables)
+            .sql_statement_to_plan(&statement)
             .map_err(|e| anyhow::anyhow!("plan: {e}"))?;
         self.execute(df.logical_plan()).await
     }
@@ -102,9 +114,9 @@ impl Context {
     /// within a tokio runtime and `.await`.
     ///
     /// The wire shape:
-    /// 1. Serialise the [`LogicalPlan`] to a [`pb::LogicalPlanNode`] via
+    /// 1. Serialise the [`LogicalPlan`] to a [`protobuf::LogicalPlanNode`] via
     ///    [`fdapquery_proto::serialize_logical_plan`].
-    /// 2. Wrap it in a [`pb::Action`] (the protobuf message the
+    /// 2. Wrap it in a [`protobuf::Action`] (the protobuf message the
     ///    `flight-server`'s `do_get` handler expects in its `Ticket` body).
     /// 3. Encode via `prost::Message::encode_to_vec`.
     /// 4. Hand the bytes to [`Client::do_get`], which makes the gRPC
@@ -112,8 +124,8 @@ impl Context {
     ///    `RecordBatch`es via `FlightRecordBatchStream`, and returns the
     ///    collected vector.
     pub async fn execute(&self, plan: &LogicalPlan) -> Result<Vec<RecordBatch>> {
-        let plan_node: pb::LogicalPlanNode = serialize_logical_plan(plan);
-        let action = pb::Action {
+        let plan_node: protobuf::LogicalPlanNode = serialize_logical_plan(plan);
+        let action = protobuf::Action {
             query: Some(plan_node),
             task: None,
             settings: vec![],

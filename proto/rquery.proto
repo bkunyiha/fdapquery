@@ -1,7 +1,7 @@
 // Wire-format definitions for rquery's distributed-execution surface
 // (`flight-server`, `client`, `distributed`).
 //
-// Package: `rquery.protobuf`. Generation is driven from the `protobuf`
+// Package: `fdapquery.protobuf`. Generation is driven from the `protobuf`
 // crate's `build.rs` via `prost-build`.
 //
 // Note on date literals. `LogicalExprNode.ExprType.literal_date` (field 31)
@@ -12,7 +12,7 @@
 
 syntax = "proto3";
 
-package rquery.protobuf;
+package fdapquery.protobuf;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Logical Plan
@@ -103,7 +103,7 @@ message LogicalPlanNode {
   CsvTableScanNode csv_scan = 10;
   ParquetTableScanNode parquet_scan = 11;
   ProjectionNode projection = 20;
-  SelectionNode selection = 21;
+  FilterNode selection = 21;
   LimitNode limit = 22;
   AggregateNode aggregate = 23;
   JoinNode join = 24;
@@ -141,7 +141,7 @@ message ProjectionNode {
   repeated LogicalExprNode expr = 1;
 }
 
-message SelectionNode {
+message FilterNode {
   LogicalExprNode expr = 2;
 }
 
@@ -289,16 +289,16 @@ enum ArrowType {
 
 message PhysicalPlanNode {
   oneof plan_type {
-    ScanExecNode scan = 1;
+    DataSourceExecNode scan = 1;
     ProjectionExecNode projection = 2;
-    SelectionExecNode selection = 3;
+    FilterExecNode selection = 3;
     HashAggregateExecNode hash_aggregate = 4;
     ShuffleWriterExecNode shuffle_writer = 10;
     ShuffleReaderExecNode shuffle_reader = 11;
   }
 }
 
-message ScanExecNode {
+message DataSourceExecNode {
   string path = 1;
   Schema schema = 2;
   repeated string projection = 3;
@@ -311,7 +311,7 @@ message ProjectionExecNode {
   repeated PhysicalExprNode expr = 3;
 }
 
-message SelectionExecNode {
+message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
 }
@@ -353,9 +353,15 @@ message ShuffleLocation {
 }
 
 // Physical expressions
+//
+// Session 15 #137 — `column` now carries a `PhysicalColumn { name, index }`
+// sub-message, matching DataFusion's `datafusion.proto: PhysicalColumn` shape
+// byte-for-byte. The previous shape (`int32 column = 1`) discarded the
+// source-schema column name on serialize and surfaced as `@<index>` (empty
+// name) after a round trip.
 message PhysicalExprNode {
   oneof expr_type {
-    int32 column = 1;                          // Column index reference
+    PhysicalColumn column = 1;                 // Column reference by name + index
     string literal_string = 10;
     int64 literal_long = 11;
     double literal_double = 12;
@@ -363,6 +369,18 @@ message PhysicalExprNode {
     PhysicalBinaryExprNode binary_expr = 20;
     PhysicalCastExprNode cast_expr = 30;
   }
+}
+
+// Mirror of DataFusion's `datafusion.proto: PhysicalColumn`:
+//   message PhysicalColumn {
+//     string name = 1;
+//     uint32 index = 2;
+//   }
+// `name` is the source-schema column name (used for `name@index` Display);
+// `index` is the authoritative selector used at evaluation time.
+message PhysicalColumn {
+  string name = 1;
+  uint32 index = 2;
 }
 
 message PhysicalBinaryExprNode {
