@@ -31,6 +31,7 @@ use fdapquery_datatypes::{FdapQueryError, Result};
 use fdapquery_expr::{DataFrame, LogicalPlan, TableScan};
 use fdapquery_physical_plan::{SendableRecordBatchStream, SessionConfig};
 use fdapquery_sql::SqlToRel;
+use fdapquery_sql::sqlparser::ast::Statement;
 use fdapquery_sql::sqlparser::dialect::GenericDialect;
 use fdapquery_sql::sqlparser::parser::Parser;
 
@@ -121,7 +122,7 @@ impl SessionContext {
     /// cleanly without the Session-7 `.expect("…")` scaffolding.
     pub fn sql(&self, sql: &str) -> Result<DataFrame> {
         let dialect = GenericDialect {};
-        let mut statements = Parser::parse_sql(&dialect, sql)
+        let mut statements: Vec<Statement> = Parser::parse_sql(&dialect, sql)
             .map_err(|e| FdapQueryError::SqlParse(format!("{e}")))?;
         if statements.len() > 1 {
             return Err(FdapQueryError::Plan(

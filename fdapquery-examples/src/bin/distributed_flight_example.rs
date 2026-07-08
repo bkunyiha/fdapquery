@@ -1,12 +1,27 @@
-//! Distributed query demo using a real `FlightExecutorClient` against an
-//! in-process `flight-server` — the rquery answer to "what does a real
-//! distributed query look like?"
+//! Distributed query demo using `SessionContext::standalone()` —
+//! a `FlightExecutorClient` against an in-process `flight-server`
+//! spawned automatically by the standalone constructor.
 //!
 //! ## What this shows
 //!
-//! Spawns a `flight-server` in a background thread bound to a random TCP port,
-//! then constructs a `FlightExecutorClient` that talks to it over real Arrow
-//! Flight gRPC. The `DistributedContext` drives the query through:
+//! `SessionContext::standalone().await` is fdapquery's mirror of
+//! Ballista's zero-arg standalone constructor. It:
+//!
+//! 1. Spawns a `flight-server` on a random TCP port in a background
+//!    thread with its own tokio runtime.
+//! 2. Builds a `DistributedConfig` pointing at the bound address.
+//! 3. Connects a `FlightExecutorClient` to it.
+//! 4. Installs a `DistributedQueryPlanner` on the `SessionState` so
+//!    every query routes through the in-process scheduler +
+//!    real Flight gRPC.
+//!
+//! The caller sees a plain `SessionContext` — same type used for
+//! single-node execution. Distribution is invisible below the
+//! surface. That's the whole point of the extension-trait pattern
+//! (see `PHASE_2_PLAN.md` → "The DataFusion / Ballista layering").
+//!
+//! Once `ctx.sql(...)` and `ctx.execute_data_frame(&df).await`
+//! run, the pipeline goes:
 //!
 //! 1. `Scheduler::execute_stage` ships each stage-0 task via
 //!    `FlightExecutorClient::execute_task` → `Client::do_action("execute_task")`
@@ -28,46 +43,19 @@
 //! `ctx.shuffle_manager` and never exercises the cross-executor
 //! `fetch_shuffle` path (which is currently unimplemented).
 //!
-//! Forcing 3 partitions via `DistributedConfig::with_default_partitions(3)`
-//! means the shuffle is still real — stage 0 hash-partitions employee rows
-//! into 3 partition files, stage 1's final aggregate reads all three.
-//!
-//! ## Threading model
-//!
-//! `Client::connect`, `FlightExecutorClient::connect`, and the
-//! scheduler's `execute` are all `async fn`, so the
-//! whole pipeline runs on a single tokio runtime. `main()` is
-//! `#[tokio::main]`. The server runs in a `std::thread::spawn`ed
-//! background thread that owns its own tokio runtime (so the client
-//! and server runtimes don't share workers in this single-process
-//! demo); an `mpsc` channel ships the bound address back to the main
-//! thread.
-//!
 //! ## How to run
 //!
 //! ```text
 //! cd examples && cargo run --bin distributed_flight_example
 //! ```
-//!
-//! The sibling binary `distributed_example` runs the same query through a
-//! `LocalExecutorClient` (no flight-server) — useful for understanding the
-//! scheduler shape without the gRPC layer.
 
-use std::sync::Arc;
-use std::sync::mpsc;
 use std::time::Instant;
 
-use arrow_flight::flight_service_server::FlightServiceServer;
-use fdapquery_common::ScalarValue;
+use fdapquery::SessionContext;
 use fdapquery_datatypes::RecordBatch;
-use fdapquery_distributed::{DistributedConfig, DistributedContext, ExecutorConfig};
-use fdapquery_flight_client::FlightExecutorClient;
-use fdapquery_flight_server::fdap_query_flight_producer::FdapQueryFlightProducer;
-use fdapquery_physical_plan::{RuntimeEnv, SessionConfig, ShuffleManager, TaskContext};
+use fdapquery_datatypes::record_batch::to_csv;
+use fdapquery_flight_client::SessionContextExt;
 use futures::TryStreamExt;
-use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::Server;
 
 const EMPLOYEE_CSV: &str = "../testdata/employee.csv";
 const SQL: &str = "SELECT state, SUM(salary) FROM employee GROUP BY state";
@@ -79,53 +67,28 @@ async fn main() {
     println!("=== Distributed Query Execution Example (Flight) ===\n");
     println!("Query: {SQL}\n");
 
-    // Spawn an in-process flight-server on a random TCP port. The bound
-    // address is sent back through the mpsc channel. The server-bind
-    // and shuffle-dir details are background context; log at INFO so
-    // `RUST_LOG=info` surfaces them — matches DataFusion catalog.rs's
-    // "adding table X" breadcrumb pattern.
-    let (addr, shuffle_dir) = spawn_in_process_server("exec-1");
-    log::info!("flight-server bound at {addr}");
-    log::info!("shuffle directory: {shuffle_dir}");
-
-    // Build the cluster config pointed at the in-process server. One
-    // executor; force 3 partitions so the shuffle is real (otherwise
-    // default_partitions = executor count = 1, no redistribution).
-    let executors = vec![ExecutorConfig::new(
-        "exec-1",
-        "127.0.0.1",
-        i32::from(addr.port()),
-    )];
-    let config = DistributedConfig::new(executors.clone()).with_default_partitions(3);
-
-    println!(
-        "Configured cluster with {} executor:",
-        config.executors.len()
-    );
-    for e in &config.executors {
-        println!("  - {} at {}:{}", e.id, e.host, e.port);
-    }
-    println!();
-
-    // Build the real Flight client (it connects on construction; fails
-    // if the in-process server isn't ready yet — but the mpsc handshake
-    // above guarantees the server has bound its socket before we get
-    // here).
-    let flight_client = FlightExecutorClient::connect(&executors)
+    // `SessionContext::standalone()` spawns the in-process
+    // Flight-server executor and connects a `FlightExecutorClient`
+    // to it. Zero args — mirror of Ballista's `standalone()`.
+    let mut ctx = SessionContext::standalone()
         .await
-        .expect("FlightExecutorClient::connect should reach the in-process server");
+        .expect("distributed_flight_example: SessionContext::standalone");
+    ctx.register_csv("employee", EMPLOYEE_CSV);
 
-    // Build the context and register the test data.
-    let mut ctx = DistributedContext::new(config, flight_client);
-    ctx.register_csv("employee", EMPLOYEE_CSV, true);
-
-    // Execute the query. Every Flight call is awaited on the same
-    // tokio runtime; the result stream is decoded as it arrives.
+    // Execute the query. `SessionContext::sql` is sync; the async
+    // `execute_data_frame` drives the plan through the query
+    // planner and returns a stream. Every Flight call is awaited
+    // on the same tokio runtime; the result stream is decoded as
+    // it arrives.
     println!(
         "Executing query (stage 0 → 3 shuffle-writer tasks via do_action, stage 1 → 1 final task via do_get):"
     );
     let start = Instant::now();
-    let stream = ctx.sql(SQL).await.expect("distributed_flight_example: sql");
+    let df = ctx.sql(SQL).expect("distributed_flight_example: sql");
+    let stream = ctx
+        .execute_data_frame(&df)
+        .await
+        .expect("distributed_flight_example: execute_data_frame");
     let results: Vec<RecordBatch> = stream
         .try_collect()
         .await
@@ -136,98 +99,22 @@ async fn main() {
     println!("Results:");
     print_results(&results);
 
-    // Clean up shuffle files left by stage 0. (The server's tokio runtime
-    // keeps running in the background — main() exits and the OS reaps it.)
-    ShuffleManager::new(shuffle_dir).cleanup_all();
-
     println!("\n=== Example Complete ===");
 }
 
-/// Spawn an in-process flight-server in a background thread with its own
-/// tokio runtime. Returns the bound `SocketAddr` (so the client can connect)
-/// and the shuffle directory path (so `main` can clean up at the end).
-///
-/// Same pattern as
-/// `client/tests/distributed_integration_test.rs::spawn_in_process_server`.
-fn spawn_in_process_server(executor_id: &str) -> (std::net::SocketAddr, String) {
-    let shuffle_dir = unique_shuffle_dir();
-    let shuffle_dir_for_thread = shuffle_dir.clone();
-    let executor_id_owned = executor_id.to_string();
-    let (tx, rx) = mpsc::channel();
-
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("build server runtime");
-        runtime.block_on(async move {
-            let listener = TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind random port");
-            let addr = listener.local_addr().expect("local_addr");
-
-            // The executor identity in the context must match the id/port
-            // the scheduler dispatches against — otherwise shuffle reads
-            // see locations with `executor_id != ctx.executor_id` and try
-            // the cross-executor fetch path (currently unimplemented).
-            let runtime = Arc::new(RuntimeEnv::new(Arc::new(ShuffleManager::new(
-                shuffle_dir_for_thread,
-            ))));
-            let ctx = Arc::new(TaskContext::new(
-                executor_id_owned,
-                "127.0.0.1",
-                addr.port(),
-                SessionConfig::new(),
-                runtime,
-            ));
-            let producer = FdapQueryFlightProducer::new(ctx);
-
-            tx.send(addr).expect("ship addr back to main thread");
-
-            Server::builder()
-                .add_service(FlightServiceServer::new(producer))
-                .serve_with_incoming(TcpListenerStream::new(listener))
-                .await
-                .expect("server serve");
-        });
-    });
-
-    let addr = rx.recv().expect("server thread sent addr");
-    (addr, shuffle_dir)
-}
-
-fn unique_shuffle_dir() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("/tmp/fdapquery-distributed-flight-example-{nanos}")
-}
-
-/// Print every `(state, sum)` row in the result batches.
 fn print_results(batches: &[RecordBatch]) {
-    for batch in batches {
-        let state_col = batch.column(0).clone();
-        let sum_col = batch.column(1).clone();
-        for row in 0..batch.num_rows() {
-            let state = ScalarValue::try_from_array(&state_col, row)
-                .expect("distributed_flight_example: read state column");
-            let value = ScalarValue::try_from_array(&sum_col, row)
-                .expect("distributed_flight_example: read sum column");
-            let key = scalar_to_string(&state);
-            println!("  {key}: {value:?}");
-        }
+    if batches.is_empty() {
+        println!("  (no results)");
+        return;
     }
-}
-
-/// Stringify a `ScalarValue` for `(state, sum)` display. Same pattern as
-/// `parallel_execution_example.rs`.
-fn scalar_to_string(v: &ScalarValue) -> String {
-    match v {
-        ScalarValue::Utf8(s) => s.clone(),
-        ScalarValue::Binary(b) => String::from_utf8_lossy(b).into_owned(),
-        ScalarValue::Null => "null".to_string(),
-        other => format!("{other:?}"),
+    for batch in batches {
+        match to_csv(batch) {
+            Ok(csv) => {
+                for line in csv.lines() {
+                    println!("  {line}");
+                }
+            }
+            Err(e) => println!("  (error rendering batch: {e})"),
+        }
     }
 }

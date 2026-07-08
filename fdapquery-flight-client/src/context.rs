@@ -1,17 +1,24 @@
 //!
-//! Interactive Flight client: same API shape as
-//! `fdapquery::SessionContext` and [`fdapquery_distributed::DistributedContext`]
-//! (`register_csv` / `register` / `sql` / `execute`), but the execution
-//! goes over the wire via an `arrow_flight::FlightServiceClient` instead of
-//! running locally or through the distributed scheduler.
+//! Interactive Flight client: same `register_csv` / `register` / `sql` /
+//! `execute` shape as `fdapquery::SessionContext`, but the execution
+//! goes over the wire via an `arrow_flight::FlightServiceClient` instead
+//! of running locally.
 //!
 //! ## Where this fits in the workspace
 //!
 //! ```text
-//!   SessionContext       — single-process, runs the plan locally
-//!   DistributedContext<C>  — distributed, routes via Scheduler<C>
-//!   Context (this file)    — interactive Flight, routes via a single Client
+//!   SessionContext                      — single-process, runs the plan locally
+//!   SessionContext (via
+//!     SessionContextExt::standalone)    — distributed, routes via Scheduler<C>
+//!   Context (this file)                 — interactive Flight, routes via a single Client
 //! ```
+//!
+//! The distributed variant is `SessionContext` extended with the
+//! [`SessionContextExt`](fdapquery_distributed::SessionContextExt) trait
+//! (mirror of Ballista's `SessionContextExt` at
+//! `ballista/client/src/extension.rs`). It installs a
+//! `DistributedQueryPlanner` on the session's `SessionState`, so every
+//! query routes through the in-process scheduler transparently.
 //!
 //! All three expose the same surface: register tables, submit SQL, get
 //! `RecordBatch`es back. A reader switching between them should find the
@@ -30,9 +37,11 @@ use fdapquery_sql::sqlparser::parser::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// CSV batch size for tables registered through `register_csv`. Matches the
-/// workspace's other contexts (`fdapquery_distributed::DistributedContext`,
-/// `fdapquery::SessionContext`).
+/// CSV batch size for tables registered through `register_csv`. Matches
+/// [`fdapquery::SessionContext`]'s `register_csv` default so a query run
+/// against the interactive client and a query run against a session
+/// produced by [`fdapquery_distributed::SessionContextExt::standalone`]
+/// see the same batch shape.
 const CSV_BATCH_SIZE: usize = 1024;
 
 /// Interactive client-side context for executing queries via a single
@@ -59,11 +68,12 @@ impl Context {
 
     /// Register a CSV file as a table.
     ///
-    /// Mirrors `DistributedContext::register_csv` line-for-line — same
-    /// `CsvDataSource::new(...)` construction, same `TableScan` node, same
-    /// `register(...)` delegation. The two contexts diverge only at
-    /// `sql`/`execute`: one routes through a `Scheduler`, the other
-    /// through a `Client`.
+    /// Same `CsvDataSource::new(...)` construction, same `TableScan` node,
+    /// same `register(...)` delegation as [`fdapquery::SessionContext::register_csv`].
+    /// This context diverges from `SessionContext` only at `sql` / `execute`:
+    /// where `SessionContext` runs the plan through a `QueryPlanner`, this
+    /// one ships the plan over the wire to a Flight server via
+    /// [`Client::do_get`].
     pub fn register_csv(&mut self, table_name: &str, path: &str, has_header: bool) {
         let ds = CsvDataSource::new(path, None, has_header, CSV_BATCH_SIZE);
         // Wrap the provider as a `TableSource` for

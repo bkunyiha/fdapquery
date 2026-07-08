@@ -21,8 +21,8 @@
 //!   `LogicalExprNode { ExprType::AggregateExpr(...) }`, symmetric with the
 //!   deserializer's `AggregateExprNode` arm. Folded the
 //!   logical-side `AggregateExpr` enum into `Expr::AggregateFunction`;
-//!   the wire-format `AggregateExprNode` shape is unchanged (the proto
-//!   rename is part of #110/#111).
+//!   the wire-format `AggregateExprNode` shape is unchanged (a future
+//!   proto revision renames it to match).
 
 use crate::protobuf;
 use fdapquery_catalog::{CsvDataSource, ParquetDataSource, source_as_provider};
@@ -142,14 +142,15 @@ pub fn serialize_logical_expr(expr: &Expr) -> protobuf::LogicalExprNode {
         // `Expr::Literal(ScalarValue)` collapsed the five
         // sibling logical literal variants. The proto wire format still has
         // distinct `LiteralString` / `LiteralInt64` / `LiteralF32` /
-        // `LiteralF64` / `LiteralDate` fields (proto tasks #110/#111 are
-        // where that gets widened), so the serializer dispatches on the
-        // inner `ScalarValue` to pick the matching wire field.
+        // `LiteralF64` / `LiteralDate` fields (a future proto revision
+        // widens these into a single `ScalarValue`-shaped message), so
+        // the serializer dispatches on the inner `ScalarValue` to pick
+        // the matching wire field.
         Expr::Literal(scalar) => scalar_to_proto_expr_type(scalar),
         // Single binary arm dispatches on the
         // [`Operator`] enum. The wire format keeps its string-typed `op`
-        // field (the proto rename is part of #110/#111), so we map each
-        // operator to its wire string here.
+        // field (a future proto revision replaces it with a typed enum),
+        // so we map each operator to its wire string here.
         Expr::BinaryExpr { left, op, right } => {
             binary_op_variant(operator_wire_name(*op), left, right)
         }
@@ -171,8 +172,8 @@ fn binary_op_variant(op: &str, l: &Expr, r: &Expr) -> protobuf::logical_expr_nod
 
 /// Map an [`Operator`] to the wire-format op string used by the
 /// existing `BinaryExprNode { op: string }` field. Operators not in this
-/// set panic — the engine doesn't emit them today, and proto tasks
-/// #110/#111 will widen the wire format to a typed `Operator` enum.
+/// set panic — the engine doesn't emit them today, and a future proto
+/// revision widens the wire format to a typed `Operator` enum.
 fn operator_wire_name(op: Operator) -> &'static str {
     match op {
         Operator::Eq => "eq",
@@ -190,8 +191,7 @@ fn operator_wire_name(op: Operator) -> &'static str {
         Operator::Modulo => "modulus",
         other => panic!(
             "operator_wire_name: Operator::{other:?} has no wire-format \
-             encoding in rquery.proto's BinaryExprNode.op string (proto \
-             tasks #110/#111)"
+             encoding in rquery.proto's BinaryExprNode.op string"
         ),
     }
 }
@@ -203,8 +203,8 @@ fn operator_wire_name(op: Operator) -> &'static str {
 /// The input is now an `&Expr` (must be the
 /// `AggregateFunction` variant); the wire format is unchanged. DISTINCT
 /// dispatch maps to the existing `protobuf::AggregateFunction::CountDistinct`
-/// enum value (the wire-format catalogue is unchanged pending
-/// proto tasks #110/#111).
+/// enum value (the wire-format catalogue is unchanged pending a future
+/// proto revision).
 pub fn serialize_logical_aggregate_expr(ae: &Expr) -> protobuf::LogicalExprNode {
     let af = match ae {
         Expr::AggregateFunction(af) => af,
@@ -286,7 +286,7 @@ fn scalar_to_proto_expr_type(scalar: &ScalarValue) -> protobuf::logical_expr_nod
         ScalarValue::Date32(d) => ExprType::LiteralDate(*d),
         other => panic!(
             "scalar_to_proto_expr_type: ScalarValue variant {other:?} has no \
-             wire-format encoding in rquery.proto yet (proto tasks #110/#111)"
+             wire-format encoding in rquery.proto yet"
         ),
     }
 }

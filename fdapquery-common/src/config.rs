@@ -6,8 +6,8 @@
 //! `OptimizerOptions`, `SqlParserOptions`, `CatalogOptions`,
 //! `ExplainOptions`). At v0.1 fdapquery ships only the fields it actually
 //! consumes today or in imminent Phase 3 work — currently
-//! [`ExecutionOptions::target_partitions`] (Phase 3 task #125 —
-//! `RepartitionExec` + `EnforceDistribution`) and
+//! [`ExecutionOptions::target_partitions`] (consumed by the future
+//! `RepartitionExec` + `EnforceDistribution` optimizer rule) and
 //! [`ExecutionOptions::batch_size`] (mirrors fdapquery's existing
 //! `rquery.csv.batchSize` string setting).
 //!
@@ -57,12 +57,11 @@ pub struct ConfigOptions {
 pub struct ExecutionOptions {
     /// Number of partitions execution should be distributed across.
     ///
-    /// Consumed by Phase 3 task #125 (`RepartitionExec` +
-    /// `EnforceDistribution` optimizer rule). Defaults to the number of
-    /// available CPU cores when constructed via [`Default::default`],
-    /// falling back to `1` if the system's parallelism cannot be
-    /// determined (mirrors DataFusion's
-    /// `datafusion_common::utils::get_available_parallelism`).
+    /// Consumed by the future `RepartitionExec` + `EnforceDistribution`
+    /// optimizer rule. Defaults to the number of available CPU cores
+    /// when constructed via [`Default::default`], falling back to `1`
+    /// if the system's parallelism cannot be determined (mirrors
+    /// DataFusion's `datafusion_common::utils::get_available_parallelism`).
     pub target_partitions: usize,
 
     /// Default batch size for readers and buffers.

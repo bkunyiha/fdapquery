@@ -33,7 +33,7 @@ const LEGACY_KEY_CSV_BATCH_SIZE: &str = "rquery.csv.batchSize";
 /// - [`Self::options`] — typed [`ConfigOptions`] (mirror of DataFusion's
 ///   `datafusion_common::config::ConfigOptions`). Preferred read path.
 ///   Grows one field at a time as fdapquery acquires new tunable
-///   surfaces. Task #149.
+///   surfaces.
 /// - [`Self::settings`] — legacy `HashMap<String, String>` from the
 ///   rquery-DNA shape. Preserved so existing consumers that read
 ///   `ctx.settings.get("key")` continue to work without change. Every
@@ -74,8 +74,8 @@ impl SessionConfig {
     /// Return the target-partitions count. Mirrors DataFusion's
     /// [`SessionConfig::target_partitions`].
     ///
-    /// Consumed by Phase 3 task #125 (`RepartitionExec` +
-    /// `EnforceDistribution` optimizer rule).
+    /// Consumed by the future `RepartitionExec` + `EnforceDistribution`
+    /// optimizer rule.
     pub fn target_partitions(&self) -> usize {
         self.options.execution.target_partitions
     }

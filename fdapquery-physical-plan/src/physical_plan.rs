@@ -201,6 +201,9 @@ pub fn accept<V: ExecutionPlanVisitor>(
     plan: &dyn ExecutionPlan,
     visitor: &mut V,
 ) -> std::result::Result<(), V::Error> {
+    // `pre_visit` returns whether this node's children should be visited.
+    // `false` means the visitor handled this node and wants to skip the
+    // rest of this subtree.
     if !visitor.pre_visit(plan)? {
         return Ok(());
     }

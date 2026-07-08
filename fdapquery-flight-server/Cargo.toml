@@ -52,13 +52,12 @@ fdapquery-distributed   = { version = "0.1.0", path = "../fdapquery-distributed"
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
-[dev-dependencies]
-# `tokio-stream::wrappers::TcpListenerStream` wraps the bound
-# `TcpListener` for `tonic::transport::Server::serve_with_incoming` in
-# the integration tests' in-process server spawn. Dev-only — the
-# library's `serve(addr, ctx)` binds the listener internally and
-# doesn't need this wrapper.
-tokio-stream = "0.1"
+# `tokio-stream` — needed by `standalone::spawn_in_process_flight_server`
+# to wrap the bound `TcpListener` for
+# `tonic::transport::Server::serve_with_incoming`. Was dev-only until
+# Session 20d moved the spawn logic from example/test copies into a
+# public helper.
+tokio-stream = { version = "0.1" }
 
 [[bin]]
 name = "fdapquery-flight-server"

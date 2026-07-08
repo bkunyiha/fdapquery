@@ -13,7 +13,7 @@
 //!
 //! [#10782]: https://github.com/apache/datafusion/issues/10782
 //!
-//! ## Minimal coherent surface (#120)
+//! ## Minimal coherent surface
 //!
 //! DataFusion's `Session` trait declares 15 methods spanning function
 //! registries (`scalar_functions`, `aggregate_functions`,
@@ -62,10 +62,9 @@ use std::sync::Arc;
 /// Historically DataFusion's catalog traits took `&SessionState`
 /// directly, which forced `datafusion-catalog` to depend on
 /// `datafusion-core`. This trait breaks that cycle by exposing only
-/// the lookup surface a `TableProvider` needs. Future task #114
-/// follow-up will add `&dyn Session` as a parameter on
-/// `TableProvider::scan`; the trait exists today so that change is a
-/// signature-only edit.
+/// the lookup surface a `TableProvider` needs. A future revision adds
+/// `&dyn Session` as a parameter on `TableProvider::scan`; the trait
+/// exists today so that change is a signature-only edit.
 #[async_trait]
 pub trait Session: Send + Sync {
     /// Return the session ID.

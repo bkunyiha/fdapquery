@@ -89,9 +89,9 @@ impl AggregateExec {
         group_by: impl Into<Arc<PhysicalGroupBy>>,
         aggr_expr: Vec<Arc<dyn AggregateExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-        input: Arc<dyn ExecutionPlan>,
-        input_schema: Schema,
-        schema: Schema,
+        input: Arc<dyn ExecutionPlan>, // input.schema() — schema of the direct child plan node. For Partial: the CSV. For Final: the ShuffleReader (intermediate state).
+        input_schema: Schema, // Original schema — schema of the raw table before ANY aggregation. Same value for Partial and Final.
+        schema: Schema, // schema this aggregate PRODUCES as its output. For Partial: (group_keys, state_buffers). For Final: (group_keys, final_values)
     ) -> Result<Self> {
         let group_by = group_by.into();
         let properties = PlanProperties::single_partition_unknown();

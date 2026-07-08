@@ -16,8 +16,8 @@
 //! Byte-for-byte equivalence with DataFusion: same field set, same
 //! `get_position` formula (`y * width + x`), same recursive
 //! `create_tree_recursive` that returns the subtree width and records
-//! child positions in BFS order. Mirrors
-//! `/Users/bkunyiha/Rust/datafusion/datafusion/physical-plan/src/render_tree.rs`.
+//! child positions in BFS order. Mirrors DataFusion 54.0.0's
+//! <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-plan/src/render_tree.rs>.
 
 use std::collections::HashMap;
 use std::fmt::Formatter;

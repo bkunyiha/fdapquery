@@ -106,7 +106,8 @@ mod tests {
 
     /// Byte-for-byte mirror of DataFusion's
     /// `impl Display for Partitioning`. Format strings verified against
-    /// `/Users/bkunyiha/Rust/datafusion/datafusion/physical-expr/src/partitioning.rs`.
+    /// DataFusion 54.0.0's
+    /// <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-expr/src/partitioning.rs>.
     #[test]
     fn display_round_robin_matches_datafusion() {
         assert_eq!(

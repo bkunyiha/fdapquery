@@ -241,8 +241,7 @@ fn serialize_binary_op(expr: &dyn PhysicalExpr) -> Option<protobuf::PhysicalBina
         Operator::Modulo => "modulus",
         other => panic!(
             "serialize_binary_op: Operator::{other:?} has no wire-format \
-             encoding in rquery.proto's PhysicalBinaryExprNode.op string \
-             (proto tasks #110/#111)"
+             encoding in rquery.proto's PhysicalBinaryExprNode.op string"
         ),
     };
     Some(protobuf::PhysicalBinaryExprNode {

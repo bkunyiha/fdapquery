@@ -1,6 +1,7 @@
 // `HashMap<String, ()>` is a placeholder for `HashMap<String, Arc<...UDF>>`;
-// task #142 (and follow-ups for window/table factory) swap in the real
-// value types. Until then the maps act as presence sets without losing the
+// a future revision (once the ScalarUDF / AggregateUDF / WindowUDF surface
+// lands, along with the table-factory registry) swaps in the real value
+// types. Until then the maps act as presence sets without losing the
 // shape DataFusion's `SessionState` uses.
 #![allow(clippy::zero_sized_map_values)]
 
@@ -15,7 +16,7 @@
 //! the `QueryPlanner` trait method can take `&SessionState` directly —
 //! the same shape DataFusion's trait has — without a dependency cycle.
 //!
-//! ## Minimum coherent surface (#120)
+//! ## Minimum coherent surface
 //!
 //! DataFusion's `SessionState` carries ~25 fields spanning analyzer
 //! rules, optimizer rules, physical-optimizer rules, function
@@ -211,7 +212,9 @@ pub struct SessionState {
     /// `fdapquery_optimizer::Optimizer`.
     optimizer: Optimizer,
     /// Physical-plan optimizer. Real type from
-    /// `fdapquery-physical-optimizer` (#121); v0.1 rule list is empty.
+    /// `fdapquery-physical-optimizer`; v0.1 rule list is empty. Future
+    /// revisions add EnforceDistribution, EnforceSorting, CoalesceBatches,
+    /// and JoinSelection to the rule list.
     physical_optimizers: PhysicalOptimizer,
     /// The pluggable query-planner customization seam.
     query_planner: Arc<dyn QueryPlanner + Send + Sync>,
@@ -442,6 +445,36 @@ impl SessionStateBuilder {
     /// documented as the v0.1 spelling.
     pub fn new_with_defaults() -> Self {
         Self::new().with_default_features()
+    }
+
+    /// Build a [`SessionStateBuilder`] seeded from an existing
+    /// [`SessionState`], so callers can swap a single component
+    /// (query planner, config, runtime env) via a `.with_*()` chain
+    /// without rebuilding every field from scratch. Mirror of
+    /// DataFusion's
+    /// `datafusion::execution::session_state::SessionStateBuilder::new_from_existing`.
+    ///
+    /// The method moves every field out of the incoming `SessionState`
+    /// into the builder's `Option<T>` slots. `SessionState::runtime`
+    /// maps to `SessionStateBuilder::runtime_env` (the builder's
+    /// field is renamed). No `..Default::default()` fallback: adding
+    /// a field to `SessionState` without extending this method turns
+    /// into a compile error, which is the safer default.
+    pub fn new_from(state: SessionState) -> Self {
+        Self {
+            session_id: Some(state.session_id),
+            analyzer: Some(state.analyzer),
+            optimizer: Some(state.optimizer),
+            physical_optimizers: Some(state.physical_optimizers),
+            query_planner: Some(state.query_planner),
+            scalar_functions: Some(state.scalar_functions),
+            aggregate_functions: Some(state.aggregate_functions),
+            window_functions: Some(state.window_functions),
+            table_factories: Some(state.table_factories),
+            serializer_registry: Some(state.serializer_registry),
+            config: Some(state.config),
+            runtime_env: Some(state.runtime),
+        }
     }
 
     /// Set the session id.

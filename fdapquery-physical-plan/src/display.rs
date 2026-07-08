@@ -659,7 +659,8 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 // TreeRenderVisitor — DuckDB-style Unicode box-art tree.
 // =============================================================================
 // Strict mirror of `datafusion::physical_plan::display::TreeRenderVisitor`
-// at `/Users/bkunyiha/Rust/datafusion/datafusion/physical-plan/src/display.rs`.
+// at DataFusion 54.0.0:
+// <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-plan/src/display.rs>.
 // Three-layer per-y rendering atop the `RenderTree` precomputation in
 // `crate::render_tree`:
 //   * `render_top_layer`    — `┌─────┬─────┐` borders; the `┬` joins the

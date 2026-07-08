@@ -12,7 +12,7 @@
 
 pub mod arrow_vector_builder;
 // Typed session config — scaled-down mirror of DataFusion's
-// `datafusion_common::config::ConfigOptions`. Task #149. Home crate matches
+// `datafusion_common::config::ConfigOptions`. Home crate matches
 // DataFusion's canonical location (`datafusion-common`), reachable from
 // `fdapquery-execution::SessionConfig` via the existing
 // `execution → datatypes → common` dependency chain.

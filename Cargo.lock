@@ -832,26 +832,19 @@ dependencies = [
 name = "fdapquery-examples"
 version = "0.1.0"
 dependencies = [
- "arrow-flight",
  "arrow-schema",
- "async-trait",
  "env_logger",
  "fdapquery",
  "fdapquery-catalog",
  "fdapquery-common",
  "fdapquery-datatypes",
- "fdapquery-distributed",
  "fdapquery-expr",
  "fdapquery-flight-client",
- "fdapquery-flight-server",
  "fdapquery-optimizer",
- "fdapquery-physical-plan",
  "futures",
  "log",
  "rayon",
  "tokio",
- "tokio-stream",
- "tonic",
 ]
 
 [[package]]
@@ -886,6 +879,7 @@ dependencies = [
  "arrow",
  "arrow-flight",
  "async-trait",
+ "fdapquery",
  "fdapquery-catalog",
  "fdapquery-datatypes",
  "fdapquery-distributed",

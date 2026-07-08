@@ -10,13 +10,13 @@
 //! `datafusion::physical_plan::metrics` (and the underlying
 //! `datafusion-physical-expr-common::metrics`).
 //!
-//! Reads the canonical implementation from:
-//!   * `/Users/bkunyiha/Rust/datafusion/datafusion/physical-expr-common/src/metrics/mod.rs`
-//!   * `/Users/bkunyiha/Rust/datafusion/datafusion/physical-expr-common/src/metrics/value.rs`
-//!   * `/Users/bkunyiha/Rust/datafusion/datafusion/physical-expr-common/src/metrics/custom.rs`
-//!   * `/Users/bkunyiha/Rust/datafusion/datafusion/physical-expr-common/src/metrics/builder.rs`
-//!   * `/Users/bkunyiha/Rust/datafusion/datafusion/physical-expr-common/src/metrics/baseline.rs`
-//!   * `/Users/bkunyiha/Rust/datafusion/datafusion/physical-plan/src/metrics.rs`
+//! Reads the canonical implementation from DataFusion 54.0.0:
+//!   * <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-expr-common/src/metrics/mod.rs>
+//!   * <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-expr-common/src/metrics/value.rs>
+//!   * <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-expr-common/src/metrics/custom.rs>
+//!   * <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-expr-common/src/metrics/builder.rs>
+//!   * <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-expr-common/src/metrics/baseline.rs>
+//!   * <https://github.com/apache/datafusion/blob/54.0.0/datafusion/physical-plan/src/metrics.rs>
 //!
 //! ## Shape mirrored
 //!
@@ -96,8 +96,14 @@ pub enum MetricCategory {
     Bytes,
     /// Wall-clock timing metrics.  Non-deterministic.
     Timing,
-    /// Catch-all category for metrics without a declared semantic
-    /// category.  Mirrors DataFusion's `MetricCategory::Uncategorized`.
+    /// Catch-all category for metrics that do not fit rows/bytes/timing —
+    /// or that were registered without an explicit category. Filtering by
+    /// category treats any [`Metric`] with `metric_category == None` as
+    /// `Uncategorized`, so this variant is the bucket a caller must
+    /// include in [`MetricsSet::filter_by_categories`] to keep timestamps,
+    /// ratios, and other miscellaneous metrics.
+    ///
+    /// Strict mirror of DataFusion's `MetricCategory::Uncategorized`.
     Uncategorized,
 }
 
@@ -156,7 +162,17 @@ impl Display for Count {
     }
 }
 
-/// A gauge.  Mirrors DataFusion's `Gauge`.
+/// A metric that holds a single instantaneous numeric value that can go
+/// up, down, or be set to an absolute reading — the analogue of a
+/// Prometheus gauge. Operators reach for this to expose things like
+/// "current memory usage in bytes" or "queue depth" via
+/// [`MetricValue::Gauge`] / [`MetricValue::CurrentMemoryUsage`], where
+/// the latest sample is what matters and history is not tracked. Contrast
+/// with [`Count`], which is monotonic. Cloning shares the underlying
+/// atomic, so a [`Gauge`] handed to worker threads updates the same slot
+/// the metrics set will read.
+///
+/// Strict mirror of DataFusion's `Gauge`.
 #[derive(Debug, Clone)]
 pub struct Gauge {
     value: Arc<AtomicUsize>,
@@ -203,8 +219,17 @@ impl Display for Gauge {
     }
 }
 
-/// Measure a potentially non-contiguous duration.  Mirrors DataFusion's
-/// `Time`.
+/// Accumulator for a duration measured across many separate intervals —
+/// the metric that backs `elapsed_compute` and every operator-defined
+/// timing metric. Sample it repeatedly by calling [`Time::timer`] to
+/// obtain a [`ScopedTimerGuard`] whose lifetime records one interval,
+/// or by directly calling [`Time::add_elapsed`] / [`Time::add_duration`].
+/// Any non-zero duration is rounded up to at least 1 ns so a measured
+/// event is distinguishable from "no event recorded". Cloning shares the
+/// underlying atomic so timers spawned on worker threads all fold into
+/// the same total.
+///
+/// Strict mirror of DataFusion's `Time`.
 #[derive(Debug, Clone)]
 pub struct Time {
     nanos: Arc<AtomicUsize>,
@@ -242,9 +267,15 @@ impl Time {
         self.nanos.load(AtomicOrdering::Relaxed)
     }
 
-    /// Return a scoped guard that adds the elapsed time between its
-    /// creation and its drop / call to `stop` to this `Time` metric.
-    /// Mirrors DataFusion's `Time::timer`.
+    /// Start a scoped timer. The returned [`ScopedTimerGuard`] records
+    /// the interval from `Instant::now()` until it is dropped (or until
+    /// [`ScopedTimerGuard::stop`] / [`ScopedTimerGuard::done`] is called)
+    /// into this [`Time`]. This is the idiomatic way to measure a block
+    /// of work: `let _t = time.timer();` at the top of a function or
+    /// `while let Some(_) = ...` loop body, and the elapsed time is
+    /// folded in when the guard falls out of scope.
+    ///
+    /// Strict mirror of DataFusion's `Time::timer`.
     pub fn timer(&self) -> ScopedTimerGuard<'_> {
         ScopedTimerGuard {
             inner: self,
@@ -274,9 +305,16 @@ impl Display for Time {
     }
 }
 
-/// RAII structure that adds all time between its construction and
-/// destruction to the underlying `Time` metric.  Mirrors DataFusion's
-/// `ScopedTimerGuard`.
+/// RAII handle produced by [`Time::timer`] that folds the interval from
+/// its creation to its `Drop` into a borrowed [`Time`] metric. Used to
+/// wrap a scope of work — a function body, a loop iteration, a poll of
+/// a stream — so that the elapsed time is recorded exactly once, even
+/// on early returns or `?` unwinding. Call [`ScopedTimerGuard::stop`]
+/// to record and reset without dropping (for repeated measurement in
+/// one scope) or [`ScopedTimerGuard::done`] to record and consume the
+/// guard explicitly.
+///
+/// Strict mirror of DataFusion's `ScopedTimerGuard`.
 pub struct ScopedTimerGuard<'a> {
     inner: &'a Time,
     start: Option<std::time::Instant>,
@@ -320,13 +358,22 @@ impl Drop for ScopedTimerGuard<'_> {
     }
 }
 
-/// Stores a single timestamp as a `DateTime<Utc>`.  Mirrors DataFusion's
-/// `Timestamp`.
+/// A shared, mutable slot holding an optional wall-clock instant. Backs
+/// the [`MetricValue::StartTimestamp`] and [`MetricValue::EndTimestamp`]
+/// variants: an operator records the current time via
+/// [`Timestamp::record`] when it begins and again when it finishes,
+/// giving `EXPLAIN ANALYZE` output the interval during which each
+/// partition ran. `None` means the moment has not been captured yet.
+/// Cross-partition aggregation takes the MIN across `StartTimestamp`s
+/// and the MAX across `EndTimestamp`s via [`Timestamp::update_to_min`]
+/// and [`Timestamp::update_to_max`].
 ///
 /// fdapquery uses `std::sync::Mutex` here instead of DataFusion's
 /// `parking_lot::Mutex` to avoid pulling `parking_lot` into the workspace.
 /// `DateTime<Utc>` is `Copy`, so the poisoning paths cannot leave a
 /// half-modified state.
+///
+/// Strict mirror of DataFusion's `Timestamp`.
 #[derive(Debug, Clone)]
 pub struct Timestamp {
     timestamp: Arc<Mutex<Option<DateTime<Utc>>>>,
@@ -471,7 +518,13 @@ impl Display for PruningMetrics {
 }
 
 // =============================================================================
-// RatioMetrics + RatioMergeStrategy.  Mirrors DataFusion's `RatioMetrics`.
+// RatioMetrics + RatioMergeStrategy — a `(part, total)` pair displayed as
+// a percentage plus raw counts.  Used for scores such as "fraction of
+// files pruned" and the output-rows skew metric, where the reader wants
+// both the ratio and the underlying numerator/denominator.  Cross-
+// partition merging follows the [`RatioMergeStrategy`] the metric was
+// created with (see [`RatioMetrics::merge`]).  Strict mirror of
+// DataFusion's `RatioMetrics`.
 // =============================================================================
 
 #[derive(Debug, Clone, Default)]
@@ -637,9 +690,20 @@ pub trait CustomMetricValue: Display + Debug + Send + Sync {
 // `MetricValue` in `physical-expr-common/src/metrics/value.rs`.
 // =============================================================================
 
-/// Possible values for a [`Metric`].
+/// The typed payload carried by a [`Metric`] — the closed set of metric
+/// shapes an operator can register. Each variant pairs a semantic name
+/// (`"output_rows"`, `"elapsed_compute"`, …) with the atomic primitive
+/// it wraps ([`Count`], [`Gauge`], [`Time`], [`Timestamp`],
+/// [`PruningMetrics`], [`RatioMetrics`], or an
+/// application-defined [`CustomMetricValue`]). Variants split into
+/// well-known kinds (e.g. `OutputRows`, `ElapsedCompute`) whose display
+/// name is fixed by DataFusion, and named kinds (`Count { name, .. }`,
+/// `Time { name, .. }`, …) that the operator labels itself. Aggregation
+/// across partitions is variant-specific — counters sum, timestamps
+/// take min/max, custom values defer to their trait impl (see
+/// [`MetricValue::aggregate`]).
 ///
-/// Mirrors DataFusion's enum
+/// Strict mirror of DataFusion's enum
 /// `datafusion_physical_expr_common::metrics::MetricValue`.
 #[derive(Debug, Clone)]
 pub enum MetricValue {
@@ -699,9 +763,15 @@ pub enum MetricValue {
     },
 }
 
-// Manually implement PartialEq for `MetricValue` because the `Custom`
-// variant holds an `Arc<dyn CustomMetricValue>`.  Mirrors DataFusion's
-// manual `impl PartialEq for datafusion_physical_expr_common::metrics::MetricValue`.
+// PartialEq is implemented by hand rather than derived because the
+// `Custom` variant carries an `Arc<dyn CustomMetricValue>`, which cannot
+// derive `PartialEq`. Non-`Custom` variants compare their name + inner
+// primitive; `Custom` defers to [`CustomMetricValue::is_eq`] so extension
+// types decide their own equality semantics. All other cross-variant
+// combinations are `false`.
+//
+// Strict mirror of DataFusion's manual
+// `impl PartialEq for datafusion_physical_expr_common::metrics::MetricValue`.
 impl PartialEq for MetricValue {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -784,7 +854,16 @@ impl PartialEq for MetricValue {
 }
 
 impl MetricValue {
-    /// Return the metric's name.  Mirrors DataFusion's `MetricValue::name`.
+    /// Return the display name of this variant (e.g. `"output_rows"` for
+    /// [`MetricValue::OutputRows`], `"elapsed_compute"` for
+    /// [`MetricValue::ElapsedCompute`], or the caller-supplied `name`
+    /// stored in [`MetricValue::Count`], [`MetricValue::Time`], and other
+    /// operator-defined variants). Used by the `EXPLAIN ANALYZE` printer
+    /// via [`Metric`]'s `Display` impl and by
+    /// [`MetricsSet::aggregate_by_name`] / [`MetricsSet::sum_by_name`] to
+    /// key metrics with the same semantic role together across partitions.
+    ///
+    /// Strict mirror of DataFusion's `MetricValue::name`.
     pub fn name(&self) -> &str {
         match self {
             Self::OutputRows(_) => "output_rows",
@@ -806,8 +885,18 @@ impl MetricValue {
         }
     }
 
-    /// Return the value as `usize` for cross-partition aggregation.
-    /// Mirrors DataFusion's `MetricValue::as_usize`.
+    /// Project this metric down to a single `usize` for numeric
+    /// consumers — counters and gauges yield their current value, timing
+    /// variants yield accumulated nanoseconds, and timestamps yield
+    /// nanoseconds since the Unix epoch (0 if unset). Composite variants
+    /// ([`MetricValue::PruningMetrics`], [`MetricValue::Ratio`]) return
+    /// 0 because they cannot be flattened losslessly; custom values defer
+    /// to [`CustomMetricValue::as_usize`]. Callers such as
+    /// [`MetricsSet::output_rows`] and [`MetricsSet::elapsed_compute`]
+    /// use this to expose a single scalar to programmatic consumers of
+    /// the metrics set.
+    ///
+    /// Strict mirror of DataFusion's `MetricValue::as_usize`.
     pub fn as_usize(&self) -> usize {
         match self {
             Self::OutputRows(c) => c.value(),
@@ -831,8 +920,17 @@ impl MetricValue {
         }
     }
 
-    /// Construct a new empty value of the same variant, suitable for
-    /// accumulating into.  Mirrors DataFusion's `MetricValue::new_empty`.
+    /// Build a fresh, zero-initialised value of the same variant (with
+    /// the same `name`, merge strategy, or display flags where relevant)
+    /// so callers have an accumulator to aggregate other partitions'
+    /// values into. Used by [`MetricsSet::sum`] and
+    /// [`MetricsSet::aggregate_by_name`] to seed a target before folding
+    /// each per-partition [`Metric`] in with [`MetricValue::aggregate`].
+    /// For [`MetricValue::Custom`] this defers to
+    /// [`CustomMetricValue::new_empty`] so extension types stay in
+    /// control of their own zero.
+    ///
+    /// Strict mirror of DataFusion's `MetricValue::new_empty`.
     pub fn new_empty(&self) -> Self {
         match self {
             Self::OutputRows(_) => Self::OutputRows(Count::new()),
@@ -955,8 +1053,16 @@ impl MetricValue {
         }
     }
 
-    /// Display-sort key.  Lower numbers sort first.  Mirrors DataFusion's
-    /// `MetricValue::display_sort_key`.
+    /// Return the display ordering key for this metric — lower values
+    /// print first in `EXPLAIN ANALYZE`. The ordering puts high-signal
+    /// summary metrics first (`output_rows`, `elapsed_compute`, output
+    /// byte/batch counts), then pruning stats, then spill and memory
+    /// metrics, then generic operator-defined counters and gauges, and
+    /// finally timing/ratio/timestamp/custom metrics — matching
+    /// DataFusion's canonical ordering so equivalent plans produce
+    /// byte-equivalent output. Used by [`MetricsSet::sorted_for_display`].
+    ///
+    /// Strict mirror of DataFusion's `MetricValue::display_sort_key`.
     pub fn display_sort_key(&self) -> u8 {
         match self {
             Self::OutputRows(_) => 0,
@@ -989,8 +1095,14 @@ impl MetricValue {
         }
     }
 
-    /// Is this a timestamp variant?  Mirrors DataFusion's
-    /// `MetricValue::is_timestamp`.
+    /// Return `true` iff this is a [`MetricValue::StartTimestamp`] or
+    /// [`MetricValue::EndTimestamp`]. Used by
+    /// [`MetricsSet::timestamps_removed`] to strip wall-clock start/end
+    /// markers from a display set — those are useful for tracing but
+    /// noisy when comparing two runs, since they differ by the actual
+    /// clock time even when everything else about the plan matched.
+    ///
+    /// Strict mirror of DataFusion's `MetricValue::is_timestamp`.
     pub fn is_timestamp(&self) -> bool {
         matches!(self, Self::StartTimestamp(_) | Self::EndTimestamp(_))
     }
@@ -1038,7 +1150,16 @@ impl Display for MetricValue {
 // in `physical-expr-common/src/metrics/mod.rs`.
 // =============================================================================
 
-/// `name=value` pair identifying a metric.  Mirrors DataFusion's `Label`.
+/// A `name=value` string pair attached to a [`Metric`] to disambiguate
+/// otherwise-identical entries — for example marking one `output_rows`
+/// as `side=left` and another as `side=right` in a hash-join operator,
+/// or tagging a spill counter with `stage=partitioning`. Labels appear
+/// alongside the automatic `partition=N` label in `EXPLAIN ANALYZE`
+/// output as `metric_name{k1=v1, k2=v2}=value`. Attach labels via
+/// [`MetricBuilder::with_label`] / [`MetricBuilder::with_new_label`] or
+/// directly with [`Metric::with_label`].
+///
+/// Strict mirror of DataFusion's `Label`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Label {
     name: LabelValue,
@@ -1070,11 +1191,17 @@ impl Display for Label {
     }
 }
 
-/// A label name or value.
+/// The shared-string type used for [`Label`] names and values. A
+/// [`LabelValue`] stores either a `&'static str` (no allocation) or an
+/// `Arc<str>` (single allocation shared across every clone). This
+/// matters because operators typically build the same handful of
+/// labels once per partition — using literal names like `"side"` and
+/// `"stage"` stays allocation-free, and dynamic values from the query
+/// plan are refcounted rather than duplicated per metric. Construct via
+/// the `From` impls for `&'static str`, `String`, `Arc<str>`, or
+/// `Cow<'static, str>`.
 ///
-/// String literals preserve the existing allocation-free path.  Dynamic
-/// strings are stored behind `Arc<str>`.  Mirrors DataFusion's
-/// `LabelValue` exactly.
+/// Strict mirror of DataFusion's `LabelValue`.
 #[derive(Clone)]
 pub struct LabelValue(LabelValueInner);
 
@@ -1175,8 +1302,16 @@ impl Metric {
         }
     }
 
-    /// Create a new metric with labels.  Mirrors DataFusion's
-    /// `Metric::new_with_labels`.
+    /// Construct a [`Metric`] with an initial batch of [`Label`]s in one
+    /// call — the shortcut used by [`MetricBuilder::build`], which has
+    /// already collected labels via its fluent API before it emits the
+    /// metric. Prefer this over `Metric::new(...).with_label(...)`
+    /// chaining when the label set is already known up front. The
+    /// resulting metric defaults to [`MetricType::Dev`] with no
+    /// category; use [`Metric::with_type`] / [`Metric::with_category`]
+    /// to override.
+    ///
+    /// Strict mirror of DataFusion's `Metric::new_with_labels`.
     pub fn new_with_labels(
         value: MetricValue,
         partition: Option<usize>,
@@ -1201,8 +1336,13 @@ impl Metric {
         self
     }
 
-    /// Add a new label to this metric.  Mirrors DataFusion's
-    /// `Metric::with_label`.
+    /// Append a [`Label`] to this metric and return `self`, enabling
+    /// fluent chained construction: `Metric::new(v, Some(0)).with_label(l)`.
+    /// Labels are additive — each call pushes to the existing vector, so
+    /// the caller controls the order in which they appear in the
+    /// `{k=v, k=v}` clause of the `Display` output.
+    ///
+    /// Strict mirror of DataFusion's `Metric::with_label`.
     pub fn with_label(mut self, label: Label) -> Self {
         self.labels.push(label);
         self
@@ -1322,8 +1462,18 @@ impl MetricsSet {
             .map(|v| v.as_usize())
     }
 
-    /// Sum the values for which `f(metric)` returns true.  Returns `None`
-    /// if no metric matched.  Mirrors DataFusion's `MetricsSet::sum`.
+    /// Aggregate every [`Metric`] matching predicate `f` into a single
+    /// [`MetricValue`], returning `None` if no metric matched. This is
+    /// the primitive underlying every convenience roll-up on
+    /// [`MetricsSet`] ([`MetricsSet::output_rows`],
+    /// [`MetricsSet::spill_count`], [`MetricsSet::sum_by_name`], …): it
+    /// seeds an accumulator via [`MetricValue::new_empty`] from the
+    /// first match, then folds subsequent matches in with
+    /// [`MetricValue::aggregate`]. Reach for it directly when writing a
+    /// custom summary — e.g. summing all `Count { name, .. }` entries
+    /// whose label satisfies some predicate.
+    ///
+    /// Strict mirror of DataFusion's `MetricsSet::sum`.
     pub fn sum<F>(&self, mut f: F) -> Option<MetricValue>
     where
         F: FnMut(&Metric) -> bool,
@@ -1337,8 +1487,17 @@ impl MetricsSet {
         Some(accum)
     }
 
-    /// Returns the sum of all the metrics with the specified name in the
-    /// returned set.  Mirrors DataFusion's `MetricsSet::sum_by_name`.
+    /// Sum every operator-named metric ([`MetricValue::Count`],
+    /// [`MetricValue::Time`], [`MetricValue::Gauge`],
+    /// [`MetricValue::PeakMemoryUsage`], [`MetricValue::PruningMetrics`],
+    /// [`MetricValue::Ratio`]) whose caller-supplied `name` matches
+    /// `metric_name`. Intentionally does NOT match the well-known
+    /// built-in variants (`OutputRows`, `ElapsedCompute`, …) — those
+    /// have their own convenience roll-ups. Use this to fetch a total
+    /// for an operator-specific counter like `"spill_buffer_size"` or
+    /// `"row_groups_pruned_statistics"` across all partitions.
+    ///
+    /// Strict mirror of DataFusion's `MetricsSet::sum_by_name`.
     pub fn sum_by_name(&self, metric_name: &str) -> Option<MetricValue> {
         self.sum(|m| match m.value() {
             MetricValue::Count { name, .. } => name == metric_name,
@@ -1387,8 +1546,15 @@ impl MetricsSet {
         }
     }
 
-    /// Sort by `(display_sort_key, name)`.  Mirrors DataFusion's
-    /// `sorted_for_display`.
+    /// Return a copy of this set sorted for `EXPLAIN ANALYZE` output,
+    /// keyed first on [`MetricValue::display_sort_key`] (so `output_rows`
+    /// leads, elapsed time follows, and custom metrics trail) and then
+    /// alphabetically on [`MetricValue::name`] to break ties among
+    /// same-category metrics. Callers typically pipeline this after
+    /// [`MetricsSet::aggregate_by_name`] to produce the deterministic
+    /// per-operator summary the plan printer expects.
+    ///
+    /// Strict mirror of DataFusion's `MetricsSet::sorted_for_display`.
     pub fn sorted_for_display(mut self) -> Self {
         self.metrics.sort_by(|a, b| {
             match a
@@ -1403,8 +1569,15 @@ impl MetricsSet {
         self
     }
 
-    /// Strip timestamp variants from the set.  Mirrors DataFusion's
-    /// `timestamps_removed`.
+    /// Return a copy of this set with every
+    /// [`MetricValue::StartTimestamp`] / [`MetricValue::EndTimestamp`]
+    /// entry filtered out. Use before rendering `EXPLAIN ANALYZE` output
+    /// meant to be compared across runs — wall-clock start/end times
+    /// diverge run-to-run and add noise even when the plan and workload
+    /// are otherwise identical. The interval between them is still
+    /// reflected in `elapsed_compute`.
+    ///
+    /// Strict mirror of DataFusion's `MetricsSet::timestamps_removed`.
     pub fn timestamps_removed(self) -> Self {
         let metrics = self
             .metrics
@@ -1414,7 +1587,15 @@ impl MetricsSet {
         Self { metrics }
     }
 
-    /// Filter by metric type.  Mirrors DataFusion's `filter_by_metric_types`.
+    /// Return a copy of this set containing only metrics whose
+    /// [`MetricType`] is in `allowed`. Used to gate summary vs.
+    /// developer-only metrics: rendering a user-facing plan usually
+    /// filters to `[MetricType::Summary]` to hide implementation-detail
+    /// metrics, while a diagnostic dump keeps both. An empty `allowed`
+    /// slice returns an empty set (matches DataFusion — the identity
+    /// case is "no types allowed", not "no filter").
+    ///
+    /// Strict mirror of DataFusion's `MetricsSet::filter_by_metric_types`.
     pub fn filter_by_metric_types(self, allowed: &[MetricType]) -> Self {
         if allowed.is_empty() {
             return Self { metrics: vec![] };
@@ -1427,9 +1608,17 @@ impl MetricsSet {
         Self { metrics }
     }
 
-    /// Filter by semantic category.  Metrics with no declared category
-    /// are treated as [`MetricCategory::Uncategorized`] for filtering.
-    /// Mirrors DataFusion's `filter_by_categories`.
+    /// Return a copy of this set containing only metrics whose
+    /// [`MetricCategory`] is in `allowed`. Metrics registered without a
+    /// declared category are treated as
+    /// [`MetricCategory::Uncategorized`] for the purpose of this check,
+    /// so callers who want to keep them must include that variant
+    /// explicitly. Use to slice a metrics set for category-specific
+    /// dashboards — e.g. `[MetricCategory::Rows]` for a row-count
+    /// summary or `[MetricCategory::Timing]` for a wall-clock view. An
+    /// empty `allowed` slice returns an empty set.
+    ///
+    /// Strict mirror of DataFusion's `MetricsSet::filter_by_categories`.
     pub fn filter_by_categories(self, allowed: &[MetricCategory]) -> Self {
         if allowed.is_empty() {
             return Self { metrics: vec![] };
@@ -1791,8 +1980,18 @@ impl<'a> MetricBuilder<'a> {
 // `physical-expr-common::metrics::baseline`.
 // =============================================================================
 
-/// Helper for creating and tracking common "baseline" metrics for each
-/// operator.  Mirrors DataFusion's `BaselineMetrics`.
+/// Bundle of the standard "baseline" metrics every physical operator
+/// records: `start_timestamp`, `end_timestamp`, `elapsed_compute`,
+/// `output_rows`, `output_bytes`, and `output_batches`. Constructing one
+/// via [`BaselineMetrics::new`] registers all six against an
+/// [`ExecutionPlanMetricsSet`] and records the start timestamp; the
+/// operator then updates them during execution (typically through
+/// [`BaselineMetrics::record_poll`], the `RecordOutput` trait impls, or
+/// a [`ScopedTimerGuard`] returned from `elapsed_compute().timer()`).
+/// The end timestamp is captured when [`BaselineMetrics::done`] is
+/// called or, as a safety net, when the `BaselineMetrics` is dropped.
+///
+/// Strict mirror of DataFusion's `BaselineMetrics`.
 #[derive(Debug, Clone)]
 pub struct BaselineMetrics {
     /// `end_time` is set when `BaselineMetrics::done()` is called.
@@ -1999,8 +2198,17 @@ impl Drop for BaselineMetrics {
     }
 }
 
-/// Helper for creating and tracking spill-related metrics for each
-/// operator.  Mirrors DataFusion's `SpillMetrics`.
+/// Bundle of the standard spill-tracking counters an operator that can
+/// spill to disk (sort, hash join, hash aggregate, …) records:
+/// `spill_count` (how many times the operator flushed to disk),
+/// `spilled_bytes` (total bytes written), and `spilled_rows` (total
+/// rows). Constructing one via [`SpillMetrics::new`] registers all
+/// three against an [`ExecutionPlanMetricsSet`] with the appropriate
+/// [`MetricCategory`]. Operators call `.add(n)` on the individual
+/// counters as work happens; cross-partition roll-ups aggregate as
+/// counters.
+///
+/// Strict mirror of DataFusion's `SpillMetrics`.
 #[derive(Debug, Clone)]
 pub struct SpillMetrics {
     /// Count of spills during the execution of the operator.
@@ -2024,8 +2232,15 @@ impl SpillMetrics {
     }
 }
 
-/// Metrics for tracking batch splitting activity.  Mirrors DataFusion's
-/// `SplitMetrics`.
+/// Counter bundle for operators that break oversized input
+/// `RecordBatch`es into smaller pieces (for example when honoring a
+/// downstream batch-size preference or a memory budget). Exposes a
+/// single `batches_split` [`Count`] registered against an
+/// [`ExecutionPlanMetricsSet`] under [`MetricCategory::Rows`]; the
+/// operator increments it once per split so the `EXPLAIN ANALYZE`
+/// reader can tell whether splitting was a hot path or a rarity.
+///
+/// Strict mirror of DataFusion's `SplitMetrics`.
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Number of times an input `RecordBatch` was split.
@@ -2042,8 +2257,16 @@ impl SplitMetrics {
     }
 }
 
-/// Trait for things that produce output rows as a result of execution.
-/// Mirrors DataFusion's `RecordOutput`.
+/// Extension trait that folds a produced value (a raw `usize` row
+/// count, a `RecordBatch`, an `Option<RecordBatch>`, or a
+/// `Result<RecordBatch>`) into a [`BaselineMetrics`] and returns the
+/// value unchanged. Lets operator code write
+/// `Poll::Ready(Some(Ok(batch.record_output(&self.baseline))))`
+/// inline in a `Stream::poll_next` impl instead of unpacking the batch,
+/// updating row/byte/batch counts by hand, and repacking it. The impls
+/// for `Option` and `Result` variants no-op on the `None` / `Err` case.
+///
+/// Strict mirror of DataFusion's `RecordOutput`.
 pub trait RecordOutput {
     fn record_output(self, bm: &BaselineMetrics) -> Self;
 }
@@ -2109,7 +2332,13 @@ impl RecordOutput for Result<RecordBatch> {
 // `datafusion_common::display::human_readable`.
 // =============================================================================
 
-/// Common data size units (binary).  Mirrors DataFusion's `units`.
+/// Powers-of-two byte-size constants (`KB`, `MB`, `GB`, `TB`) used by
+/// [`human_readable_size`] to pick a display unit. Callers that need
+/// the same thresholds elsewhere (e.g. sizing a buffer against `MB`)
+/// can pull them from here rather than redefining them, keeping the
+/// definitions consistent with the display path.
+///
+/// Strict mirror of DataFusion's `units`.
 pub mod units {
     pub const TB: u64 = 1 << 40;
     pub const GB: u64 = 1 << 30;
@@ -2117,8 +2346,16 @@ pub mod units {
     pub const KB: u64 = 1 << 10;
 }
 
-/// Present size in human-readable form.  Mirrors DataFusion's
-/// `human_readable_size`.
+/// Render a byte count using the largest binary unit whose value is at
+/// least 2 (e.g. `4194304` → `"4.0 MB"`, `1023` → `"1023.0 B"`). Used
+/// by the `Display` impls for [`MetricValue::SpilledBytes`],
+/// [`MetricValue::OutputBytes`], [`MetricValue::CurrentMemoryUsage`],
+/// and [`MetricValue::PeakMemoryUsage`] so `EXPLAIN ANALYZE` output
+/// stays compact and comparable. Output is always to one decimal
+/// place; the "2× threshold" avoids things like `"1.0 KB"` for what
+/// is actually `1024` bytes.
+///
+/// Strict mirror of DataFusion's `human_readable_size`.
 pub fn human_readable_size(size: usize) -> String {
     use units::*;
     let size = size as u64;
@@ -2136,8 +2373,15 @@ pub fn human_readable_size(size: usize) -> String {
     format!("{value:.1} {unit}")
 }
 
-/// Present count in human-readable form.  Mirrors DataFusion's
-/// `human_readable_count`.
+/// Render an integer count using SI suffixes (`K`, `M`, `B`, `T`) once
+/// it crosses one thousand; below 1_000 the raw integer is emitted with
+/// no suffix. Used by [`Count`]'s `Display` impl (and thus by the
+/// row/batch/spill counters in [`MetricValue`]) so `EXPLAIN ANALYZE`
+/// output collapses `1234567` into `"1.23 M"`. Uses base-1000 (decimal)
+/// throughout, unlike [`human_readable_size`] which uses base-1024, so
+/// rows and bytes read naturally in their respective conventions.
+///
+/// Strict mirror of DataFusion's `human_readable_count`.
 pub fn human_readable_count(count: usize) -> String {
     let count = count as u64;
     let (value, unit) = if count >= 1_000_000_000_000 {
@@ -2158,8 +2402,15 @@ pub fn human_readable_count(count: usize) -> String {
     }
 }
 
-/// Present duration in human-readable form.  Mirrors DataFusion's
-/// `human_readable_duration`.
+/// Render a nanosecond duration in the largest appropriate unit — `ns`
+/// below 1 μs, `µs` below 1 ms, `ms` below 1 s, and `s` above. Used by
+/// [`Time`]'s `Display` impl (and thus by [`MetricValue::ElapsedCompute`]
+/// and [`MetricValue::Time`]) so `EXPLAIN ANALYZE` output prints
+/// `"3.24 ms"` rather than `3240000`. Above 1 μs the output uses two
+/// decimal places; sub-microsecond values print as bare integer
+/// nanoseconds because further decimals would exceed clock resolution.
+///
+/// Strict mirror of DataFusion's `human_readable_duration`.
 pub fn human_readable_duration(nanos: u64) -> String {
     const NANOS_PER_SEC: f64 = 1_000_000_000.0;
     const NANOS_PER_MILLI: f64 = 1_000_000.0;
