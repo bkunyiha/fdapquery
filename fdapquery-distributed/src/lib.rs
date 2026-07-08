@@ -17,11 +17,19 @@
 //!   implementation that wraps every incoming logical plan in a
 //!   `DistributedQueryExec`
 //! - [`session_state_ext`] — [`SessionStateExt`], the trait that installs a
-//!   `DistributedQueryPlanner` into a `SessionState`
-//! - [`extension`] — [`SessionContextExt`], the trait providing
-//!   `SessionContext::standalone(config, client).await` and
-//!   `SessionContext::remote(url).await` constructors (mirror of Ballista's
-//!   `SessionContextExt` at `ballista/client/src/extension.rs:63-89`)
+//!   `DistributedQueryPlanner` into a `SessionState` (mirror of Ballista's
+//!   `SessionStateExt` at `ballista/core/src/extension.rs:101-345`)
+//!
+//! ## Where `SessionContextExt` lives
+//!
+//! `SessionContextExt` (the trait providing
+//! `SessionContext::standalone().await` and `remote(url).await`) lives in
+//! `fdapquery-flight-client` — the crate that mirrors `ballista-client`.
+//! Ballista puts `SessionContextExt` in `ballista-client`, not
+//! `ballista-core`, because `standalone()` needs to spawn the executor
+//! process (would create a cycle if it lived in `core`). fdapquery follows
+//! the same crate layout for the same reason. See
+//! `fdapquery_flight_client::SessionContextExt`.
 //!
 //! ## Architectural notes
 //! - **Synchronous, sequential.** No async, no Tokio, no rayon. Each stage
@@ -38,7 +46,6 @@
 pub mod distributed_config;
 pub mod distributed_planner;
 pub mod execution_plans;
-pub mod extension;
 pub mod planner;
 pub mod query_stage;
 pub mod scheduler;
@@ -48,7 +55,6 @@ pub mod session_state_ext;
 pub use distributed_config::{DistributedConfig, ExecutorConfig};
 pub use distributed_planner::DistributedPlanner;
 pub use execution_plans::DistributedQueryExec;
-pub use extension::SessionContextExt;
 pub use planner::DistributedQueryPlanner;
 pub use query_stage::QueryStage;
 pub use scheduler::{ExecutorClient, Scheduler};

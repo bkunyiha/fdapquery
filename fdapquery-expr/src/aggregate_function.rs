@@ -14,13 +14,13 @@
 //!
 //! DataFusion's `AggregateFunction { func: Arc<AggregateUDF>, params }`
 //! carries an `Arc<AggregateUDF>` for the function identity (see
-//! `datafusion_expr::expr::AggregateFunction::func`). fdapquery does not yet have a
-//! `AggregateUDF` infrastructure — that is tracked separately as part of
-//! task #120 (SessionStateBuilder, which requires the UDF/UDAF/UDWF
-//! registries). For the duration of this gap, the `func` field holds the
+//! `datafusion_expr::expr::AggregateFunction::func`). fdapquery does not
+//! yet have an `AggregateUDF` infrastructure — that surface arrives with
+//! the `SessionStateBuilder` port that introduces the UDF/UDAF/UDWF
+//! registries. For the duration of this gap, the `func` field holds the
 //! pre-UDF kind enum `AggregateFunctionKind`, which is the exact shape
-//! DataFusion used before the UDF migration. When #120 lands, the
-//! migration is a single field swap (`func: AggregateFunctionKind` →
+//! DataFusion used before the UDF migration. Once the registries land,
+//! the migration is a single field swap (`func: AggregateFunctionKind` →
 //! `func: Arc<AggregateUDF>`) with no impact on the rest of the struct
 //! or any call site that goes through `AggregateFunction::new`.
 //!

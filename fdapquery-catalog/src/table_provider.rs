@@ -28,8 +28,8 @@
 //! ### DataFusion-divergence (tracked as follow-up tasks)
 //!
 //! DataFusion's `TableProvider::scan` signature also takes:
-//! - `state: &dyn Session` — fdapquery has no `Session` trait yet
-//!   (#120). Omit for now; introduce when `SessionStateBuilder` lands.
+//! - `state: &dyn Session` — fdapquery has no `Session` trait yet.
+//!   Omit for now; introduce when `SessionStateBuilder` lands.
 //! - `filters: &[Expr]` — predicate pushdown. fdapquery does not yet
 //!   push filters into the scan; omit and add a follow-up task when
 //!   wiring pushdown through the planner.

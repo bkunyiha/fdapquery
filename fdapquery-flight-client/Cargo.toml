@@ -48,19 +48,27 @@ fdapquery-proto = { version = "0.1.0", path = "../fdapquery-proto" }
 fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
 fdapquery-distributed = { version = "0.1.0", path = "../fdapquery-distributed" }
 fdapquery-sql = { version = "0.1.0", path = "../fdapquery-sql" }
+# `fdapquery` umbrella — needed by `extension.rs` for
+# `SessionContext` + `SessionState`. Non-optional because
+# `SessionContextExt` (the trait) is always compiled; only the
+# standalone impl body is feature-gated.
+fdapquery               = { version = "0.1.0", path = "../fdapquery" }
+
+# `standalone` feature — optional dep on `fdapquery-flight-server`
+# for `SessionContext::standalone()`'s in-process Flight server
+# spawn. Behind a feature because most callers don't need the
+# spawn logic. Mirror of Ballista's `ballista/client/Cargo.toml`
+# `standalone` feature. Safe from cycles: `fdapquery-flight-server`
+# does NOT depend on `fdapquery-flight-client`.
+fdapquery-flight-server = { version = "0.1.0", path = "../fdapquery-flight-server", optional = true }
 
 anyhow       = { workspace = true }
 
+[features]
+default = []
+standalone = ["fdapquery-flight-server"]
+
 [dev-dependencies]
-# The integration test in `tests/` spins up a real `flight-server` on a
-# random port and drives a distributed query through it. The dep is
-# dev-only — at runtime the client crate has no knowledge of
-# `flight-server`; the protocol contract is the protobuf bytes.
-fdapquery-flight-server = { version = "0.1.0", path = "../fdapquery-flight-server" }
-# `fdapquery` umbrella crate — the integration test drives the query
-# through `SessionContext::standalone(...)` via `SessionContextExt`.
-# Dev-only: no runtime dep on the umbrella from this crate.
-fdapquery               = { version = "0.1.0", path = "../fdapquery" }
 # `tokio-stream::wrappers::TcpListenerStream` wraps the bound
 # `TcpListener` for `tonic::transport::Server::serve_with_incoming` in
 # the in-process server spawn. Dev-only — production callers use

@@ -51,7 +51,7 @@ impl<C: ExecutorClient + Send + Sync + 'static> DistributedQueryPlanner<C> {
         let scheduler = Arc::new(Scheduler::new(config, distributed, executor_client));
         Self {
             scheduler,
-            local_planner: DefaultQueryPlanner::default(),
+            local_planner: DefaultQueryPlanner,
         }
     }
 }

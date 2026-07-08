@@ -113,7 +113,7 @@ impl<C: ExecutorClient + Send + Sync + 'static> std::fmt::Display for Distribute
 }
 
 impl<C: ExecutorClient + Send + Sync + 'static> ExecutionPlan for DistributedQueryExec<C> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "DistributedQueryExec"
     }
 

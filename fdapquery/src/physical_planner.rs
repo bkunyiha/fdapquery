@@ -386,7 +386,7 @@ impl DefaultPhysicalPlanner {
             // The logical side also collapsed: a single
             // `Expr::Literal(ScalarValue)` now mirrors DataFusion's
             // `Expr::Literal(ScalarValue)` byte-for-byte, and lowers to the
-            // physical `Literal { value: ScalarValue }` (#136) by simply
+            // physical `Literal { value: ScalarValue }` by simply
             // cloning the inner scalar. The Arrow data type is derived
             // from the `ScalarValue` at `evaluate` time.
             Expr::Literal(scalar) => Arc::new(Literal::new(scalar.clone())),

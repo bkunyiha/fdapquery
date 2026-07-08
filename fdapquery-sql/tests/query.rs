@@ -55,7 +55,7 @@ fn limit_offset_is_not_implemented() {
 }
 
 // -----------------------------------------------------------------------
-// ORDER BY — not supported at v0.1 (per Task #159).
+// ORDER BY — not supported at v0.1.
 // -----------------------------------------------------------------------
 
 #[test]

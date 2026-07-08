@@ -11,7 +11,7 @@
 //! (`datafusion_common::config::ConfigOptions`). fdapquery has not yet
 //! ported `ConfigOptions` — the strict-mirror surface uses
 //! [`fdapquery_execution::SessionConfig`] as the per-session config
-//! container today (see #120 for `SessionState` and the rationale).
+//! container today (the same container `SessionState` threads through).
 //! The substitution is documented at the call site; once `ConfigOptions`
 //! lands in fdapquery, the trait method changes to take it directly,
 //! matching DataFusion byte-for-byte. Rules written today against

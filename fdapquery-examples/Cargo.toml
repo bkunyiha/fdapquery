@@ -17,27 +17,19 @@ fdapquery-common    = { version = "0.1.0", path = "../fdapquery-common" }     # 
 fdapquery-datatypes = { version = "0.1.0", path = "../fdapquery-datatypes" }  # RecordBatch, arrow_types
 fdapquery-expr      = { version = "0.1.0", path = "../fdapquery-expr" }       # col, cast, max, format, …
 fdapquery-optimizer = { version = "0.1.0", path = "../fdapquery-optimizer" }     # Optimizer used by nyc_taxi
-# `distributed_example` and `distributed_flight_example` use the distributed
-# stack. The former impls `ExecutorClient` directly; the latter uses
-# `FlightExecutorClient` from the `client` crate against an in-process
-# `flight-server`.
-fdapquery-distributed = { version = "0.1.0", path = "../fdapquery-distributed" }
-fdapquery-physical-plan = { version = "0.1.0", path = "../fdapquery-physical-plan" }
-fdapquery-flight-client = { version = "0.1.0", path = "../fdapquery-flight-client" }
-fdapquery-flight-server = { version = "0.1.0", path = "../fdapquery-flight-server" }
-# Used by `distributed_flight_example` to spawn the in-process tonic server
-# and bind a random TCP port — same pattern as
-# `client/tests/distributed_integration_test.rs`.
+# `distributed_flight_example` uses the distributed stack via
+# `SessionContext::standalone()` from `fdapquery-flight-client`'s
+# `SessionContextExt`. That constructor spawns the in-process Flight
+# server internally, so this crate no longer needs `arrow-flight`,
+# `tonic`, or `tokio-stream` directly (they were previously used by
+# the hand-rolled `spawn_in_process_server` helper — folded into
+# `fdapquery_flight_server::standalone` in Session 20d).
+# `standalone` feature enables `SessionContext::standalone()`.
+fdapquery-flight-client = { version = "0.1.0", path = "../fdapquery-flight-client", features = ["standalone"] }
 # `nyc_taxi` constructs cast types via
 # `arrow_schema::DataType::Float32` directly.
 arrow-schema    = { workspace = true }
-arrow-flight    = { workspace = true }
-tonic           = { workspace = true }
 tokio           = { workspace = true }
-tokio-stream    = "0.1"
-# `async-trait` so `distributed_example` can `#[async_trait]
-# impl ExecutorClient for LocalExecutorClient`.
-async-trait     = { workspace = true }
 # `futures` for `TryStreamExt::try_collect` (drain the
 # `SendableRecordBatchStream` results) and
 # `futures::executor::block_on` (rayon-worker async->sync bridge in
@@ -66,10 +58,6 @@ path = "src/bin/parallel_query.rs"
 [[bin]]
 name = "parallel_execution_example"
 path = "src/bin/parallel_execution_example.rs"
-
-[[bin]]
-name = "distributed_example"
-path = "src/bin/distributed_example.rs"
 
 [[bin]]
 name = "distributed_flight_example"

@@ -1,6 +1,7 @@
 // `HashMap<String, ()>` is a placeholder for `HashMap<String, Arc<...UDF>>`;
-// task #142 (and follow-ups for window/table factory) swap in the real
-// value types. Until then the maps act as presence sets without losing the
+// a future revision (once the ScalarUDF / AggregateUDF / WindowUDF surface
+// lands, along with the table-factory registry) swaps in the real value
+// types. Until then the maps act as presence sets without losing the
 // shape DataFusion's `SessionState` uses.
 #![allow(clippy::zero_sized_map_values)]
 
@@ -15,7 +16,7 @@
 //! the `QueryPlanner` trait method can take `&SessionState` directly —
 //! the same shape DataFusion's trait has — without a dependency cycle.
 //!
-//! ## Minimum coherent surface (#120)
+//! ## Minimum coherent surface
 //!
 //! DataFusion's `SessionState` carries ~25 fields spanning analyzer
 //! rules, optimizer rules, physical-optimizer rules, function
@@ -211,7 +212,9 @@ pub struct SessionState {
     /// `fdapquery_optimizer::Optimizer`.
     optimizer: Optimizer,
     /// Physical-plan optimizer. Real type from
-    /// `fdapquery-physical-optimizer` (#121); v0.1 rule list is empty.
+    /// `fdapquery-physical-optimizer`; v0.1 rule list is empty. Future
+    /// revisions add EnforceDistribution, EnforceSorting, CoalesceBatches,
+    /// and JoinSelection to the rule list.
     physical_optimizers: PhysicalOptimizer,
     /// The pluggable query-planner customization seam.
     query_planner: Arc<dyn QueryPlanner + Send + Sync>,

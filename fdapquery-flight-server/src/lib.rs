@@ -26,9 +26,11 @@
 
 pub mod fdap_query_flight_producer;
 pub mod flight_server;
+pub mod standalone;
 
 // Top-level re-exports so external consumers
 // can write the short form `use fdapquery_flight_server::{FdapQueryFlightProducer, serve};`
 // instead of reaching through submodule paths.
 pub use fdap_query_flight_producer::FdapQueryFlightProducer;
 pub use flight_server::serve;
+pub use standalone::spawn_in_process_flight_server;
