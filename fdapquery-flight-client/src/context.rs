@@ -14,15 +14,33 @@
 //! ```
 //!
 //! The distributed variant is `SessionContext` extended with the
-//! [`SessionContextExt`](fdapquery_distributed::SessionContextExt) trait
-//! (mirror of Ballista's `SessionContextExt` at
-//! `ballista/client/src/extension.rs`). It installs a
-//! `DistributedQueryPlanner` on the session's `SessionState`, so every
-//! query routes through the in-process scheduler transparently.
+//! [`SessionContextExt`](crate::SessionContextExt) trait (mirror of
+//! Ballista's `SessionContextExt` at
+//! `ballista/client/src/extension.rs`, lives in this same crate). It
+//! installs a `DistributedQueryPlanner` on the session's `SessionState`,
+//! so every query routes through the in-process scheduler transparently.
 //!
 //! All three expose the same surface: register tables, submit SQL, get
 //! `RecordBatch`es back. A reader switching between them should find the
 //! method shapes identical and only the *backing transport* different.
+//!
+//! ## When to use `Context` vs `SessionContext::standalone()`
+//!
+//! - **`Context` (this file)** — interactive one-shot Flight client
+//!   against an ALREADY-RUNNING external Flight server. Caller supplies
+//!   the [`Endpoint`]. No scheduler, no stage decomposition, no shuffle
+//!   — the plan gets shipped whole to `do_get` and the server runs it.
+//!   Useful for a REPL, a debugging tool, or any consumer that wants
+//!   to hit one specific Flight endpoint.
+//! - **[`SessionContext::standalone`](crate::SessionContextExt::standalone)**
+//!   — the distributed path. Spawns an in-process Flight server, connects
+//!   a client, installs a `DistributedQueryPlanner` on `SessionState`.
+//!   Every query splits into stages and dispatches through the scheduler.
+//!   This is what you want if you're teaching or testing the distributed
+//!   loop end-to-end.
+//!
+//! The two are complementary, not overlapping. Neither is deprecated in
+//! v0.1.
 
 use crate::client::Client;
 use crate::endpoint::Endpoint;
@@ -40,7 +58,7 @@ use std::sync::Arc;
 /// CSV batch size for tables registered through `register_csv`. Matches
 /// [`fdapquery::SessionContext`]'s `register_csv` default so a query run
 /// against the interactive client and a query run against a session
-/// produced by [`fdapquery_distributed::SessionContextExt::standalone`]
+/// produced by [`SessionContext::standalone`](crate::SessionContextExt::standalone)
 /// see the same batch shape.
 const CSV_BATCH_SIZE: usize = 1024;
 

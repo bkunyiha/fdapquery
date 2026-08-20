@@ -1,8 +1,8 @@
 //! # distributed
 //!
 //! Distributed query execution layer — scheduler, query-stage decomposition,
-//! distributed planner, distributed context facade. The "minimal Ballista"
-//! example from chapter 12 of *How Query Engines Work*.
+//! distributed planner, and the `QueryPlanner` / exec-node plumbing that
+//! makes a `SessionContext` distribute. Mirror of Ballista's `ballista-core`.
 //!
 //! ## Modules
 //! - [`distributed_config`] — `ExecutorConfig`, `DistributedConfig`
@@ -32,16 +32,28 @@
 //! `fdapquery_flight_client::SessionContextExt`.
 //!
 //! ## Architectural notes
-//! - **Synchronous, sequential.** No async, no Tokio, no rayon. Each stage
-//!   runs in dependency order; each task within a stage is dispatched one at
-//!   a time, round-robin across executors. The module is a teaching artifact,
-//!   not a production scheduler. Async lives one layer up at the Flight
-//!   boundary (`flight-server` / `client`).
+//! - **Async-native end-to-end.** Every call in the dispatch chain is
+//!   `async fn` on a tokio runtime. `Scheduler::execute(plan).await` returns
+//!   a `SendableRecordBatchStream`; every `ExecutorClient` method returns
+//!   `impl Future`. The client-side entry point
+//!   `SessionContextExt::standalone().await` is also async. Tokio handles
+//!   both intra-process concurrency (per-batch stream polling) and the
+//!   Flight gRPC boundary.
+//! - **Per-stage dispatch is currently sequential.** `Scheduler::execute_stage`
+//!   awaits each task's `execute_task` call in a `for` loop before dispatching
+//!   the next partition, so wall time = sum of per-task times, not max.
+//!   Parallel dispatch via `futures::future::try_join_all` is a future
+//!   revision (see `SESSION-20c-PLAN.md` in the planning docs); it depends
+//!   on the correctness fix that scopes each stage-0 task to a single input
+//!   partition landing first.
 //! - **`ExecutorClient` is the seam to Flight.** The trait has three methods
 //!   (`execute_task` / `execute_final_task` / `fetch_shuffle`). The real
-//!   implementation lives in the `client` crate as `FlightExecutorClient`.
+//!   implementation lives in the `fdapquery-flight-client` crate as
+//!   `FlightExecutorClient`.
 //! - **No `protobuf` dep.** Wire serialisation only happens at the Flight
-//!   boundary.
+//!   boundary; this crate deals in Rust types (`Arc<dyn ExecutionPlan>`,
+//!   `Task`, `ShuffleLocation`) and hands the concrete client type
+//!   whatever it needs via the `ExecutorClient` trait.
 
 pub mod distributed_config;
 pub mod distributed_planner;
